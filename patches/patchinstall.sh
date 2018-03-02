@@ -385,8 +385,6 @@ patch_enable_all ()
 	enable_version_VerQueryValue="$1"
 	enable_virtdisk_GetStorageDependencyInformation="$1"
 	enable_wbemdisp_ISWbemSecurity="$1"
-	enable_wbemprox_Printer="$1"
-	enable_wbemprox_Win32_OperatingSystem="$1"
 	enable_widl_SLTG_Typelib_Support="$1"
 	enable_windowscodecs_32bppPRGBA="$1"
 	enable_windowscodecs_GIF_Encoder="$1"
@@ -1382,12 +1380,6 @@ patch_enable ()
 			;;
 		wbemdisp-ISWbemSecurity)
 			enable_wbemdisp_ISWbemSecurity="$2"
-			;;
-		wbemprox-Printer)
-			enable_wbemprox_Printer="$2"
-			;;
-		wbemprox-Win32_OperatingSystem)
-			enable_wbemprox_Win32_OperatingSystem="$2"
 			;;
 		widl-SLTG_Typelib_Support)
 			enable_widl_SLTG_Typelib_Support="$2"
@@ -8203,36 +8195,6 @@ if test "$enable_wbemdisp_ISWbemSecurity" -eq 1; then
 	patch_apply wbemdisp-ISWbemSecurity/0001-wbemdisp-Add-ISWbemSecurity-stub-interface.patch
 	(
 		printf '%s\n' '+    { "Michael Müller", "wbemdisp: Add ISWbemSecurity stub interface.", 1 },';
-	) >> "$patchlist"
-fi
-
-# Patchset wbemprox-Printer
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#40539] Provide DeviceID, Location and PortName for printers
-# |
-# | Modified files:
-# |   *	dlls/wbemprox/builtin.c
-# |
-if test "$enable_wbemprox_Printer" -eq 1; then
-	patch_apply wbemprox-Printer/0001-wbemprox-Provide-DeviceID-Location-and-PortName-for-.patch
-	(
-		printf '%s\n' '+    { "Michael Müller", "wbemprox: Provide DeviceID, Location and PortName for printers.", 1 },';
-	) >> "$patchlist"
-fi
-
-# Patchset wbemprox-Win32_OperatingSystem
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#43357] Add FreePhysicalMemory to Win32_OperatingSystem
-# |
-# | Modified files:
-# |   *	dlls/wbemprox/builtin.c
-# |
-if test "$enable_wbemprox_Win32_OperatingSystem" -eq 1; then
-	patch_apply wbemprox-Win32_OperatingSystem/0001-wbemprox-Add-FreePhysicalMemory-to-Win32_OperatingSy.patch
-	(
-		printf '%s\n' '+    { "Michael Müller", "wbemprox: Add FreePhysicalMemory to Win32_OperatingSystem.", 1 },';
 	) >> "$patchlist"
 fi
 
