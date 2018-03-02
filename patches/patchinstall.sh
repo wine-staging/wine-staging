@@ -151,7 +151,6 @@ patch_enable_all ()
 	enable_dsound_EAX="$1"
 	enable_dsound_Fast_Mixer="$1"
 	enable_dsound_Revert_Cleanup="$1"
-	enable_dwmapi_DwmSetIcon="$1"
 	enable_dxdiagn_Display_Information="$1"
 	enable_dxdiagn_Enumerate_DirectSound="$1"
 	enable_dxdiagn_GetChildContainer_Leaf_Nodes="$1"
@@ -681,9 +680,6 @@ patch_enable ()
 			;;
 		dsound-Revert_Cleanup)
 			enable_dsound_Revert_Cleanup="$2"
-			;;
-		dwmapi-DwmSetIcon)
-			enable_dwmapi_DwmSetIcon="$2"
 			;;
 		dxdiagn-Display_Information)
 			enable_dxdiagn_Display_Information="$2"
@@ -4230,18 +4226,6 @@ if test "$enable_dsound_EAX" -eq 1; then
 		printf '%s\n' '+    { "Sebastian Lackner", "dsound: Allow disabling of EAX support in the registry.", 1 },';
 		printf '%s\n' '+    { "Erich E. Hoover", "dsound: Add stub support for DSPROPSETID_EAX20_ListenerProperties.", 1 },';
 		printf '%s\n' '+    { "Erich E. Hoover", "dsound: Add stub support for DSPROPSETID_EAX20_BufferProperties.", 1 },';
-	) >> "$patchlist"
-fi
-
-# Patchset dwmapi-DwmSetIcon
-# |
-# | Modified files:
-# |   *	dlls/dwmapi/dwmapi.spec, dlls/dwmapi/dwmapi_main.c
-# |
-if test "$enable_dwmapi_DwmSetIcon" -eq 1; then
-	patch_apply dwmapi-DwmSetIcon/0001-dwmapi-Add-stubs-for-DwmSetIconicLivePreviewBitmap-a.patch
-	(
-		printf '%s\n' '+    { "Michael Müller", "dwmapi: Add stub for DwmSetIconicLivePreviewBitmap.", 1 },';
 	) >> "$patchlist"
 fi
 
