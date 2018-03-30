@@ -3393,19 +3393,13 @@ fi
 # |   *	[#17913] Port Royale doesn't display ocean correctly
 # |
 # | Modified files:
-# |   *	configure.ac, dlls/wined3d/Makefile.in, dlls/wined3d/dxtn.c, dlls/wined3d/surface.c, dlls/wined3d/wined3d.spec,
-# | 	dlls/wined3d/wined3d_main.c, dlls/wined3d/wined3d_private.h, include/wine/wined3d.h
+# |   *	configure.ac, dlls/wined3d/Makefile.in, dlls/wined3d/dxtn.c, dlls/wined3d/dxtn.h, dlls/wined3d/surface.c, 
+# |     dlls/wined3d/wined3d.spec, dlls/wined3d/wined3d_main.c, dlls/wined3d/wined3d_private.h, include/wine/wined3d.h
 # |
 if test "$enable_wined3d_DXTn" -eq 1; then
-	patch_apply wined3d-DXTn/0001-wined3d-Add-support-for-DXTn-software-decoding-throu.patch
-	patch_apply wined3d-DXTn/0002-wined3d-Improve-DXTn-support-and-export-conversion-f.patch
-	patch_apply wined3d-DXTn/0003-wined3d-add-DXT1-to-B4G4R4A4-DXT1-to-B5G5R5A1-and-DX.patch
-	patch_apply wined3d-DXTn/0004-wined3d-Load-dxtn-dylib-library-on-Mac-OS-X.patch
+	patch_apply wined3d-DXTn/0001-wined3d-add-DXTn-support.patch
 	(
-		printf '%s\n' '+    { "Michael Müller", "wined3d: Add support for DXTn software decoding through libtxc_dxtn.", 3 },';
-		printf '%s\n' '+    { "Christian Costa", "wined3d: Improve DXTn support and export conversion functions for d3dx9_36.", 1 },';
-		printf '%s\n' '+    { "Michael Müller", "wined3d: Add DXT1 to B4G4R4A4, DXT1 to B5G5R5A1 and DXT3 to B4G4R4A4 conversion.", 1 },';
-		printf '%s\n' '+    { "Michael Müller", "wined3d: Load dxtn dylib library on Mac OS X.", 1 },';
+		printf '%s\n' '+    { "Kyle Devir", "wined3d: add DXTn support", 1 },';
 	) >> "$patchlist"
 fi
 
@@ -3429,9 +3423,9 @@ fi
 # | 	dlls/d3dx9_42/Makefile.in, dlls/d3dx9_43/Makefile.in
 # |
 if test "$enable_d3dx9_36_DXTn" -eq 1; then
-	patch_apply d3dx9_36-DXTn/0001-d3dx9_36-Add-dxtn-support.patch
+	patch_apply d3dx9_36-DXTn/0001-d3dx9_36-add-DXTn-support.patch
 	(
-		printf '%s\n' '+    { "Christian Costa", "d3dx9_36: Add dxtn support.", 1 },';
+		printf '%s\n' '+    { "Kyle Devir", "d3dx9_36: add dxtn support.", 1 },';
 	) >> "$patchlist"
 fi
 
