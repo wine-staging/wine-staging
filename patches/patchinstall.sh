@@ -52,7 +52,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "dd2624a24fba400bf59b9396e496d16c43d399d9"
+	echo "aa27dd07aa55301f3e23acf9f74daa0f465e7b6d"
 }
 
 # Show version information
@@ -267,7 +267,6 @@ patch_enable_all ()
 	enable_nvcuvid_CUDA_Video_Support="$1"
 	enable_nvencodeapi_Video_Encoder="$1"
 	enable_ole32_HGLOBALStream="$1"
-	enable_ole32_Implicit_MTA="$1"
 	enable_ole32_STGPROP="$1"
 	enable_oleaut32_CreateTypeLib="$1"
 	enable_oleaut32_DispCallFunc="$1"
@@ -424,7 +423,6 @@ patch_enable_all ()
 	enable_winmm_mciSendCommandA="$1"
 	enable_wintrust_WinVerifyTrust="$1"
 	enable_wpcap_Dynamic_Linking="$1"
-	enable_wpcap_Several_Fixes="$1"
 	enable_ws2_32_APC_Performance="$1"
 	enable_ws2_32_Connect_Time="$1"
 	enable_ws2_32_Tests="$1"
@@ -995,9 +993,6 @@ patch_enable ()
 		ole32-HGLOBALStream)
 			enable_ole32_HGLOBALStream="$2"
 			;;
-		ole32-Implicit_MTA)
-			enable_ole32_Implicit_MTA="$2"
-			;;
 		ole32-STGPROP)
 			enable_ole32_STGPROP="$2"
 			;;
@@ -1466,9 +1461,6 @@ patch_enable ()
 		wpcap-Dynamic_Linking)
 			enable_wpcap_Dynamic_Linking="$2"
 			;;
-		wpcap-Several_Fixes)
-			enable_wpcap_Several_Fixes="$2"
-			;;
 		ws2_32-APC_Performance)
 			enable_ws2_32_APC_Performance="$2"
 			;;
@@ -1872,13 +1864,6 @@ if test "$enable_ws2_32_TransmitFile" -eq 1; then
 		abort "Patchset server-Desktop_Refcount disabled, but ws2_32-TransmitFile depends on that."
 	fi
 	enable_server_Desktop_Refcount=1
-fi
-
-if test "$enable_wpcap_Dynamic_Linking" -eq 1; then
-	if test "$enable_wpcap_Several_Fixes" -gt 1; then
-		abort "Patchset wpcap-Several_Fixes disabled, but wpcap-Dynamic_Linking depends on that."
-	fi
-	enable_wpcap_Several_Fixes=1
 fi
 
 if test "$enable_winex11_WM_WINDOWPOSCHANGING" -eq 1; then
@@ -5860,29 +5845,6 @@ if test "$enable_ole32_HGLOBALStream" -eq 1; then
 	) >> "$patchlist"
 fi
 
-# Patchset ole32-Implicit_MTA
-# |
-# | Modified files:
-# |   *	dlls/ole32/compobj.c, dlls/ole32/compobj_private.h, dlls/ole32/marshal.c, dlls/ole32/rpc.c, dlls/ole32/stubmanager.c,
-# | 	dlls/ole32/tests/compobj.c, dlls/ole32/tests/marshal.c
-# |
-if test "$enable_ole32_Implicit_MTA" -eq 1; then
-	patch_apply ole32-Implicit_MTA/0002-ole32-Add-a-helper-for-grabbing-the-current-apartmen.patch
-	patch_apply ole32-Implicit_MTA/0003-ole32-Allow-more-functions-to-use-the-implicit-MTA.patch
-	patch_apply ole32-Implicit_MTA/0004-ole32-Report-the-implicit-MTA-in-CoGetApartmentType.patch
-	patch_apply ole32-Implicit_MTA/0005-ole32-tests-Test-CoWaitForMultipleHandles-in-an-unin.patch
-	patch_apply ole32-Implicit_MTA/0006-ole32-Allow-unmarshalling-objects-into-an-implicit-M.patch
-	patch_apply ole32-Implicit_MTA/0007-ole32-Allow-marshalling-objects-from-an-implicit-MTA.patch
-	(
-		printf '%s\n' '+    { "Zebediah Figura", "ole32: Add a helper for grabbing the current apartment or MTA.", 1 },';
-		printf '%s\n' '+    { "Zebediah Figura", "ole32: Allow more functions to use the implicit MTA.", 1 },';
-		printf '%s\n' '+    { "Zebediah Figura", "ole32: Report the implicit MTA in CoGetApartmentType().", 1 },';
-		printf '%s\n' '+    { "Zebediah Figura", "ole32/tests: Test CoWaitForMultipleHandles() in an uninitialized or MTA apartment.", 1 },';
-		printf '%s\n' '+    { "Zebediah Figura", "ole32: Allow unmarshalling objects into an implicit MTA.", 1 },';
-		printf '%s\n' '+    { "Zebediah Figura", "ole32: Allow marshalling objects from an implicit MTA.", 1 },';
-	) >> "$patchlist"
-fi
-
 # Patchset ole32-STGPROP
 # |
 # | This patchset fixes the following Wine bugs:
@@ -8565,22 +8527,7 @@ if test "$enable_wintrust_WinVerifyTrust" -eq 1; then
 	) >> "$patchlist"
 fi
 
-# Patchset wpcap-Several_Fixes
-# |
-# | Modified files:
-# |   *	dlls/wpcap/wpcap.c, dlls/wpcap/wpcap.spec
-# |
-if test "$enable_wpcap_Several_Fixes" -eq 1; then
-	patch_apply wpcap-Several_Fixes/0001-wpcap-Implement-pcap_dump_open-and-pcap_dump.patch
-	(
-		printf '%s\n' '+    { "Jianqiu Zhang", "wpcap: Implement pcap_dump_open and pcap_dump.", 1 },';
-	) >> "$patchlist"
-fi
-
 # Patchset wpcap-Dynamic_Linking
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	wpcap-Several_Fixes
 # |
 # | Modified files:
 # |   *	configure.ac, dlls/wpcap/Makefile.in, dlls/wpcap/wpcap.c

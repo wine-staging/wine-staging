@@ -219,6 +219,7 @@ def load_patchsets():
 
         # No single patch within this directory, ignore it
         if len(patch.patches) == 0:
+            print "WARNING: No patches found in directory %s" % (directory)
             del patch
             continue
 
