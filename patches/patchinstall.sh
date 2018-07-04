@@ -181,6 +181,7 @@ patch_enable_all ()
 	enable_kernel32_SCSI_Sysfs="$1"
 	enable_kernel32_SetFileCompletionNotificationModes="$1"
 	enable_kernelbase_PathCchCombineEx="$1"
+        enable_kernelbase_PathCchRemoveBackSlash="$1"
 	enable_krnl386_exe16_GDT_LDT_Emulation="$1"
 	enable_krnl386_exe16_Invalid_Console_Handles="$1"
 	enable_krnl386_exe16__lclose16="$1"
