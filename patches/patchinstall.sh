@@ -371,6 +371,7 @@ patch_enable_all ()
 	enable_wined3d_Indexed_Vertex_Blending="$1"
 	enable_wined3d_QUERY_Stubs="$1"
 	enable_wined3d_Silence_FIXMEs="$1"
+	enable_wined3d_setpixelformat="$1"
 	enable_wined3d_UAV_Counters="$1"
 	enable_wined3d_WINED3DFMT_B8G8R8X8_UNORM="$1"
 	enable_wined3d_WINED3D_RS_COLORWRITEENABLE="$1"
@@ -1285,6 +1286,9 @@ patch_enable ()
 			;;
 		wined3d-QUERY_Stubs)
 			enable_wined3d_QUERY_Stubs="$2"
+			;;
+		wined3d-setpixelformat)
+			enable_wined3d-setpixelformat="$2"
 			;;
 		wined3d-Silence_FIXMEs)
 			enable_wined3d_Silence_FIXMEs="$2"
@@ -3196,7 +3200,7 @@ fi
 # |   *	[#17913] Port Royale doesn't display ocean correctly
 # |
 # | Modified files:
-# |   *	dlls/wined3d/Makefile.in, dlls/wined3d/dxtn.c, dlls/wined3d/dxtn.h, dlls/wined3d/surface.c, dlls/wined3d/wined3d.spec,
+# |   *	dlls/wined3d/Makefile.in, dlls/wined3d/dxtn.c, dlls/wined3d/dxtn.h, dlls/wined3d/surface.c, dlls/wined3d/wined3d.spec, 
 # | 	include/wine/wined3d.h
 # |
 if test "$enable_wined3d_DXTn" -eq 1; then
@@ -7587,6 +7591,15 @@ if test "$enable_wined3d_QUERY_Stubs" -eq 1; then
 	(
 		printf '%s\n' '+    { "Michael Müller", "wined3d: Add stubs for QUERY_TYPE_SO_STATISTICS and QUERY_TYPE_SO_OVERFLOW.", 1 },';
 	) >> "$patchlist"
+fi
+
+# Patchset wined3d-setpixelformat
+# |
+# | Modiefied files: 
+# |   *	dlls/wined3d/context.c
+# |
+if test "$enable_wined3d_setpixelformat" -eq 1; then
+	patch_apply wined3d-setpixelformat/0001-wined3d-setpixelformat.patch
 fi
 
 # Patchset wined3d-Silence_FIXMEs
