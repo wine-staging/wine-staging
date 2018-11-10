@@ -7525,6 +7525,7 @@ if test "$enable_winepulse_PulseAudio_Support" -eq 1; then
 	patch_apply winepulse-PulseAudio_Support/0008-winepulse-Fix-up-recording.patch
 	patch_apply winepulse-PulseAudio_Support/0009-winepulse.drv-Fix-getting-the-same-timing-info.patch
 	patch_apply winepulse-PulseAudio_Support/0010-winepulse-Update-last-time-on-underrun.patch
+	patch_apply winepulse-PulseAudio_Support/0011-Return-correct-position-when-the-position-is-inferio.patch	
 	(
 		printf '%s\n' '+    { "Sebastian Lackner", "winepulse.drv: Use a separate mainloop and ctx for pulse_test_connect.", 1 },';
 		printf '%s\n' '+    { "Andrew Eikum", "winepulse: Don'\''t rely on pulseaudio callbacks for timing.", 1 },';
@@ -7536,6 +7537,7 @@ if test "$enable_winepulse_PulseAudio_Support" -eq 1; then
 		printf '%s\n' '+    { "Andrew Eikum", "winepulse: Fix up recording.", 1 },';
 		printf '%s\n' '+    { "Zhiyi Zhang", "winepulse.drv: Fix getting the same timing info.", 1 },';
 		printf '%s\n' '+    { "Andrew Eikum", "winepulse: Update last time on underrun.", 1 },';
+		printf '%s\n' '+    { "Lorenzo Ferrillo","winepulse: Return correct position when the position is inferior to a  period.", 1 },';		
 	) >> "$patchlist"
 fi
 
