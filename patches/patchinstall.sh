@@ -372,858 +372,290 @@ patch_enable_all ()
 patch_enable ()
 {
 	case "$1" in
-		Compiler_Warnings)
-			enable_Compiler_Warnings="$2"
-			;;
-		Pipelight)
-			enable_Pipelight="$2"
-			;;
-		Staging)
-			enable_Staging="$2"
-			;;
-		advapi32-CreateRestrictedToken)
-			enable_advapi32_CreateRestrictedToken="$2"
-			;;
-		advapi32-LsaLookupPrivilegeName)
-			enable_advapi32_LsaLookupPrivilegeName="$2"
-			;;
-		advapi32-LsaLookupSids)
-			enable_advapi32_LsaLookupSids="$2"
-			;;
-		advapi32-Token_Integrity_Level)
-			enable_advapi32_Token_Integrity_Level="$2"
-			;;
-		api-ms-win-Stub_DLLs)
-			enable_api_ms_win_Stub_DLLs="$2"
-			;;
-		atl-AtlAxDialogBox)
-			enable_atl_AtlAxDialogBox="$2"
-			;;
-		cmd-launch-association)
-			enable_cmd_launch_association="$2"
-			;;
-		combase-GetRestrictedErrorInfo)
-			enable_combase_GetRestrictedErrorInfo="$2"
-			;;
-		comctl32-Listview_DrawItem)
-			enable_comctl32_Listview_DrawItem="$2"
-			;;
-		comctl32-alpha-bitmaps)
-			enable_comctl32_alpha_bitmaps="$2"
-			;;
-		comctrl-rebar-capture)
-			enable_comctrl_rebar_capture="$2"
-			;;
-		comdlg32-lpstrFileTitle)
-			enable_comdlg32_lpstrFileTitle="$2"
-			;;
-		configure-Absolute_RPATH)
-			enable_configure_Absolute_RPATH="$2"
-			;;
-		crypt32-CMS_Certificates)
-			enable_crypt32_CMS_Certificates="$2"
-			;;
-		crypt32-MS_Root_Certs)
-			enable_crypt32_MS_Root_Certs="$2"
-			;;
-		cryptext-CryptExtOpenCER)
-			enable_cryptext_CryptExtOpenCER="$2"
-			;;
-		d2d1-ID2D1Factory1)
-			enable_d2d1_ID2D1Factory1="$2"
-			;;
-		d3d11-Deferred_Context)
-			enable_d3d11_Deferred_Context="$2"
-			;;
-		d3d9-Tests)
-			enable_d3d9_Tests="$2"
-			;;
-		d3dx9-32bpp_Alpha_Channel)
-			enable_d3dx9_32bpp_Alpha_Channel="$2"
-			;;
-		d3dx9_36-BumpLuminance)
-			enable_d3dx9_36_BumpLuminance="$2"
-			;;
-		d3dx9_36-CloneEffect)
-			enable_d3dx9_36_CloneEffect="$2"
-			;;
-		d3dx9_36-D3DXCreateKeyframedAnimationSet)
-			enable_d3dx9_36_D3DXCreateKeyframedAnimationSet="$2"
-			;;
-		d3dx9_36-D3DXDisassembleShader)
-			enable_d3dx9_36_D3DXDisassembleShader="$2"
-			;;
-		d3dx9_36-D3DXOptimizeVertices)
-			enable_d3dx9_36_D3DXOptimizeVertices="$2"
-			;;
-		d3dx9_36-D3DXSHProjectCubeMap)
-			enable_d3dx9_36_D3DXSHProjectCubeMap="$2"
-			;;
-		d3dx9_36-D3DXStubs)
-			enable_d3dx9_36_D3DXStubs="$2"
-			;;
-		d3dx9_36-DDS)
-			enable_d3dx9_36_DDS="$2"
-			;;
-		d3dx9_36-DrawText)
-			enable_d3dx9_36_DrawText="$2"
-			;;
-		d3dx9_36-Filter_Warnings)
-			enable_d3dx9_36_Filter_Warnings="$2"
-			;;
-		d3dx9_36-Optimize_Inplace)
-			enable_d3dx9_36_Optimize_Inplace="$2"
-			;;
-		d3dx9_36-UpdateSkinnedMesh)
-			enable_d3dx9_36_UpdateSkinnedMesh="$2"
-			;;
-		dbghelp-Debug_Symbols)
-			enable_dbghelp_Debug_Symbols="$2"
-			;;
-		ddraw-Device_Caps)
-			enable_ddraw_Device_Caps="$2"
-			;;
-		ddraw-EnumSurfaces)
-			enable_ddraw_EnumSurfaces="$2"
-			;;
-		ddraw-IDirect3DTexture2_Load)
-			enable_ddraw_IDirect3DTexture2_Load="$2"
-			;;
-		ddraw-Rendering_Targets)
-			enable_ddraw_Rendering_Targets="$2"
-			;;
-		ddraw-Silence_FIXMEs)
-			enable_ddraw_Silence_FIXMEs="$2"
-			;;
-		ddraw-Texture_Wrong_Caps)
-			enable_ddraw_Texture_Wrong_Caps="$2"
-			;;
-		ddraw-Write_Vtable)
-			enable_ddraw_Write_Vtable="$2"
-			;;
-		ddraw-version-check)
-			enable_ddraw_version_check="$2"
-			;;
-		dinput-SetActionMap-genre)
-			enable_dinput_SetActionMap_genre="$2"
-			;;
-		dinput-axis-recalc)
-			enable_dinput_axis_recalc="$2"
-			;;
-		dinput-joy-mappings)
-			enable_dinput_joy_mappings="$2"
-			;;
-		dinput-reconnect-joystick)
-			enable_dinput_reconnect_joystick="$2"
-			;;
-		dinput-remap-joystick)
-			enable_dinput_remap_joystick="$2"
-			;;
-		directmanipulation-new-dll)
-			enable_directmanipulation_new_dll="$2"
-			;;
-		dmime-PChannel-range)
-			enable_dmime_PChannel_range="$2"
-			;;
-		dsdmo-new-dll)
-			enable_dsdmo_new_dll="$2"
-			;;
-		dsound-EAX)
-			enable_dsound_EAX="$2"
-			;;
-		dsound-Fast_Mixer)
-			enable_dsound_Fast_Mixer="$2"
-			;;
-		dwmapi-DwmGetTransportAttributes)
-			enable_dwmapi_DwmGetTransportAttributes="$2"
-			;;
-		dwrite-FontFallback)
-			enable_dwrite_FontFallback="$2"
-			;;
-		dxdiagn-Enumerate_DirectSound)
-			enable_dxdiagn_Enumerate_DirectSound="$2"
-			;;
-		dxdiagn-GetChildContainer_Leaf_Nodes)
-			enable_dxdiagn_GetChildContainer_Leaf_Nodes="$2"
-			;;
-		dxva2-Video_Decoder)
-			enable_dxva2_Video_Decoder="$2"
-			;;
-		eventfd_synchronization)
-			enable_eventfd_synchronization="$2"
-			;;
-		explorer-Video_Registry_Key)
-			enable_explorer_Video_Registry_Key="$2"
-			;;
-		fonts-Missing_Fonts)
-			enable_fonts_Missing_Fonts="$2"
-			;;
-		fsutil-Stub_Program)
-			enable_fsutil_Stub_Program="$2"
-			;;
-		gdi32-Lazy_Font_Initialization)
-			enable_gdi32_Lazy_Font_Initialization="$2"
-			;;
-		gdi32-rotation)
-			enable_gdi32_rotation="$2"
-			;;
-		gdiplus-Performance-Improvements)
-			enable_gdiplus_Performance_Improvements="$2"
-			;;
-		imagehlp-BindImageEx)
-			enable_imagehlp_BindImageEx="$2"
-			;;
-		imm32-message_on_focus)
-			enable_imm32_message_on_focus="$2"
-			;;
-		include-winsock)
-			enable_include_winsock="$2"
-			;;
-		inseng-Implementation)
-			enable_inseng_Implementation="$2"
-			;;
-		iphlpapi-System_Ping)
-			enable_iphlpapi_System_Ping="$2"
-			;;
-		kernel32-CopyFileEx)
-			enable_kernel32_CopyFileEx="$2"
-			;;
-		kernel32-Debugger)
-			enable_kernel32_Debugger="$2"
-			;;
-		kernel32-FindFirstFile)
-			enable_kernel32_FindFirstFile="$2"
-			;;
-		kernel32-Job_Tests)
-			enable_kernel32_Job_Tests="$2"
-			;;
-		kernel32-K32GetPerformanceInfo)
-			enable_kernel32_K32GetPerformanceInfo="$2"
-			;;
-		kernel32-NeedCurrentDirectoryForExePath)
-			enable_kernel32_NeedCurrentDirectoryForExePath="$2"
-			;;
-		kernel32-PE_Loader_Fixes)
-			enable_kernel32_PE_Loader_Fixes="$2"
-			;;
-		kernel32-Processor_Group)
-			enable_kernel32_Processor_Group="$2"
-			;;
-		kernel32-SCSI_Sysfs)
-			enable_kernel32_SCSI_Sysfs="$2"
-			;;
-		kernel32-SetProcessDEPPolicy)
-			enable_kernel32_SetProcessDEPPolicy="$2"
-			;;
-		krnl386.exe16-GDT_LDT_Emulation)
-			enable_krnl386_exe16_GDT_LDT_Emulation="$2"
-			;;
-		krnl386.exe16-Invalid_Console_Handles)
-			enable_krnl386_exe16_Invalid_Console_Handles="$2"
-			;;
-		libs-Debug_Channel)
-			enable_libs_Debug_Channel="$2"
-			;;
-		libs-Unicode_Collation)
-			enable_libs_Unicode_Collation="$2"
-			;;
-		loader-KeyboardLayouts)
-			enable_loader_KeyboardLayouts="$2"
-			;;
-		mmsystem.dll16-MIDIHDR_Refcount)
-			enable_mmsystem_dll16_MIDIHDR_Refcount="$2"
-			;;
-		mountmgr-DosDevices)
-			enable_mountmgr_DosDevices="$2"
-			;;
-		mscoree-CorValidateImage)
-			enable_mscoree_CorValidateImage="$2"
-			;;
-		msctf-ITfActiveLanguageProfileNotifySink)
-			enable_msctf_ITfActiveLanguageProfileNotifySink="$2"
-			;;
-		mshtml-HTMLLocation_put_hash)
-			enable_mshtml_HTMLLocation_put_hash="$2"
-			;;
-		mshtml-TranslateAccelerator)
-			enable_mshtml_TranslateAccelerator="$2"
-			;;
-		msi-msi_vcl_get_cost)
-			enable_msi_msi_vcl_get_cost="$2"
-			;;
-		msvcrt-Math_Precision)
-			enable_msvcrt_Math_Precision="$2"
-			;;
-		ntdll-APC_Performance)
-			enable_ntdll_APC_Performance="$2"
-			;;
-		ntdll-Activation_Context)
-			enable_ntdll_Activation_Context="$2"
-			;;
-		ntdll-ApiSetMap)
-			enable_ntdll_ApiSetMap="$2"
-			;;
-		ntdll-Builtin_Prot)
-			enable_ntdll_Builtin_Prot="$2"
-			;;
-		ntdll-CriticalSection)
-			enable_ntdll_CriticalSection="$2"
-			;;
-		ntdll-DOS_Attributes)
-			enable_ntdll_DOS_Attributes="$2"
-			;;
-		ntdll-Dealloc_Thread_Stack)
-			enable_ntdll_Dealloc_Thread_Stack="$2"
-			;;
-		ntdll-DeviceType_Systemroot)
-			enable_ntdll_DeviceType_Systemroot="$2"
-			;;
-		ntdll-Exception)
-			enable_ntdll_Exception="$2"
-			;;
-		ntdll-FileDispositionInformation)
-			enable_ntdll_FileDispositionInformation="$2"
-			;;
-		ntdll-FileFsFullSizeInformation)
-			enable_ntdll_FileFsFullSizeInformation="$2"
-			;;
-		ntdll-FileFsVolumeInformation)
-			enable_ntdll_FileFsVolumeInformation="$2"
-			;;
-		ntdll-Fix_Alignment)
-			enable_ntdll_Fix_Alignment="$2"
-			;;
-		ntdll-HashLinks)
-			enable_ntdll_HashLinks="$2"
-			;;
-		ntdll-Heap_Improvements)
-			enable_ntdll_Heap_Improvements="$2"
-			;;
-		ntdll-Hide_Wine_Exports)
-			enable_ntdll_Hide_Wine_Exports="$2"
-			;;
-		ntdll-Interrupt-0x2e)
-			enable_ntdll_Interrupt_0x2e="$2"
-			;;
-		ntdll-Junction_Points)
-			enable_ntdll_Junction_Points="$2"
-			;;
-		ntdll-LDR_MODULE)
-			enable_ntdll_LDR_MODULE="$2"
-			;;
-		ntdll-Manifest_Range)
-			enable_ntdll_Manifest_Range="$2"
-			;;
-		ntdll-MemoryWorkingSetExInformation)
-			enable_ntdll_MemoryWorkingSetExInformation="$2"
-			;;
-		ntdll-NtAccessCheck)
-			enable_ntdll_NtAccessCheck="$2"
-			;;
-		ntdll-NtContinue)
-			enable_ntdll_NtContinue="$2"
-			;;
-		ntdll-NtDevicePath)
-			enable_ntdll_NtDevicePath="$2"
-			;;
-		ntdll-NtQueryEaFile)
-			enable_ntdll_NtQueryEaFile="$2"
-			;;
-		ntdll-NtQuerySection)
-			enable_ntdll_NtQuerySection="$2"
-			;;
-		ntdll-NtQueryVirtualMemory)
-			enable_ntdll_NtQueryVirtualMemory="$2"
-			;;
-		ntdll-NtSetLdtEntries)
-			enable_ntdll_NtSetLdtEntries="$2"
-			;;
-		ntdll-Pipe_SpecialCharacters)
-			enable_ntdll_Pipe_SpecialCharacters="$2"
-			;;
-		ntdll-ProcessQuotaLimits)
-			enable_ntdll_ProcessQuotaLimits="$2"
-			;;
-		ntdll-RtlCreateUserThread)
-			enable_ntdll_RtlCreateUserThread="$2"
-			;;
-		ntdll-RtlIpv4StringToAddress)
-			enable_ntdll_RtlIpv4StringToAddress="$2"
-			;;
-		ntdll-RtlQueryPackageIdentity)
-			enable_ntdll_RtlQueryPackageIdentity="$2"
-			;;
-		ntdll-Serial_Port_Detection)
-			enable_ntdll_Serial_Port_Detection="$2"
-			;;
-		ntdll-Signal_Handler)
-			enable_ntdll_Signal_Handler="$2"
-			;;
-		ntdll-Status_Mapping)
-			enable_ntdll_Status_Mapping="$2"
-			;;
-		ntdll-SystemExtendedProcessInformation)
-			enable_ntdll_SystemExtendedProcessInformation="$2"
-			;;
-		ntdll-SystemInterruptInformation)
-			enable_ntdll_SystemInterruptInformation="$2"
-			;;
-		ntdll-SystemModuleInformation)
-			enable_ntdll_SystemModuleInformation="$2"
-			;;
-		ntdll-SystemRoot_Symlink)
-			enable_ntdll_SystemRoot_Symlink="$2"
-			;;
-		ntdll-ThreadTime)
-			enable_ntdll_ThreadTime="$2"
-			;;
-		ntdll-Threading)
-			enable_ntdll_Threading="$2"
-			;;
-		ntdll-User_Shared_Data)
-			enable_ntdll_User_Shared_Data="$2"
-			;;
-		ntdll-WRITECOPY)
-			enable_ntdll_WRITECOPY="$2"
-			;;
-		ntdll-Wait_User_APC)
-			enable_ntdll_Wait_User_APC="$2"
-			;;
-		ntdll-Zero_mod_name)
-			enable_ntdll_Zero_mod_name="$2"
-			;;
-		ntdll-aarch-TEB)
-			enable_ntdll_aarch_TEB="$2"
-			;;
-		ntdll-ext4-case-folder)
-			enable_ntdll_ext4_case_folder="$2"
-			;;
-		ntdll-set_full_cpu_context)
-			enable_ntdll_set_full_cpu_context="$2"
-			;;
-		ntoskrnl-Stubs)
-			enable_ntoskrnl_Stubs="$2"
-			;;
-		ntoskrnl.exe-IoInvalidateDeviceRelations)
-			enable_ntoskrnl_exe_IoInvalidateDeviceRelations="$2"
-			;;
-		nvapi-Stub_DLL)
-			enable_nvapi_Stub_DLL="$2"
-			;;
-		nvcuda-CUDA_Support)
-			enable_nvcuda_CUDA_Support="$2"
-			;;
-		nvcuvid-CUDA_Video_Support)
-			enable_nvcuvid_CUDA_Video_Support="$2"
-			;;
-		nvencodeapi-Video_Encoder)
-			enable_nvencodeapi_Video_Encoder="$2"
-			;;
-		ole32-HGLOBALStream)
-			enable_ole32_HGLOBALStream="$2"
-			;;
-		ole32-STGPROP)
-			enable_ole32_STGPROP="$2"
-			;;
-		oleaut32-CreateTypeLib)
-			enable_oleaut32_CreateTypeLib="$2"
-			;;
-		oleaut32-Load_Save_EMF)
-			enable_oleaut32_Load_Save_EMF="$2"
-			;;
-		oleaut32-OLEPictureImpl_SaveAsFile)
-			enable_oleaut32_OLEPictureImpl_SaveAsFile="$2"
-			;;
-		oleaut32-OleLoadPicture)
-			enable_oleaut32_OleLoadPicture="$2"
-			;;
-		oleaut32-OleLoadPictureFile)
-			enable_oleaut32_OleLoadPictureFile="$2"
-			;;
-		opencl-version_1_2)
-			enable_opencl_version_1_2="$2"
-			;;
-		opengl32-wglChoosePixelFormat)
-			enable_opengl32_wglChoosePixelFormat="$2"
-			;;
-		packager-DllMain)
-			enable_packager_DllMain="$2"
-			;;
-		pdh-PdhLookupPerfNameByIndex-processor)
-			enable_pdh_PdhLookupPerfNameByIndex_processor="$2"
-			;;
-		quartz-MediaSeeking_Positions)
-			enable_quartz_MediaSeeking_Positions="$2"
-			;;
-		riched20-Class_Tests)
-			enable_riched20_Class_Tests="$2"
-			;;
-		riched20-IText_Interface)
-			enable_riched20_IText_Interface="$2"
-			;;
-		server-Desktop_Refcount)
-			enable_server_Desktop_Refcount="$2"
-			;;
-		server-FileEndOfFileInformation)
-			enable_server_FileEndOfFileInformation="$2"
-			;;
-		server-File_Permissions)
-			enable_server_File_Permissions="$2"
-			;;
-		server-Inherited_ACLs)
-			enable_server_Inherited_ACLs="$2"
-			;;
-		server-Key_State)
-			enable_server_Key_State="$2"
-			;;
-		server-Object_Types)
-			enable_server_Object_Types="$2"
-			;;
-		server-PeekMessage)
-			enable_server_PeekMessage="$2"
-			;;
-		server-Realtime_Priority)
-			enable_server_Realtime_Priority="$2"
-			;;
-		server-Registry_Notifications)
-			enable_server_Registry_Notifications="$2"
-			;;
-		server-Shared_Memory)
-			enable_server_Shared_Memory="$2"
-			;;
-		server-Signal_Thread)
-			enable_server_Signal_Thread="$2"
-			;;
-		server-Stored_ACLs)
-			enable_server_Stored_ACLs="$2"
-			;;
-		server-Timestamp_Compat)
-			enable_server_Timestamp_Compat="$2"
-			;;
-		server-device_manager_destroy)
-			enable_server_device_manager_destroy="$2"
-			;;
-		setupapi-DiskSpaceList)
-			enable_setupapi_DiskSpaceList="$2"
-			;;
-		setupapi-SPFILENOTIFY_FILEINCABINET)
-			enable_setupapi_SPFILENOTIFY_FILEINCABINET="$2"
-			;;
-		setupapi-SP_COPY_IN_USE_NEEDS_REBOOT)
-			enable_setupapi_SP_COPY_IN_USE_NEEDS_REBOOT="$2"
-			;;
-		setupapi-SetupPromptForDisk)
-			enable_setupapi_SetupPromptForDisk="$2"
-			;;
-		shdocvw-ParseURLFromOutsideSource_Tests)
-			enable_shdocvw_ParseURLFromOutsideSource_Tests="$2"
-			;;
-		shell32-ACE_Viewer)
-			enable_shell32_ACE_Viewer="$2"
-			;;
-		shell32-Context_Menu)
-			enable_shell32_Context_Menu="$2"
-			;;
-		shell32-IconCache)
-			enable_shell32_IconCache="$2"
-			;;
-		shell32-NewMenu_Interface)
-			enable_shell32_NewMenu_Interface="$2"
-			;;
-		shell32-Progress_Dialog)
-			enable_shell32_Progress_Dialog="$2"
-			;;
-		shell32-SFGAO_HASSUBFOLDER)
-			enable_shell32_SFGAO_HASSUBFOLDER="$2"
-			;;
-		shell32-SHFileOperation_Move)
-			enable_shell32_SHFileOperation_Move="$2"
-			;;
-		shell32-SHGetStockIconInfo)
-			enable_shell32_SHGetStockIconInfo="$2"
-			;;
-		shell32-Toolbar_Bitmaps)
-			enable_shell32_Toolbar_Bitmaps="$2"
-			;;
-		shell32-UnixFS)
-			enable_shell32_UnixFS="$2"
-			;;
-		shlwapi-AssocGetPerceivedType)
-			enable_shlwapi_AssocGetPerceivedType="$2"
-			;;
-		shlwapi-SHAddDataBlock)
-			enable_shlwapi_SHAddDataBlock="$2"
-			;;
-		shlwapi-UrlCanonicalize)
-			enable_shlwapi_UrlCanonicalize="$2"
-			;;
-		shlwapi-UrlCombine)
-			enable_shlwapi_UrlCombine="$2"
-			;;
-		stdole32.idl-Typelib)
-			enable_stdole32_idl_Typelib="$2"
-			;;
-		stdole32.tlb-SLTG_Typelib)
-			enable_stdole32_tlb_SLTG_Typelib="$2"
-			;;
-		uianimation-stubs)
-			enable_uianimation_stubs="$2"
-			;;
-		user32-DM_SETDEFID)
-			enable_user32_DM_SETDEFID="$2"
-			;;
-		user32-Dialog_Paint_Event)
-			enable_user32_Dialog_Paint_Event="$2"
-			;;
-		user32-DrawMenuItem)
-			enable_user32_DrawMenuItem="$2"
-			;;
-		user32-DrawTextExW)
-			enable_user32_DrawTextExW="$2"
-			;;
-		user32-FlashWindowEx)
-			enable_user32_FlashWindowEx="$2"
-			;;
-		user32-GetSystemMetrics)
-			enable_user32_GetSystemMetrics="$2"
-			;;
-		user32-Implement-CascadeWindows)
-			enable_user32_Implement_CascadeWindows="$2"
-			;;
-		user32-LR_LOADFROMFILE)
-			enable_user32_LR_LOADFROMFILE="$2"
-			;;
-		user32-ListBox_Size)
-			enable_user32_ListBox_Size="$2"
-			;;
-		user32-LoadKeyboardLayoutEx)
-			enable_user32_LoadKeyboardLayoutEx="$2"
-			;;
-		user32-MessageBox_WS_EX_TOPMOST)
-			enable_user32_MessageBox_WS_EX_TOPMOST="$2"
-			;;
-		user32-Mouse_Message_Hwnd)
-			enable_user32_Mouse_Message_Hwnd="$2"
-			;;
-		user32-Refresh_MDI_Menus)
-			enable_user32_Refresh_MDI_Menus="$2"
-			;;
-		user32-ScrollWindowEx)
-			enable_user32_ScrollWindowEx="$2"
-			;;
-		user32-ShowWindow)
-			enable_user32_ShowWindow="$2"
-			;;
-		user32-msgbox-Support-WM_COPY-mesg)
-			enable_user32_msgbox_Support_WM_COPY_mesg="$2"
-			;;
-		user32-recursive-activation)
-			enable_user32_recursive_activation="$2"
-			;;
-		uxtheme-CloseThemeClass)
-			enable_uxtheme_CloseThemeClass="$2"
-			;;
-		uxtheme-GTK_Theming)
-			enable_uxtheme_GTK_Theming="$2"
-			;;
-		version-VerQueryValue)
-			enable_version_VerQueryValue="$2"
-			;;
-		widl-SLTG_Typelib_Support)
-			enable_widl_SLTG_Typelib_Support="$2"
-			;;
-		windowscodecs-GIF_Encoder)
-			enable_windowscodecs_GIF_Encoder="$2"
-			;;
-		windowscodecs-TIFF_Support)
-			enable_windowscodecs_TIFF_Support="$2"
-			;;
-		wine.inf-Directory_ContextMenuHandlers)
-			enable_wine_inf_Directory_ContextMenuHandlers="$2"
-			;;
-		wine.inf-Dummy_CA_Certificate)
-			enable_wine_inf_Dummy_CA_Certificate="$2"
-			;;
-		wine.inf-Performance)
-			enable_wine_inf_Performance="$2"
-			;;
-		wine.inf-ProfileList_UserSID)
-			enable_wine_inf_ProfileList_UserSID="$2"
-			;;
-		wineboot-DriveSerial)
-			enable_wineboot_DriveSerial="$2"
-			;;
-		wineboot-HKEY_DYN_DATA)
-			enable_wineboot_HKEY_DYN_DATA="$2"
-			;;
-		wineboot-ProxySettings)
-			enable_wineboot_ProxySettings="$2"
-			;;
-		wineboot-drivers_etc_Stubs)
-			enable_wineboot_drivers_etc_Stubs="$2"
-			;;
-		winebuild-Fake_Dlls)
-			enable_winebuild_Fake_Dlls="$2"
-			;;
-		winecfg-Libraries)
-			enable_winecfg_Libraries="$2"
-			;;
-		winecfg-Staging)
-			enable_winecfg_Staging="$2"
-			;;
-		winecfg-Unmounted_Devices)
-			enable_winecfg_Unmounted_Devices="$2"
-			;;
-		wined3d-Accounting)
-			enable_wined3d_Accounting="$2"
-			;;
-		wined3d-CSMT_Main)
-			enable_wined3d_CSMT_Main="$2"
-			;;
-		wined3d-Dual_Source_Blending)
-			enable_wined3d_Dual_Source_Blending="$2"
-			;;
-		wined3d-Indexed_Vertex_Blending)
-			enable_wined3d_Indexed_Vertex_Blending="$2"
-			;;
-		wined3d-SWVP-shaders)
-			enable_wined3d_SWVP_shaders="$2"
-			;;
-		wined3d-Silence_FIXMEs)
-			enable_wined3d_Silence_FIXMEs="$2"
-			;;
-		wined3d-UAV_Counters)
-			enable_wined3d_UAV_Counters="$2"
-			;;
-		wined3d-WINED3DFMT_B8G8R8X8_UNORM)
-			enable_wined3d_WINED3DFMT_B8G8R8X8_UNORM="$2"
-			;;
-		wined3d-WINED3D_RS_COLORWRITEENABLE)
-			enable_wined3d_WINED3D_RS_COLORWRITEENABLE="$2"
-			;;
-		wined3d-WINED3D_TEXF_ANISOTROPIC)
-			enable_wined3d_WINED3D_TEXF_ANISOTROPIC="$2"
-			;;
-		wined3d-mesa_texture_download)
-			enable_wined3d_mesa_texture_download="$2"
-			;;
-		wined3d-unset-flip-gdi)
-			enable_wined3d_unset_flip_gdi="$2"
-			;;
-		wined3d-wined3d_guess_gl_vendor)
-			enable_wined3d_wined3d_guess_gl_vendor="$2"
-			;;
-		wined3d-zero-inf-shaders)
-			enable_wined3d_zero_inf_shaders="$2"
-			;;
-		winedbg-Process_Arguments)
-			enable_winedbg_Process_Arguments="$2"
-			;;
-		winedevice-Default_Drivers)
-			enable_winedevice_Default_Drivers="$2"
-			;;
-		winemapi-user-xdg-mail)
-			enable_winemapi_user_xdg_mail="$2"
-			;;
-		winemenubuilder-Desktop_Icon_Path)
-			enable_winemenubuilder_Desktop_Icon_Path="$2"
-			;;
-		wineps.drv-PostScript_Fixes)
-			enable_wineps_drv_PostScript_Fixes="$2"
-			;;
-		winepulse-PulseAudio_Support)
-			enable_winepulse_PulseAudio_Support="$2"
-			;;
-		winex11-CandidateWindowPos)
-			enable_winex11_CandidateWindowPos="$2"
-			;;
-		winex11-DefaultDisplayFrequency)
-			enable_winex11_DefaultDisplayFrequency="$2"
-			;;
-		winex11-MWM_Decorations)
-			enable_winex11_MWM_Decorations="$2"
-			;;
-		winex11-UpdateLayeredWindow)
-			enable_winex11_UpdateLayeredWindow="$2"
-			;;
-		winex11-Vulkan_support)
-			enable_winex11_Vulkan_support="$2"
-			;;
-		winex11-WM_WINDOWPOSCHANGING)
-			enable_winex11_WM_WINDOWPOSCHANGING="$2"
-			;;
-		winex11-Window_Style)
-			enable_winex11_Window_Style="$2"
-			;;
-		winex11-XEMBED)
-			enable_winex11_XEMBED="$2"
-			;;
-		winex11-_NET_ACTIVE_WINDOW)
-			enable_winex11__NET_ACTIVE_WINDOW="$2"
-			;;
-		winex11-ime-check-thread-data)
-			enable_winex11_ime_check_thread_data="$2"
-			;;
-		winex11-key_translation)
-			enable_winex11_key_translation="$2"
-			;;
-		winex11-wglShareLists)
-			enable_winex11_wglShareLists="$2"
-			;;
-		winex11.drv-Query_server_position)
-			enable_winex11_drv_Query_server_position="$2"
-			;;
-		winex11.drv-mouse-coorrds)
-			enable_winex11_drv_mouse_coorrds="$2"
-			;;
-		wininet-Cleanup)
-			enable_wininet_Cleanup="$2"
-			;;
-		winmm-Delay_Import_Depends)
-			enable_winmm_Delay_Import_Depends="$2"
-			;;
-		winmm-mciSendCommandA)
-			enable_winmm_mciSendCommandA="$2"
-			;;
-		wintab32-improvements)
-			enable_wintab32_improvements="$2"
-			;;
-		wintrust-WTHelperGetProvCertFromChain)
-			enable_wintrust_WTHelperGetProvCertFromChain="$2"
-			;;
-		wow64cpu-Wow64Transition)
-			enable_wow64cpu_Wow64Transition="$2"
-			;;
-		wpcap-Dynamic_Linking)
-			enable_wpcap_Dynamic_Linking="$2"
-			;;
-		ws2_32-APC_Performance)
-			enable_ws2_32_APC_Performance="$2"
-			;;
-		ws2_32-Connect_Time)
-			enable_ws2_32_Connect_Time="$2"
-			;;
-		ws2_32-TransmitFile)
-			enable_ws2_32_TransmitFile="$2"
-			;;
-		ws2_32-WSACleanup)
-			enable_ws2_32_WSACleanup="$2"
-			;;
-		ws2_32-getaddrinfo)
-			enable_ws2_32_getaddrinfo="$2"
-			;;
-		ws2_32-getsockopt)
-			enable_ws2_32_getsockopt="$2"
-			;;
-		wtsapi32-EnumerateProcesses)
-			enable_wtsapi32_EnumerateProcesses="$2"
-			;;
-		wusa-MSU_Package_Installer)
-			enable_wusa_MSU_Package_Installer="$2"
-			;;
-		*)
-			return 1
-			;;
+		Compiler_Warnings) enable_Compiler_Warnings="$2" ;;
+		Pipelight) enable_Pipelight="$2" ;;
+		Staging) enable_Staging="$2" ;;
+		advapi32-CreateRestrictedToken) enable_advapi32_CreateRestrictedToken="$2" ;;
+		advapi32-LsaLookupPrivilegeName) enable_advapi32_LsaLookupPrivilegeName="$2" ;;
+		advapi32-LsaLookupSids) enable_advapi32_LsaLookupSids="$2" ;;
+		advapi32-Token_Integrity_Level) enable_advapi32_Token_Integrity_Level="$2" ;;
+		api-ms-win-Stub_DLLs) enable_api_ms_win_Stub_DLLs="$2" ;;
+		atl-AtlAxDialogBox) enable_atl_AtlAxDialogBox="$2" ;;
+		cmd-launch-association) enable_cmd_launch_association="$2" ;;
+		combase-GetRestrictedErrorInfo) enable_combase_GetRestrictedErrorInfo="$2" ;;
+		comctl32-Listview_DrawItem) enable_comctl32_Listview_DrawItem="$2" ;;
+		comctl32-alpha-bitmaps) enable_comctl32_alpha_bitmaps="$2" ;;
+		comctrl-rebar-capture) enable_comctrl_rebar_capture="$2" ;;
+		comdlg32-lpstrFileTitle) enable_comdlg32_lpstrFileTitle="$2" ;;
+		configure-Absolute_RPATH) enable_configure_Absolute_RPATH="$2" ;;
+		crypt32-CMS_Certificates) enable_crypt32_CMS_Certificates="$2" ;;
+		crypt32-MS_Root_Certs) enable_crypt32_MS_Root_Certs="$2" ;;
+		cryptext-CryptExtOpenCER) enable_cryptext_CryptExtOpenCER="$2" ;;
+		d2d1-ID2D1Factory1) enable_d2d1_ID2D1Factory1="$2" ;;
+		d3d11-Deferred_Context) enable_d3d11_Deferred_Context="$2" ;;
+		d3d9-Tests) enable_d3d9_Tests="$2" ;;
+		d3dx9-32bpp_Alpha_Channel) enable_d3dx9_32bpp_Alpha_Channel="$2" ;;
+		d3dx9_36-BumpLuminance) enable_d3dx9_36_BumpLuminance="$2" ;;
+		d3dx9_36-CloneEffect) enable_d3dx9_36_CloneEffect="$2" ;;
+		d3dx9_36-D3DXCreateKeyframedAnimationSet) enable_d3dx9_36_D3DXCreateKeyframedAnimationSet="$2" ;;
+		d3dx9_36-D3DXDisassembleShader) enable_d3dx9_36_D3DXDisassembleShader="$2" ;;
+		d3dx9_36-D3DXOptimizeVertices) enable_d3dx9_36_D3DXOptimizeVertices="$2" ;;
+		d3dx9_36-D3DXSHProjectCubeMap) enable_d3dx9_36_D3DXSHProjectCubeMap="$2" ;;
+		d3dx9_36-D3DXStubs) enable_d3dx9_36_D3DXStubs="$2" ;;
+		d3dx9_36-DDS) enable_d3dx9_36_DDS="$2" ;;
+		d3dx9_36-DrawText) enable_d3dx9_36_DrawText="$2" ;;
+		d3dx9_36-Filter_Warnings) enable_d3dx9_36_Filter_Warnings="$2" ;;
+		d3dx9_36-Optimize_Inplace) enable_d3dx9_36_Optimize_Inplace="$2" ;;
+		d3dx9_36-UpdateSkinnedMesh) enable_d3dx9_36_UpdateSkinnedMesh="$2" ;;
+		dbghelp-Debug_Symbols) enable_dbghelp_Debug_Symbols="$2" ;;
+		ddraw-Device_Caps) enable_ddraw_Device_Caps="$2" ;;
+		ddraw-EnumSurfaces) enable_ddraw_EnumSurfaces="$2" ;;
+		ddraw-IDirect3DTexture2_Load) enable_ddraw_IDirect3DTexture2_Load="$2" ;;
+		ddraw-Rendering_Targets) enable_ddraw_Rendering_Targets="$2" ;;
+		ddraw-Silence_FIXMEs) enable_ddraw_Silence_FIXMEs="$2" ;;
+		ddraw-Texture_Wrong_Caps) enable_ddraw_Texture_Wrong_Caps="$2" ;;
+		ddraw-Write_Vtable) enable_ddraw_Write_Vtable="$2" ;;
+		ddraw-version-check) enable_ddraw_version_check="$2" ;;
+		dinput-SetActionMap-genre) enable_dinput_SetActionMap_genre="$2" ;;
+		dinput-axis-recalc) enable_dinput_axis_recalc="$2" ;;
+		dinput-joy-mappings) enable_dinput_joy_mappings="$2" ;;
+		dinput-reconnect-joystick) enable_dinput_reconnect_joystick="$2" ;;
+		dinput-remap-joystick) enable_dinput_remap_joystick="$2" ;;
+		directmanipulation-new-dll) enable_directmanipulation_new_dll="$2" ;;
+		dmime-PChannel-range) enable_dmime_PChannel_range="$2" ;;
+		dsdmo-new-dll) enable_dsdmo_new_dll="$2" ;;
+		dsound-EAX) enable_dsound_EAX="$2" ;;
+		dsound-Fast_Mixer) enable_dsound_Fast_Mixer="$2" ;;
+		dwmapi-DwmGetTransportAttributes) enable_dwmapi_DwmGetTransportAttributes="$2" ;;
+		dwrite-FontFallback) enable_dwrite_FontFallback="$2" ;;
+		dxdiagn-Enumerate_DirectSound) enable_dxdiagn_Enumerate_DirectSound="$2" ;;
+		dxdiagn-GetChildContainer_Leaf_Nodes) enable_dxdiagn_GetChildContainer_Leaf_Nodes="$2" ;;
+		dxva2-Video_Decoder) enable_dxva2_Video_Decoder="$2" ;;
+		eventfd_synchronization) enable_eventfd_synchronization="$2" ;;
+		explorer-Video_Registry_Key) enable_explorer_Video_Registry_Key="$2" ;;
+		fonts-Missing_Fonts) enable_fonts_Missing_Fonts="$2" ;;
+		fsutil-Stub_Program) enable_fsutil_Stub_Program="$2" ;;
+		gdi32-Lazy_Font_Initialization) enable_gdi32_Lazy_Font_Initialization="$2" ;;
+		gdi32-rotation) enable_gdi32_rotation="$2" ;;
+		gdiplus-Performance-Improvements) enable_gdiplus_Performance_Improvements="$2" ;;
+		imagehlp-BindImageEx) enable_imagehlp_BindImageEx="$2" ;;
+		imm32-message_on_focus) enable_imm32_message_on_focus="$2" ;;
+		include-winsock) enable_include_winsock="$2" ;;
+		inseng-Implementation) enable_inseng_Implementation="$2" ;;
+		iphlpapi-System_Ping) enable_iphlpapi_System_Ping="$2" ;;
+		kernel32-CopyFileEx) enable_kernel32_CopyFileEx="$2" ;;
+		kernel32-Debugger) enable_kernel32_Debugger="$2" ;;
+		kernel32-FindFirstFile) enable_kernel32_FindFirstFile="$2" ;;
+		kernel32-Job_Tests) enable_kernel32_Job_Tests="$2" ;;
+		kernel32-K32GetPerformanceInfo) enable_kernel32_K32GetPerformanceInfo="$2" ;;
+		kernel32-NeedCurrentDirectoryForExePath) enable_kernel32_NeedCurrentDirectoryForExePath="$2" ;;
+		kernel32-PE_Loader_Fixes) enable_kernel32_PE_Loader_Fixes="$2" ;;
+		kernel32-Processor_Group) enable_kernel32_Processor_Group="$2" ;;
+		kernel32-SCSI_Sysfs) enable_kernel32_SCSI_Sysfs="$2" ;;
+		kernel32-SetProcessDEPPolicy) enable_kernel32_SetProcessDEPPolicy="$2" ;;
+		krnl386.exe16-GDT_LDT_Emulation) enable_krnl386_exe16_GDT_LDT_Emulation="$2" ;;
+		krnl386.exe16-Invalid_Console_Handles) enable_krnl386_exe16_Invalid_Console_Handles="$2" ;;
+		libs-Debug_Channel) enable_libs_Debug_Channel="$2" ;;
+		libs-Unicode_Collation) enable_libs_Unicode_Collation="$2" ;;
+		loader-KeyboardLayouts) enable_loader_KeyboardLayouts="$2" ;;
+		mmsystem.dll16-MIDIHDR_Refcount) enable_mmsystem_dll16_MIDIHDR_Refcount="$2" ;;
+		mountmgr-DosDevices) enable_mountmgr_DosDevices="$2" ;;
+		mscoree-CorValidateImage) enable_mscoree_CorValidateImage="$2" ;;
+		msctf-ITfActiveLanguageProfileNotifySink) enable_msctf_ITfActiveLanguageProfileNotifySink="$2" ;;
+		mshtml-HTMLLocation_put_hash) enable_mshtml_HTMLLocation_put_hash="$2" ;;
+		mshtml-TranslateAccelerator) enable_mshtml_TranslateAccelerator="$2" ;;
+		msi-msi_vcl_get_cost) enable_msi_msi_vcl_get_cost="$2" ;;
+		msvcrt-Math_Precision) enable_msvcrt_Math_Precision="$2" ;;
+		ntdll-APC_Performance) enable_ntdll_APC_Performance="$2" ;;
+		ntdll-Activation_Context) enable_ntdll_Activation_Context="$2" ;;
+		ntdll-ApiSetMap) enable_ntdll_ApiSetMap="$2" ;;
+		ntdll-Builtin_Prot) enable_ntdll_Builtin_Prot="$2" ;;
+		ntdll-CriticalSection) enable_ntdll_CriticalSection="$2" ;;
+		ntdll-DOS_Attributes) enable_ntdll_DOS_Attributes="$2" ;;
+		ntdll-Dealloc_Thread_Stack) enable_ntdll_Dealloc_Thread_Stack="$2" ;;
+		ntdll-DeviceType_Systemroot) enable_ntdll_DeviceType_Systemroot="$2" ;;
+		ntdll-Exception) enable_ntdll_Exception="$2" ;;
+		ntdll-FileDispositionInformation) enable_ntdll_FileDispositionInformation="$2" ;;
+		ntdll-FileFsFullSizeInformation) enable_ntdll_FileFsFullSizeInformation="$2" ;;
+		ntdll-FileFsVolumeInformation) enable_ntdll_FileFsVolumeInformation="$2" ;;
+		ntdll-Fix_Alignment) enable_ntdll_Fix_Alignment="$2" ;;
+		ntdll-HashLinks) enable_ntdll_HashLinks="$2" ;;
+		ntdll-Heap_Improvements) enable_ntdll_Heap_Improvements="$2" ;;
+		ntdll-Hide_Wine_Exports) enable_ntdll_Hide_Wine_Exports="$2" ;;
+		ntdll-Interrupt-0x2e) enable_ntdll_Interrupt_0x2e="$2" ;;
+		ntdll-Junction_Points) enable_ntdll_Junction_Points="$2" ;;
+		ntdll-LDR_MODULE) enable_ntdll_LDR_MODULE="$2" ;;
+		ntdll-Manifest_Range) enable_ntdll_Manifest_Range="$2" ;;
+		ntdll-MemoryWorkingSetExInformation) enable_ntdll_MemoryWorkingSetExInformation="$2" ;;
+		ntdll-NtAccessCheck) enable_ntdll_NtAccessCheck="$2" ;;
+		ntdll-NtContinue) enable_ntdll_NtContinue="$2" ;;
+		ntdll-NtDevicePath) enable_ntdll_NtDevicePath="$2" ;;
+		ntdll-NtQueryEaFile) enable_ntdll_NtQueryEaFile="$2" ;;
+		ntdll-NtQuerySection) enable_ntdll_NtQuerySection="$2" ;;
+		ntdll-NtQueryVirtualMemory) enable_ntdll_NtQueryVirtualMemory="$2" ;;
+		ntdll-NtSetLdtEntries) enable_ntdll_NtSetLdtEntries="$2" ;;
+		ntdll-Pipe_SpecialCharacters) enable_ntdll_Pipe_SpecialCharacters="$2" ;;
+		ntdll-ProcessQuotaLimits) enable_ntdll_ProcessQuotaLimits="$2" ;;
+		ntdll-RtlCreateUserThread) enable_ntdll_RtlCreateUserThread="$2" ;;
+		ntdll-RtlIpv4StringToAddress) enable_ntdll_RtlIpv4StringToAddress="$2" ;;
+		ntdll-RtlQueryPackageIdentity) enable_ntdll_RtlQueryPackageIdentity="$2" ;;
+		ntdll-Serial_Port_Detection) enable_ntdll_Serial_Port_Detection="$2" ;;
+		ntdll-Signal_Handler) enable_ntdll_Signal_Handler="$2" ;;
+		ntdll-Status_Mapping) enable_ntdll_Status_Mapping="$2" ;;
+		ntdll-SystemExtendedProcessInformation) enable_ntdll_SystemExtendedProcessInformation="$2" ;;
+		ntdll-SystemInterruptInformation) enable_ntdll_SystemInterruptInformation="$2" ;;
+		ntdll-SystemModuleInformation) enable_ntdll_SystemModuleInformation="$2" ;;
+		ntdll-SystemRoot_Symlink) enable_ntdll_SystemRoot_Symlink="$2" ;;
+		ntdll-ThreadTime) enable_ntdll_ThreadTime="$2" ;;
+		ntdll-Threading) enable_ntdll_Threading="$2" ;;
+		ntdll-User_Shared_Data) enable_ntdll_User_Shared_Data="$2" ;;
+		ntdll-WRITECOPY) enable_ntdll_WRITECOPY="$2" ;;
+		ntdll-Wait_User_APC) enable_ntdll_Wait_User_APC="$2" ;;
+		ntdll-Zero_mod_name) enable_ntdll_Zero_mod_name="$2" ;;
+		ntdll-aarch-TEB) enable_ntdll_aarch_TEB="$2" ;;
+		ntdll-ext4-case-folder) enable_ntdll_ext4_case_folder="$2" ;;
+		ntdll-set_full_cpu_context) enable_ntdll_set_full_cpu_context="$2" ;;
+		ntoskrnl-Stubs) enable_ntoskrnl_Stubs="$2" ;;
+		ntoskrnl.exe-IoInvalidateDeviceRelations) enable_ntoskrnl_exe_IoInvalidateDeviceRelations="$2" ;;
+		nvapi-Stub_DLL) enable_nvapi_Stub_DLL="$2" ;;
+		nvcuda-CUDA_Support) enable_nvcuda_CUDA_Support="$2" ;;
+		nvcuvid-CUDA_Video_Support) enable_nvcuvid_CUDA_Video_Support="$2" ;;
+		nvencodeapi-Video_Encoder) enable_nvencodeapi_Video_Encoder="$2" ;;
+		ole32-HGLOBALStream) enable_ole32_HGLOBALStream="$2" ;;
+		ole32-STGPROP) enable_ole32_STGPROP="$2" ;;
+		oleaut32-CreateTypeLib) enable_oleaut32_CreateTypeLib="$2" ;;
+		oleaut32-Load_Save_EMF) enable_oleaut32_Load_Save_EMF="$2" ;;
+		oleaut32-OLEPictureImpl_SaveAsFile) enable_oleaut32_OLEPictureImpl_SaveAsFile="$2" ;;
+		oleaut32-OleLoadPicture) enable_oleaut32_OleLoadPicture="$2" ;;
+		oleaut32-OleLoadPictureFile) enable_oleaut32_OleLoadPictureFile="$2" ;;
+		opencl-version_1_2) enable_opencl_version_1_2="$2" ;;
+		opengl32-wglChoosePixelFormat) enable_opengl32_wglChoosePixelFormat="$2" ;;
+		packager-DllMain) enable_packager_DllMain="$2" ;;
+		pdh-PdhLookupPerfNameByIndex-processor) enable_pdh_PdhLookupPerfNameByIndex_processor="$2" ;;
+		quartz-MediaSeeking_Positions) enable_quartz_MediaSeeking_Positions="$2" ;;
+		riched20-Class_Tests) enable_riched20_Class_Tests="$2" ;;
+		riched20-IText_Interface) enable_riched20_IText_Interface="$2" ;;
+		server-Desktop_Refcount) enable_server_Desktop_Refcount="$2" ;;
+		server-FileEndOfFileInformation) enable_server_FileEndOfFileInformation="$2" ;;
+		server-File_Permissions) enable_server_File_Permissions="$2" ;;
+		server-Inherited_ACLs) enable_server_Inherited_ACLs="$2" ;;
+		server-Key_State) enable_server_Key_State="$2" ;;
+		server-Object_Types) enable_server_Object_Types="$2" ;;
+		server-PeekMessage) enable_server_PeekMessage="$2" ;;
+		server-Realtime_Priority) enable_server_Realtime_Priority="$2" ;;
+		server-Registry_Notifications) enable_server_Registry_Notifications="$2" ;;
+		server-Shared_Memory) enable_server_Shared_Memory="$2" ;;
+		server-Signal_Thread) enable_server_Signal_Thread="$2" ;;
+		server-Stored_ACLs) enable_server_Stored_ACLs="$2" ;;
+		server-Timestamp_Compat) enable_server_Timestamp_Compat="$2" ;;
+		server-device_manager_destroy) enable_server_device_manager_destroy="$2" ;;
+		setupapi-DiskSpaceList) enable_setupapi_DiskSpaceList="$2" ;;
+		setupapi-SPFILENOTIFY_FILEINCABINET) enable_setupapi_SPFILENOTIFY_FILEINCABINET="$2" ;;
+		setupapi-SP_COPY_IN_USE_NEEDS_REBOOT) enable_setupapi_SP_COPY_IN_USE_NEEDS_REBOOT="$2" ;;
+		setupapi-SetupPromptForDisk) enable_setupapi_SetupPromptForDisk="$2" ;;
+		shdocvw-ParseURLFromOutsideSource_Tests) enable_shdocvw_ParseURLFromOutsideSource_Tests="$2" ;;
+		shell32-ACE_Viewer) enable_shell32_ACE_Viewer="$2" ;;
+		shell32-Context_Menu) enable_shell32_Context_Menu="$2" ;;
+		shell32-IconCache) enable_shell32_IconCache="$2" ;;
+		shell32-NewMenu_Interface) enable_shell32_NewMenu_Interface="$2" ;;
+		shell32-Progress_Dialog) enable_shell32_Progress_Dialog="$2" ;;
+		shell32-SFGAO_HASSUBFOLDER) enable_shell32_SFGAO_HASSUBFOLDER="$2" ;;
+		shell32-SHFileOperation_Move) enable_shell32_SHFileOperation_Move="$2" ;;
+		shell32-SHGetStockIconInfo) enable_shell32_SHGetStockIconInfo="$2" ;;
+		shell32-Toolbar_Bitmaps) enable_shell32_Toolbar_Bitmaps="$2" ;;
+		shell32-UnixFS) enable_shell32_UnixFS="$2" ;;
+		shlwapi-AssocGetPerceivedType) enable_shlwapi_AssocGetPerceivedType="$2" ;;
+		shlwapi-SHAddDataBlock) enable_shlwapi_SHAddDataBlock="$2" ;;
+		shlwapi-UrlCanonicalize) enable_shlwapi_UrlCanonicalize="$2" ;;
+		shlwapi-UrlCombine) enable_shlwapi_UrlCombine="$2" ;;
+		stdole32.idl-Typelib) enable_stdole32_idl_Typelib="$2" ;;
+		stdole32.tlb-SLTG_Typelib) enable_stdole32_tlb_SLTG_Typelib="$2" ;;
+		uianimation-stubs) enable_uianimation_stubs="$2" ;;
+		user32-DM_SETDEFID) enable_user32_DM_SETDEFID="$2" ;;
+		user32-Dialog_Paint_Event) enable_user32_Dialog_Paint_Event="$2" ;;
+		user32-DrawMenuItem) enable_user32_DrawMenuItem="$2" ;;
+		user32-DrawTextExW) enable_user32_DrawTextExW="$2" ;;
+		user32-FlashWindowEx) enable_user32_FlashWindowEx="$2" ;;
+		user32-GetSystemMetrics) enable_user32_GetSystemMetrics="$2" ;;
+		user32-Implement-CascadeWindows) enable_user32_Implement_CascadeWindows="$2" ;;
+		user32-LR_LOADFROMFILE) enable_user32_LR_LOADFROMFILE="$2" ;;
+		user32-ListBox_Size) enable_user32_ListBox_Size="$2" ;;
+		user32-LoadKeyboardLayoutEx) enable_user32_LoadKeyboardLayoutEx="$2" ;;
+		user32-MessageBox_WS_EX_TOPMOST) enable_user32_MessageBox_WS_EX_TOPMOST="$2" ;;
+		user32-Mouse_Message_Hwnd) enable_user32_Mouse_Message_Hwnd="$2" ;;
+		user32-Refresh_MDI_Menus) enable_user32_Refresh_MDI_Menus="$2" ;;
+		user32-ScrollWindowEx) enable_user32_ScrollWindowEx="$2" ;;
+		user32-ShowWindow) enable_user32_ShowWindow="$2" ;;
+		user32-msgbox-Support-WM_COPY-mesg) enable_user32_msgbox_Support_WM_COPY_mesg="$2" ;;
+		user32-recursive-activation) enable_user32_recursive_activation="$2" ;;
+		uxtheme-CloseThemeClass) enable_uxtheme_CloseThemeClass="$2" ;;
+		uxtheme-GTK_Theming) enable_uxtheme_GTK_Theming="$2" ;;
+		version-VerQueryValue) enable_version_VerQueryValue="$2" ;;
+		widl-SLTG_Typelib_Support) enable_widl_SLTG_Typelib_Support="$2" ;;
+		windowscodecs-GIF_Encoder) enable_windowscodecs_GIF_Encoder="$2" ;;
+		windowscodecs-TIFF_Support) enable_windowscodecs_TIFF_Support="$2" ;;
+		wine.inf-Directory_ContextMenuHandlers) enable_wine_inf_Directory_ContextMenuHandlers="$2" ;;
+		wine.inf-Dummy_CA_Certificate) enable_wine_inf_Dummy_CA_Certificate="$2" ;;
+		wine.inf-Performance) enable_wine_inf_Performance="$2" ;;
+		wine.inf-ProfileList_UserSID) enable_wine_inf_ProfileList_UserSID="$2" ;;
+		wineboot-DriveSerial) enable_wineboot_DriveSerial="$2" ;;
+		wineboot-HKEY_DYN_DATA) enable_wineboot_HKEY_DYN_DATA="$2" ;;
+		wineboot-ProxySettings) enable_wineboot_ProxySettings="$2" ;;
+		wineboot-drivers_etc_Stubs) enable_wineboot_drivers_etc_Stubs="$2" ;;
+		winebuild-Fake_Dlls) enable_winebuild_Fake_Dlls="$2" ;;
+		winecfg-Libraries) enable_winecfg_Libraries="$2" ;;
+		winecfg-Staging) enable_winecfg_Staging="$2" ;;
+		winecfg-Unmounted_Devices) enable_winecfg_Unmounted_Devices="$2" ;;
+		wined3d-Accounting) enable_wined3d_Accounting="$2" ;;
+		wined3d-CSMT_Main) enable_wined3d_CSMT_Main="$2" ;;
+		wined3d-Dual_Source_Blending) enable_wined3d_Dual_Source_Blending="$2" ;;
+		wined3d-Indexed_Vertex_Blending) enable_wined3d_Indexed_Vertex_Blending="$2" ;;
+		wined3d-SWVP-shaders) enable_wined3d_SWVP_shaders="$2" ;;
+		wined3d-Silence_FIXMEs) enable_wined3d_Silence_FIXMEs="$2" ;;
+		wined3d-UAV_Counters) enable_wined3d_UAV_Counters="$2" ;;
+		wined3d-WINED3DFMT_B8G8R8X8_UNORM) enable_wined3d_WINED3DFMT_B8G8R8X8_UNORM="$2" ;;
+		wined3d-WINED3D_RS_COLORWRITEENABLE) enable_wined3d_WINED3D_RS_COLORWRITEENABLE="$2" ;;
+		wined3d-WINED3D_TEXF_ANISOTROPIC) enable_wined3d_WINED3D_TEXF_ANISOTROPIC="$2" ;;
+		wined3d-mesa_texture_download) enable_wined3d_mesa_texture_download="$2" ;;
+		wined3d-unset-flip-gdi) enable_wined3d_unset_flip_gdi="$2" ;;
+		wined3d-wined3d_guess_gl_vendor) enable_wined3d_wined3d_guess_gl_vendor="$2" ;;
+		wined3d-zero-inf-shaders) enable_wined3d_zero_inf_shaders="$2" ;;
+		winedbg-Process_Arguments) enable_winedbg_Process_Arguments="$2" ;;
+		winedevice-Default_Drivers) enable_winedevice_Default_Drivers="$2" ;;
+		winemapi-user-xdg-mail) enable_winemapi_user_xdg_mail="$2" ;;
+		winemenubuilder-Desktop_Icon_Path) enable_winemenubuilder_Desktop_Icon_Path="$2" ;;
+		wineps.drv-PostScript_Fixes) enable_wineps_drv_PostScript_Fixes="$2" ;;
+		winepulse-PulseAudio_Support) enable_winepulse_PulseAudio_Support="$2" ;;
+		winex11-CandidateWindowPos) enable_winex11_CandidateWindowPos="$2" ;;
+		winex11-DefaultDisplayFrequency) enable_winex11_DefaultDisplayFrequency="$2" ;;
+		winex11-MWM_Decorations) enable_winex11_MWM_Decorations="$2" ;;
+		winex11-UpdateLayeredWindow) enable_winex11_UpdateLayeredWindow="$2" ;;
+		winex11-Vulkan_support) enable_winex11_Vulkan_support="$2" ;;
+		winex11-WM_WINDOWPOSCHANGING) enable_winex11_WM_WINDOWPOSCHANGING="$2" ;;
+		winex11-Window_Style) enable_winex11_Window_Style="$2" ;;
+		winex11-XEMBED) enable_winex11_XEMBED="$2" ;;
+		winex11-_NET_ACTIVE_WINDOW) enable_winex11__NET_ACTIVE_WINDOW="$2" ;;
+		winex11-ime-check-thread-data) enable_winex11_ime_check_thread_data="$2" ;;
+		winex11-key_translation) enable_winex11_key_translation="$2" ;;
+		winex11-wglShareLists) enable_winex11_wglShareLists="$2" ;;
+		winex11.drv-Query_server_position) enable_winex11_drv_Query_server_position="$2" ;;
+		winex11.drv-mouse-coorrds) enable_winex11_drv_mouse_coorrds="$2" ;;
+		wininet-Cleanup) enable_wininet_Cleanup="$2" ;;
+		winmm-Delay_Import_Depends) enable_winmm_Delay_Import_Depends="$2" ;;
+		winmm-mciSendCommandA) enable_winmm_mciSendCommandA="$2" ;;
+		wintab32-improvements) enable_wintab32_improvements="$2" ;;
+		wintrust-WTHelperGetProvCertFromChain) enable_wintrust_WTHelperGetProvCertFromChain="$2" ;;
+		wow64cpu-Wow64Transition) enable_wow64cpu_Wow64Transition="$2" ;;
+		wpcap-Dynamic_Linking) enable_wpcap_Dynamic_Linking="$2" ;;
+		ws2_32-APC_Performance) enable_ws2_32_APC_Performance="$2" ;;
+		ws2_32-Connect_Time) enable_ws2_32_Connect_Time="$2" ;;
+		ws2_32-TransmitFile) enable_ws2_32_TransmitFile="$2" ;;
+		ws2_32-WSACleanup) enable_ws2_32_WSACleanup="$2" ;;
+		ws2_32-getaddrinfo) enable_ws2_32_getaddrinfo="$2" ;;
+		ws2_32-getsockopt) enable_ws2_32_getsockopt="$2" ;;
+		wtsapi32-EnumerateProcesses) enable_wtsapi32_EnumerateProcesses="$2" ;;
+		wusa-MSU_Package_Installer) enable_wusa_MSU_Package_Installer="$2" ;;
+		*) return 1
 	esac
 	return 0
 }
