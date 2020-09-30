@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "23c6dd55b8c983ec88cada0a6d6c75ee9cd93976"
+	echo "d45b3d4fdd7cbcfdba70c327ab90976a3b658da2"
 }
 
 # Show version information
@@ -127,7 +127,6 @@ patch_enable_all ()
 	enable_dxdiagn_GetChildContainer_Leaf_Nodes="$1"
 	enable_explorer_Video_Registry_Key="$1"
 	enable_fonts_Missing_Fonts="$1"
-	enable_gdi32_Lazy_Font_Initialization="$1"
 	enable_gdi32_rotation="$1"
 	enable_gdiplus_Performance_Improvements="$1"
 	enable_imagehlp_BindImageEx="$1"
@@ -471,9 +470,6 @@ patch_enable ()
 			;;
 		fonts-Missing_Fonts)
 			enable_fonts_Missing_Fonts="$2"
-			;;
-		gdi32-Lazy_Font_Initialization)
-			enable_gdi32_Lazy_Font_Initialization="$2"
 			;;
 		gdi32-rotation)
 			enable_gdi32_rotation="$2"
@@ -2461,15 +2457,6 @@ if test "$enable_fonts_Missing_Fonts" -eq 1; then
 	patch_apply fonts-Missing_Fonts/0003-fonts-Add-Liberation-Mono-as-an-Courier-New-replacem.patch
 	patch_apply fonts-Missing_Fonts/0004-fonts-Add-WenQuanYi-Micro-Hei-as-a-Microsoft-Yahei-r.patch
 	patch_apply fonts-Missing_Fonts/0005-Add-licenses-for-fonts-as-separate-files.patch
-fi
-
-# Patchset gdi32-Lazy_Font_Initialization
-# |
-# | Modified files:
-# |   *	dlls/gdi32/dc.c, dlls/gdi32/freetype.c
-# |
-if test "$enable_gdi32_Lazy_Font_Initialization" -eq 1; then
-	patch_apply gdi32-Lazy_Font_Initialization/0001-gdi32-Perform-lazy-initialization-of-fonts-to-improv.patch
 fi
 
 # Patchset gdi32-rotation
