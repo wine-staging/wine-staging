@@ -5027,12 +5027,13 @@ fi
 # |   *	[#48684] BlazBlue: Calamity Trigger requires for xactengine 3.3 interface.
 # |
 # | Modified files:
-# |   *	dlls/x3daudio1_7/Makefile.in, dlls/xaudio2_7/tests/Makefile.in, dlls/xaudio2_7/tests/globals.xgs,
-# | 	dlls/xaudio2_7/tests/rsrc.rc, dlls/xaudio2_7/tests/xact.c, dlls/xaudio2_7/tests/xaudio2.c
+# |   *	dlls/x3daudio1_7/Makefile.in, dlls/xactengine3_7/tests/Makefile.in, dlls/xactengine3_7/tests/globals.xgs,
+# | 	dlls/xactengine3_7/tests/rsrc.rc, dlls/xactengine3_7/tests/xact3.c
 # |
 if test "$enable_xactengine_initial" -eq 1; then
-	patch_apply xactengine-initial/0011-xaudio2_7-Initial-IXACT3Engine-tests.patch
-	patch_apply xactengine-initial/0016-xaudio2_7-tests-Add-more-tests.patch
+	patch_apply xactengine-initial/0001-x3daudio1_7-Create-import-library.patch
+	patch_apply xactengine-initial/0002-xactengine3_7-Initial-IXACT3Engine-tests.patch
+	patch_apply xactengine-initial/0003-xactengine3_7-tests-Add-Global-settings-test.patch
 fi
 
 # Patchset xactengine2-dll
