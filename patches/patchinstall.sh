@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "d45b3d4fdd7cbcfdba70c327ab90976a3b658da2"
+	echo "fa9f4a20f5305b7cbcfe3a644d39d4b759f89203"
 }
 
 # Show version information
@@ -161,7 +161,6 @@ patch_enable_all ()
 	enable_ntdll_DOS_Attributes="$1"
 	enable_ntdll_Dealloc_Thread_Stack="$1"
 	enable_ntdll_Exception="$1"
-	enable_ntdll_FLS_Callbacks="$1"
 	enable_ntdll_FileDispositionInformation="$1"
 	enable_ntdll_FileFsFullSizeInformation="$1"
 	enable_ntdll_Fix_Alignment="$1"
@@ -324,7 +323,6 @@ patch_enable_all ()
 	enable_wpcap_Dynamic_Linking="$1"
 	enable_ws2_32_APC_Performance="$1"
 	enable_ws2_32_Connect_Time="$1"
-	enable_ws2_32_getaddrinfo="$1"
 	enable_ws2_32_getsockopt="$1"
 	enable_wtsapi32_EnumerateProcesses="$1"
 	enable_xactengine_initial="$1"
@@ -572,9 +570,6 @@ patch_enable ()
 			;;
 		ntdll-Exception)
 			enable_ntdll_Exception="$2"
-			;;
-		ntdll-FLS_Callbacks)
-			enable_ntdll_FLS_Callbacks="$2"
 			;;
 		ntdll-FileDispositionInformation)
 			enable_ntdll_FileDispositionInformation="$2"
@@ -1061,9 +1056,6 @@ patch_enable ()
 			;;
 		ws2_32-Connect_Time)
 			enable_ws2_32_Connect_Time="$2"
-			;;
-		ws2_32-getaddrinfo)
-			enable_ws2_32_getaddrinfo="$2"
 			;;
 		ws2_32-getsockopt)
 			enable_ws2_32_getsockopt="$2"
@@ -1639,13 +1631,6 @@ if test "$enable_ntdll_WRITECOPY" -eq 1; then
 	enable_ntdll_ForceBottomUpAlloc=1
 fi
 
-if test "$enable_ntdll_ApiSetMap" -eq 1; then
-	if test "$enable_ntdll_FLS_Callbacks" -gt 1; then
-		abort "Patchset ntdll-FLS_Callbacks disabled, but ntdll-ApiSetMap depends on that."
-	fi
-	enable_ntdll_FLS_Callbacks=1
-fi
-
 if test "$enable_kernel32_Processor_Group" -eq 1; then
 	if test "$enable_api_ms_win_Stub_DLLs" -gt 1; then
 		abort "Patchset api-ms-win-Stub_DLLs disabled, but kernel32-Processor_Group depends on that."
@@ -1709,13 +1694,6 @@ if test "$enable_nvapi_Stub_DLL" -eq 1; then
 	enable_nvcuda_CUDA_Support=1
 fi
 
-if test "$enable_Staging" -eq 1; then
-	if test "$enable_ntdll_FLS_Callbacks" -gt 1; then
-		abort "Patchset ntdll-FLS_Callbacks disabled, but Staging depends on that."
-	fi
-	enable_ntdll_FLS_Callbacks=1
-fi
-
 
 # Patchset Compiler_Warnings
 # |
@@ -1754,28 +1732,7 @@ if test "$enable_Pipelight" -eq 1; then
 	patch_apply Pipelight/0004-winex11.drv-Indicate-direct-rendering-through-OpenGL.patch
 fi
 
-# Patchset ntdll-FLS_Callbacks
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#49012] Application build with .NET CoreRT crashes due to FLS callbacks not being called
-# |
-# | Modified files:
-# |   *	dlls/kernel32/tests/fiber.c, dlls/kernel32/tests/loader.c, dlls/kernel32/tests/thread.c, dlls/kernelbase/thread.c,
-# | 	dlls/ntdll/loader.c
-# |
-if test "$enable_ntdll_FLS_Callbacks" -eq 1; then
-	patch_apply ntdll-FLS_Callbacks/0001-kernelbase-Maintain-FLS-storage-list-in-PEB.patch
-	patch_apply ntdll-FLS_Callbacks/0002-kernelbase-Don-t-use-PEB-lock-for-FLS-data.patch
-	patch_apply ntdll-FLS_Callbacks/0003-kernelbase-Zero-all-FLS-slots-instances-in-FlsFree.patch
-	patch_apply ntdll-FLS_Callbacks/0004-ntdll-Call-FLS-callbacks-on-thread-shutdown.patch
-	patch_apply ntdll-FLS_Callbacks/0005-kernelbase-Call-FLS-callbacks-from-FlsFree.patch
-	patch_apply ntdll-FLS_Callbacks/0006-kernelbase-Call-FLS-callbacks-from-DeleteFiber.patch
-fi
-
 # Patchset Staging
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-FLS_Callbacks
 # |
 # | Modified files:
 # |   *	Makefile.in, dlls/ntdll/Makefile.in, dlls/ntdll/loader.c
@@ -2807,9 +2764,6 @@ if test "$enable_ntdll_Activation_Context" -eq 1; then
 fi
 
 # Patchset ntdll-ApiSetMap
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-FLS_Callbacks
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#44658] Add dummy apiset to PEB struct
@@ -4982,15 +4936,6 @@ fi
 # |
 if test "$enable_ws2_32_Connect_Time" -eq 1; then
 	patch_apply ws2_32-Connect_Time/0001-ws2_32-Implement-returning-the-proper-time-with-SO_C.patch
-fi
-
-# Patchset ws2_32-getaddrinfo
-# |
-# | Modified files:
-# |   *	dlls/ws2_32/socket.c
-# |
-if test "$enable_ws2_32_getaddrinfo" -eq 1; then
-	patch_apply ws2_32-getaddrinfo/0001-ws2_32-Fix-handling-of-empty-string-in-WS_getaddrinf.patch
 fi
 
 # Patchset ws2_32-getsockopt
