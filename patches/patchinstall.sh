@@ -143,6 +143,7 @@ patch_enable_all ()
 	enable_krnl386_exe16_GDT_LDT_Emulation="$1"
 	enable_krnl386_exe16_Invalid_Console_Handles="$1"
 	enable_loader_KeyboardLayouts="$1"
+	enable_mfplat_streaming_support="$1"
 	enable_mmsystem_dll16_MIDIHDR_Refcount="$1"
 	enable_mountmgr_DosDevices="$1"
 	enable_mscoree_CorValidateImage="$1"
@@ -516,6 +517,9 @@ patch_enable ()
 			;;
 		loader-KeyboardLayouts)
 			enable_loader_KeyboardLayouts="$2"
+			;;
+		mfplat-streaming-support)
+			enable_mfplat_streaming_support="$2"
 			;;
 		mmsystem.dll16-MIDIHDR_Refcount)
 			enable_mmsystem_dll16_MIDIHDR_Refcount="$2"
@@ -2621,6 +2625,75 @@ fi
 if test "$enable_loader_KeyboardLayouts" -eq 1; then
 	patch_apply loader-KeyboardLayouts/0001-loader-Add-Keyboard-Layouts-registry-enteries.patch
 	patch_apply loader-KeyboardLayouts/0002-user32-Improve-GetKeyboardLayoutList.patch
+fi
+
+# Patchset mfplat-streaming-support
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#49692] mfplat: Improved support for multiple video formats.
+# |
+# | Modified files:
+# |   *	configure.ac, dlls/mf/Makefile.in, dlls/mf/handler.c, dlls/mf/handler.h, dlls/mf/main.c, dlls/mf/sar.c,
+# | 	dlls/mf/session.c, dlls/mf/tests/mf.c, dlls/mf/topology.c, dlls/mfplat/mediatype.c, dlls/mfplat/tests/mfplat.c,
+# | 	dlls/mfplat/tests/test.mp4, dlls/mfreadwrite/reader.c, dlls/mfreadwrite/tests/mfplat.c,
+# | 	dlls/mfreadwrite/tests/resource.rc, dlls/mfreadwrite/tests/test.mp4, dlls/winegstreamer/Makefile.in,
+# | 	dlls/winegstreamer/audioconvert.c, dlls/winegstreamer/colorconvert.c, dlls/winegstreamer/gst_cbs.c,
+# | 	dlls/winegstreamer/gst_cbs.h, dlls/winegstreamer/gst_private.h, dlls/winegstreamer/main.c,
+# | 	dlls/winegstreamer/media_source.c, dlls/winegstreamer/mf_decode.c, dlls/winegstreamer/mfplat.c,
+# | 	dlls/winegstreamer/winegstreamer_classes.idl, include/mfidl.idl, tools/make_makefiles, tools/makedep.c
+# |
+if test "$enable_mfplat_streaming_support" -eq 1; then
+	patch_apply mfplat-streaming-support/0001-winegstreamer-Insert-parser-into-pipeline-to-rectify.patch
+	patch_apply mfplat-streaming-support/0002-winegstreamer-Insert-videoconvert-into-decoded-video.patch
+	patch_apply mfplat-streaming-support/0003-winegstreamer-Insert-audioconvert-into-decoded-audio.patch
+	patch_apply mfplat-streaming-support/0004-winegstreamer-Translate-H.264-caps-to-attributes.patch
+	patch_apply mfplat-streaming-support/0005-winegstreamer-Translate-WMV-caps-to-attributes.patch
+	patch_apply mfplat-streaming-support/0006-winegstreamer-Translate-AAC-caps-to-attributes.patch
+	patch_apply mfplat-streaming-support/0007-winegstreamer-Translate-MPEG-4-Section-2-caps-to-att.patch
+	patch_apply mfplat-streaming-support/0008-winegstreamer-Translate-WMA-caps-to-attributes.patch
+	patch_apply mfplat-streaming-support/0009-winegstreamer-Implement-IMFMediaSource-CreatePresent.patch
+	patch_apply mfplat-streaming-support/0010-winegstreamer-Introduce-IMFMediaType-GstCaps-convert.patch
+	patch_apply mfplat-streaming-support/0011-winegstreamer-Translate-H.264-attributes-to-caps.patch
+	patch_apply mfplat-streaming-support/0012-winegstreamer-Translate-WMV-attributes-to-caps.patch
+	patch_apply mfplat-streaming-support/0013-winegstreamer-Translate-AAC-attributes-to-caps.patch
+	patch_apply mfplat-streaming-support/0014-winegstreamer-Translate-MPEG-4-Section-2-attributes-.patch
+	patch_apply mfplat-streaming-support/0015-winegstreamer-Translate-WMA-attributes-to-caps.patch
+	patch_apply mfplat-streaming-support/0016-winegstreamer-Implement-IMFMediaSource-Start.patch
+	patch_apply mfplat-streaming-support/0017-winegstreamer-Implement-IMFMediaStream-RequestSample.patch
+	patch_apply mfplat-streaming-support/0018-winegstreamer-Implement-IMFMediaSource-GetCharacteri.patch
+	patch_apply mfplat-streaming-support/0019-winegstreamer-Calculate-the-MF_PD_DURATION-of-the-me.patch
+	patch_apply mfplat-streaming-support/0020-tools-Add-support-for-multiple-parent-directories.patch
+	patch_apply mfplat-streaming-support/0021-mf-Introduce-handler-helper.patch
+	patch_apply mfplat-streaming-support/0022-Introduce-IMFSample-GstBuffer-converter.patch
+	patch_apply mfplat-streaming-support/0023-winegstreamer-Implement-decoder-MFT-on-gstreamer.patch
+	patch_apply mfplat-streaming-support/0024-mfreadwrite-Select-all-streams-when-creating-a-sourc.patch
+	patch_apply mfplat-streaming-support/0025-Miscellaneous.patch
+	patch_apply mfplat-streaming-support/0026-WMV.patch
+	patch_apply mfplat-streaming-support/0027-mf-Ask-for-more-samples-from-upstream-node-when-upon.patch
+	patch_apply mfplat-streaming-support/0028-winegstreamer-Implement-IMFMedisStream-GetMediaSourc.patch
+	patch_apply mfplat-streaming-support/0029-Expose-PCM-output-type-on-AAC-decoder.patch
+	patch_apply mfplat-streaming-support/0030-mfplat-Add-I420-format-information.patch
+	patch_apply mfplat-streaming-support/0031-winegstreamer-Implement-Color-Converter-MFT.patch
+	patch_apply mfplat-streaming-support/0032-HACK-Set-BPS-to-16-for-output-template.patch
+	patch_apply mfplat-streaming-support/0033-Improve-tests.patch
+	patch_apply mfplat-streaming-support/0034-Revert-Improve-tests.patch
+	patch_apply mfplat-streaming-support/0035-Report-streams-backwards-and-only-select-one-of-each.patch
+	patch_apply mfplat-streaming-support/0036-winegstreamer-Implement-IMFMediaSource-Stop.patch
+	patch_apply mfplat-streaming-support/0037-winegstreamer-Introduce-MPEG-4-Section-2-video-decod.patch
+	patch_apply mfplat-streaming-support/0038-HACK-Switch-between-all-selection-streams-on-MF_SOUR.patch
+	patch_apply mfplat-streaming-support/0039-winegstreamer-Introduce-WMA-audio-decoder.patch
+	patch_apply mfplat-streaming-support/0040-Support-stereo-down-folding.patch
+	patch_apply mfplat-streaming-support/0041-winegstreamer-Implement-MF_SD_LANGUAGE.patch
+	patch_apply mfplat-streaming-support/0042-Revert-mf-topoloader-Add-a-structure-for-iterative-b.patch
+	patch_apply mfplat-streaming-support/0043-Revert-mf-topoloader-Clone-source-nodes-as-a-first-l.patch
+	patch_apply mfplat-streaming-support/0044-Revert-mf-topoloader-Switch-to-public-interface-for-.patch
+	patch_apply mfplat-streaming-support/0045-mf-Partially-implement-the-topology-loader.patch
+	patch_apply mfplat-streaming-support/0046-mf-Miscelaneous-fixes-to-topology-resolution.patch
+	patch_apply mfplat-streaming-support/0047-Rewrite-branch-resolver.patch
+	patch_apply mfplat-streaming-support/0048-mf-sar-Compare-against-native-media-type-in-IsMediaT.patch
+	patch_apply mfplat-streaming-support/0049-winegstreamer-Implement-audio-conversion-MFT.patch
+	patch_apply mfplat-streaming-support/0053-winegstreamer-Support-eAVEncH264VProfile_Constrained.patch
+	patch_apply mfplat-streaming-support/0054-winegstreamer-Support-older-versions.patch
 fi
 
 # Patchset mmsystem.dll16-MIDIHDR_Refcount
