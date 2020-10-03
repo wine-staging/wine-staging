@@ -88,6 +88,7 @@ patch_enable_all ()
 	enable_advapi32_LsaLookupPrivilegeName="$1"
 	enable_api_ms_win_Stub_DLLs="$1"
 	enable_atl_AtlAxDialogBox="$1"
+	enable_bcrypt_ECDHSecretAgreement="$1"
 	enable_cmd_launch_association="$1"
 	enable_color_sRGB_profile="$1"
 	enable_comctl32_Listview_DrawItem="$1"
@@ -352,6 +353,9 @@ patch_enable ()
 			;;
 		atl-AtlAxDialogBox)
 			enable_atl_AtlAxDialogBox="$2"
+			;;
+		bcrypt-ECDHSecretAgreement)
+			enable_bcrypt_ECDHSecretAgreement="$2"
 			;;
 		cmd-launch-association)
 			enable_cmd_launch_association="$2"
@@ -1783,6 +1787,22 @@ fi
 # |
 if test "$enable_atl_AtlAxDialogBox" -eq 1; then
 	patch_apply atl-AtlAxDialogBox/0001-atl-Implement-AtlAxDialogBox-A-W.patch
+fi
+
+# Patchset bcrypt-ECDHSecretAgreement
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#47699] Multiple games fail to connect to online services (missing BCryptSecretAgreement / BCryptDeriveKey
+# | 	implementation)
+# |
+# | Modified files:
+# |   *	configure.ac, dlls/bcrypt/Makefile.in, dlls/bcrypt/bcrypt_internal.h, dlls/bcrypt/bcrypt_main.c, dlls/bcrypt/gcrypt.c,
+# | 	dlls/bcrypt/gnutls.c, dlls/bcrypt/macos.c, dlls/bcrypt/tests/bcrypt.c, dlls/bcrypt/unixlib.c
+# |
+if test "$enable_bcrypt_ECDHSecretAgreement" -eq 1; then
+	patch_apply bcrypt-ECDHSecretAgreement/0001-bcrypt-Allow-multiple-backends-to-coexist.patch
+	patch_apply bcrypt-ECDHSecretAgreement/0002-bcrypt-Implement-BCryptSecretAgreement-with-libgcryp.patch
+	patch_apply bcrypt-ECDHSecretAgreement/0003-bcrypt-Implement-BCRYPT_KDF_HASH.patch
 fi
 
 # Patchset cmd-launch-association
