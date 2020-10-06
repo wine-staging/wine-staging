@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "568e3e8b697a960881c162671a33c28727921797"
+	echo "c29f9e6ee7656aa028bb1630284e7d4873bd5b0f"
 }
 
 # Show version information
@@ -4354,7 +4354,7 @@ fi
 # |
 # | Modified files:
 # |   *	configure.ac, dlls/windows.gaming.input.dll/Makefile.in, dlls/windows.gaming.input.dll/windows.gaming.input.spec,
-# | 	dlls/windows.gaming.input.dll/windows.gaming.input_main.c, include/objidl.idl, loader/wine.inf.in
+# | 	dlls/windows.gaming.input.dll/windows.gaming.input_main.c, loader/wine.inf.in
 # |
 if test "$enable_windows_gaming_input_dll" -eq 1; then
 	patch_apply windows.gaming.input-dll/0001-windows.gaming.input-Add-stub-dll.patch
