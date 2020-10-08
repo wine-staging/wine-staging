@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "c29f9e6ee7656aa028bb1630284e7d4873bd5b0f"
+	echo "412db7789379549c4f821acb11c92f7aabab71c9"
 }
 
 # Show version information
@@ -5065,7 +5065,7 @@ fi
 # |   *	[#48684] BlazBlue: Calamity Trigger requires for xactengine 3.3 interface.
 # |
 # | Modified files:
-# |   *	dlls/x3daudio1_7/Makefile.in, dlls/xactengine3_7/tests/Makefile.in, dlls/xactengine3_7/tests/globals.xgs,
+# |   *	configure.ac, dlls/x3daudio1_7/Makefile.in, dlls/xactengine3_7/tests/Makefile.in, dlls/xactengine3_7/tests/globals.xgs,
 # | 	dlls/xactengine3_7/tests/rsrc.rc, dlls/xactengine3_7/tests/xact3.c
 # |
 if test "$enable_xactengine_initial" -eq 1; then
