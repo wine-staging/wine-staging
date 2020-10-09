@@ -1825,10 +1825,11 @@ fi
 # |   *	[#37396] Add sRGB color profile.
 # |
 # | Modified files:
-# |   *	Makefile.in, color/Makefile.in, color/sRGB_Color_Space_Profile.icm, configure.ac, loader/wine.inf.in, tools/makedep.c
+# |   *	dlls/winspool.drv/sRGB_Color_Space_Profile.icm, dlls/winspool.drv/winspool.rc, dlls/winspool.drv/wspool.c,
+# | 	dlls/winspool.drv/wspool.h
 # |
 if test "$enable_color_sRGB_profile" -eq 1; then
-	patch_apply color-sRGB-profile/0001-wine.inf-Add-sRGB-color-profile.patch
+	patch_apply color-sRGB-profile/0001-winspool-Add-sRGB-color-profile.patch
 fi
 
 # Patchset comctl32-Listview_DrawItem
