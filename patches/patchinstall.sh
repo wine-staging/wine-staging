@@ -163,6 +163,7 @@ patch_enable_all ()
 	enable_ntdll_DOS_Attributes="$1"
 	enable_ntdll_Dealloc_Thread_Stack="$1"
 	enable_ntdll_Exception="$1"
+	enable_ntdll_FLS_Callbacks="$1"
 	enable_ntdll_FileDispositionInformation="$1"
 	enable_ntdll_FileFsFullSizeInformation="$1"
 	enable_ntdll_Fix_Alignment="$1"
@@ -578,6 +579,9 @@ patch_enable ()
 			;;
 		ntdll-Exception)
 			enable_ntdll_Exception="$2"
+			;;
+		ntdll-FLS_Callbacks)
+			enable_ntdll_FLS_Callbacks="$2"
 			;;
 		ntdll-FileDispositionInformation)
 			enable_ntdll_FileDispositionInformation="$2"
@@ -2976,6 +2980,19 @@ fi
 # |
 if test "$enable_ntdll_Exception" -eq 1; then
 	patch_apply ntdll-Exception/0002-ntdll-OutputDebugString-should-throw-the-exception-a.patch
+fi
+
+# Patchset ntdll-FLS_Callbacks
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#49012] Application build with .NET CoreRT crashes due to FLS callbacks not being called
+# |
+# | Modified files:
+# |   *	dlls/kernel32/tests/fiber.c, dlls/kernel32/tests/loader.c, dlls/ntdll/loader.c, dlls/ntdll/thread.c
+# |
+if test "$enable_ntdll_FLS_Callbacks" -eq 1; then
+	patch_apply ntdll-FLS_Callbacks/0001-ntdll-Zero-all-FLS-slots-instances-in-RtlFlsFree.patch
+	patch_apply ntdll-FLS_Callbacks/0002-ntdll-Call-FLS-callbacks.patch
 fi
 
 # Patchset ntdll-FileFsFullSizeInformation
