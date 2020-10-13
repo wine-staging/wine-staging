@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "f7d815089580cebe2682683345272858def6358c"
+	echo "f4a66ad257df4605e73dfea792eec55a70a04e84"
 }
 
 # Show version information
@@ -163,7 +163,6 @@ patch_enable_all ()
 	enable_ntdll_DOS_Attributes="$1"
 	enable_ntdll_Dealloc_Thread_Stack="$1"
 	enable_ntdll_Exception="$1"
-	enable_ntdll_FLS_Callbacks="$1"
 	enable_ntdll_FileDispositionInformation="$1"
 	enable_ntdll_FileFsFullSizeInformation="$1"
 	enable_ntdll_Fix_Alignment="$1"
@@ -248,7 +247,6 @@ patch_enable_all ()
 	enable_user32_Dialog_Paint_Event="$1"
 	enable_user32_DrawTextExW="$1"
 	enable_user32_FlashWindowEx="$1"
-	enable_user32_GetMouseMovePointsEx="$1"
 	enable_user32_GetSystemMetrics="$1"
 	enable_user32_Implement_CascadeWindows="$1"
 	enable_user32_InternalGetWindowIcon="$1"
@@ -580,9 +578,6 @@ patch_enable ()
 		ntdll-Exception)
 			enable_ntdll_Exception="$2"
 			;;
-		ntdll-FLS_Callbacks)
-			enable_ntdll_FLS_Callbacks="$2"
-			;;
 		ntdll-FileDispositionInformation)
 			enable_ntdll_FileDispositionInformation="$2"
 			;;
@@ -834,9 +829,6 @@ patch_enable ()
 			;;
 		user32-FlashWindowEx)
 			enable_user32_FlashWindowEx="$2"
-			;;
-		user32-GetMouseMovePointsEx)
-			enable_user32_GetMouseMovePointsEx="$2"
 			;;
 		user32-GetSystemMetrics)
 			enable_user32_GetSystemMetrics="$2"
@@ -2982,19 +2974,6 @@ if test "$enable_ntdll_Exception" -eq 1; then
 	patch_apply ntdll-Exception/0002-ntdll-OutputDebugString-should-throw-the-exception-a.patch
 fi
 
-# Patchset ntdll-FLS_Callbacks
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#49012] Application build with .NET CoreRT crashes due to FLS callbacks not being called
-# |
-# | Modified files:
-# |   *	dlls/kernel32/tests/fiber.c, dlls/kernel32/tests/loader.c, dlls/ntdll/loader.c, dlls/ntdll/thread.c
-# |
-if test "$enable_ntdll_FLS_Callbacks" -eq 1; then
-	patch_apply ntdll-FLS_Callbacks/0001-ntdll-Zero-all-FLS-slots-instances-in-RtlFlsFree.patch
-	patch_apply ntdll-FLS_Callbacks/0002-ntdll-Call-FLS-callbacks.patch
-fi
-
 # Patchset ntdll-FileFsFullSizeInformation
 # |
 # | Modified files:
@@ -4060,18 +4039,6 @@ if test "$enable_user32_FlashWindowEx" -eq 1; then
 	patch_apply user32-FlashWindowEx/0001-user32-Improve-FlashWindowEx-message-and-return-valu.patch
 fi
 
-# Patchset user32-GetMouseMovePointsEx
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#36873] Semi-stub GetMouseMovePointsEx
-# |
-# | Modified files:
-# |   *	dlls/user32/input.c
-# |
-if test "$enable_user32_GetMouseMovePointsEx" -eq 1; then
-	patch_apply user32-GetMouseMovePointsEx/0001-user32-Partially-implement-GetMouseMovePointsEx.patch
-fi
-
 # Patchset user32-GetSystemMetrics
 # |
 # | This patchset fixes the following Wine bugs:
@@ -5083,12 +5050,11 @@ fi
 # |   *	[#48684] BlazBlue: Calamity Trigger requires for xactengine 3.3 interface.
 # |
 # | Modified files:
-# |   *	configure.ac, dlls/x3daudio1_7/Makefile.in, dlls/xactengine3_7/tests/Makefile.in, dlls/xactengine3_7/tests/globals.xgs,
+# |   *	dlls/x3daudio1_7/Makefile.in, dlls/xactengine3_7/tests/Makefile.in, dlls/xactengine3_7/tests/globals.xgs,
 # | 	dlls/xactengine3_7/tests/rsrc.rc, dlls/xactengine3_7/tests/xact3.c
 # |
 if test "$enable_xactengine_initial" -eq 1; then
 	patch_apply xactengine-initial/0001-x3daudio1_7-Create-import-library.patch
-	patch_apply xactengine-initial/0002-xactengine3_7-Initial-IXACT3Engine-tests.patch
 	patch_apply xactengine-initial/0003-xactengine3_7-tests-Add-Global-settings-test.patch
 fi
 
