@@ -272,6 +272,7 @@ patch_enable_all ()
 	enable_windows_gaming_input_dll="$1"
 	enable_windows_globalization_dll="$1"
 	enable_windows_media_speech_dll="$1"
+	enable_windows_networking_connectivity_dll="$1"
 	enable_windowscodecs_GIF_Encoder="$1"
 	enable_windowscodecs_TIFF_Support="$1"
 	enable_wine_inf_Directory_ContextMenuHandlers="$1"
@@ -905,6 +906,9 @@ patch_enable ()
 		windows.media.speech.dll)
 			enable_windows_media_speech_dll="$2"
 			;;
+		windows.networking.connectivity.dll)
+			enable_windows_networking_connectivity_dll="$2"
+			;;
 		windowscodecs-GIF_Encoder)
 			enable_windowscodecs_GIF_Encoder="$2"
 			;;
@@ -1453,6 +1457,13 @@ if test "$enable_wineboot_ProxySettings" -eq 1; then
 	fi
 	enable_wineboot_DriveSerial=1
 	enable_wineboot_drivers_etc_Stubs=1
+fi
+
+if test "$enable_windows_networking_connectivity_dll" -eq 1; then
+	if test "$enable_windows_globalization_dll" -gt 1; then
+		abort "Patchset windows.globalization-dll disabled, but windows.networking.connectivity.dll depends on that."
+	fi
+	enable_windows_globalization_dll=1
 fi
 
 if test "$enable_windows_globalization_dll" -eq 1; then
@@ -4439,6 +4450,25 @@ if test "$enable_windows_globalization_dll" -eq 1; then
 	patch_apply windows.globalization-dll/0003-windows.globalization-Implement-IGlobalizationPrefer.patch
 	patch_apply windows.globalization-dll/0004-windows.globalization-Implement-IGlobalizationPrefer.patch
 	patch_apply windows.globalization-dll/0005-windows.globalization-Fake-empty-IGlobalizationPrefe.patch
+fi
+
+# Patchset windows.networking.connectivity.dll
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	widl-winrt-support, windows.media.speech.dll, windows.gaming.input-dll, windows.globalization-dll
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#46534] windows.networking.connectivity: New DLL
+# |
+# | Modified files:
+# |   *	configure.ac, dlls/windows.networking.connectivity.dll/Makefile.in,
+# | 	dlls/windows.networking.connectivity.dll/windows.networking.connectivity.spec,
+# | 	dlls/windows.networking.connectivity.dll/windows.networking.connectivity_main.c, loader/wine.inf.in
+# |
+if test "$enable_windows_networking_connectivity_dll" -eq 1; then
+	patch_apply windows.networking.connectivity.dll/0001-windows.networking.connectivity-Add-stub-dll.patch
+	patch_apply windows.networking.connectivity.dll/0002-windows.networking.connectivity-Implement-IActivatio.patch
+	patch_apply windows.networking.connectivity.dll/0003-windows.networking.connectivity-Implement-INetworkIn.patch
 fi
 
 # Patchset windowscodecs-GIF_Encoder
