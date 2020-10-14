@@ -4386,6 +4386,9 @@ fi
 # |
 if test "$enable_windows_media_speech_dll" -eq 1; then
 	patch_apply windows.media.speech.dll/0001-windows.media.speech-Add-stub-dll.patch
+	patch_apply windows.media.speech.dll/0002-windows.media.speech-Implement-IInstalledVoicesStati.patch
+	patch_apply windows.media.speech.dll/0003-windows.media.speech-Implement-IInstalledVoicesStati.patch
+	patch_apply windows.media.speech.dll/0004-windows.media.speech-Fake-empty-IInstalledVoicesStat.patch
 fi
 
 # Patchset windowscodecs-GIF_Encoder
