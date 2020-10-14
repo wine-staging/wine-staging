@@ -1,0 +1,346 @@
+From 82c354b2275a33863181fc7660f8e63db51c131a Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Thu, 24 Sep 2020 00:00:54 +0200
+Subject: [PATCH 23/28] widl: Support WinRT delegate type.
+
+---
+ tools/widl/expr.c      |  1 +
+ tools/widl/header.c    | 14 ++++++++++----
+ tools/widl/parser.l    |  1 +
+ tools/widl/parser.y    | 25 +++++++++++++++++++++++++
+ tools/widl/typegen.c   |  4 ++++
+ tools/widl/typelib.c   |  1 +
+ tools/widl/typetree.c  | 29 +++++++++++++++++++++++++++++
+ tools/widl/typetree.h  |  9 +++++++++
+ tools/widl/widltypes.h |  7 +++++++
+ 9 files changed, 87 insertions(+), 4 deletions(-)
+
+diff --git a/tools/widl/expr.c b/tools/widl/expr.c
+index c83e9aa5ec0..88d59290d6b 100644
+--- a/tools/widl/expr.c
++++ b/tools/widl/expr.c
+@@ -466,6 +466,7 @@ static type_t *find_identifier(const char *identifier, const type_t *cont_type,
+         case TYPE_RUNTIMECLASS:
+         case TYPE_PARAMETERIZED_TYPE:
+         case TYPE_PARAMETER:
++        case TYPE_DELEGATE:
+             /* nothing to do */
+             break;
+         case TYPE_ALIAS:
+diff --git a/tools/widl/header.c b/tools/widl/header.c
+index db83f3aac13..64faf89c36a 100644
+--- a/tools/widl/header.c
++++ b/tools/widl/header.c
+@@ -483,6 +483,9 @@ void write_type_left(FILE *h, const decl_spec_t *ds, enum name_type name_type, i
+       case TYPE_RUNTIMECLASS:
+         fprintf(h, "%s", type_get_name(type_runtimeclass_get_default_iface(t), name_type));
+         break;
++      case TYPE_DELEGATE:
++        fprintf(h, "%s", type_get_name(type_delegate_get_iface(t), name_type));
++        break;
+       case TYPE_VOID:
+         fprintf(h, "void");
+         break;
+@@ -568,6 +571,7 @@ void write_type_right(FILE *h, type_t *t, int is_field)
+   case TYPE_COCLASS:
+   case TYPE_INTERFACE:
+   case TYPE_RUNTIMECLASS:
++  case TYPE_DELEGATE:
+     break;
+   case TYPE_APICONTRACT:
+   case TYPE_PARAMETERIZED_TYPE:
+@@ -1904,9 +1908,10 @@ static void write_forward_decls(FILE *header, const statement_list_t *stmts)
+     switch (stmt->type)
+     {
+       case STMT_TYPE:
+-        if (type_get_type(stmt->u.type) == TYPE_INTERFACE)
++        if (type_get_type(stmt->u.type) == TYPE_INTERFACE || type_get_type(stmt->u.type) == TYPE_DELEGATE)
+         {
+           type_t *iface = stmt->u.type;
++          if (type_get_type(iface) == TYPE_DELEGATE) iface = type_delegate_get_iface(iface);
+           if (is_object(iface) || is_attr(iface->attrs, ATTR_DISPINTERFACE))
+           {
+             write_forward(header, iface);
+@@ -1946,10 +1951,11 @@ static void write_header_stmts(FILE *header, const statement_list_t *stmts, cons
+     switch (stmt->type)
+     {
+       case STMT_TYPE:
+-        if (type_get_type(stmt->u.type) == TYPE_INTERFACE)
++        if (type_get_type(stmt->u.type) == TYPE_INTERFACE || type_get_type(stmt->u.type) == TYPE_DELEGATE)
+         {
+-          type_t *iface = stmt->u.type;
+-          type_t *async_iface = type_iface_get_async_iface(iface);
++          type_t *iface = stmt->u.type, *async_iface;
++          if (type_get_type(stmt->u.type) == TYPE_DELEGATE) iface = type_delegate_get_iface(iface);
++          async_iface = type_iface_get_async_iface(iface);
+           if (is_object(iface)) is_object_interface++;
+           if (is_attr(stmt->u.type->attrs, ATTR_DISPINTERFACE) || is_object(stmt->u.type))
+           {
+diff --git a/tools/widl/parser.l b/tools/widl/parser.l
+index b7f8844c7a9..5de85e43a94 100644
+--- a/tools/widl/parser.l
++++ b/tools/widl/parser.l
+@@ -278,6 +278,7 @@ static const struct keyword keywords[] = {
+ 	{"cpp_quote",       tCPPQUOTE,       0},
+ 	{"declare",         tDECLARE,        1},
+ 	{"default",         tDEFAULT,        0},
++	{"delegate",        tDELEGATE,       1},
+ 	{"dispinterface",   tDISPINTERFACE,  0},
+ 	{"double",          tDOUBLE,         0},
+ 	{"enum",            tENUM,           0},
+diff --git a/tools/widl/parser.y b/tools/widl/parser.y
+index 2fb73a46dc1..d0166eb3af2 100644
+--- a/tools/widl/parser.y
++++ b/tools/widl/parser.y
+@@ -119,6 +119,7 @@ static statement_t *make_statement_module(type_t *type);
+ static statement_t *make_statement_typedef(var_list_t *names, int declonly);
+ static statement_t *make_statement_import(const char *str);
+ static statement_t *make_statement_parameterized_type(type_t *type, type_list_t *params);
++static statement_t *make_statement_delegate(type_t *ret, var_list_t *args);
+ static statement_list_t *append_statement(statement_list_t *list, statement_t *stmt);
+ static statement_list_t *append_statements(statement_list_t *, statement_list_t *);
+ static attr_list_t *append_attribs(attr_list_t *, attr_list_t *);
+@@ -193,6 +194,7 @@ static typelib_t *current_typelib;
+ %token tCONTROL tCPPQUOTE
+ %token tDECLARE
+ %token tDECODE tDEFAULT tDEFAULTBIND
++%token tDELEGATE
+ %token tDEFAULTCOLLELEM
+ %token tDEFAULTVALUE
+ %token tDEFAULTVTABLE
+@@ -291,6 +293,7 @@ static typelib_t *current_typelib;
+ %type <expr> contract_req
+ %type <expr> static_attr
+ %type <type> interfacehdr
++%type <type> delegatedef
+ %type <stgclass> storage_cls_spec
+ %type <type_qualifier> type_qualifier m_type_qual_list
+ %type <function_specifier> function_specifier
+@@ -390,6 +393,7 @@ gbl_statements:					{ $$ = NULL; }
+ 						{ pop_namespace($2); $$ = append_statements($1, $5); }
+ 	| gbl_statements interfacedec		{ $$ = append_statement($1, make_statement_reference($2)); }
+ 	| gbl_statements interfacedef		{ $$ = append_statement($1, make_statement_type_decl($2)); }
++	| gbl_statements delegatedef		{ $$ = append_statement($1, make_statement_type_decl($2)); }
+ 	| gbl_statements coclass ';'		{ $$ = $1;
+ 						  reg_type($2, $2->name, current_namespace, 0);
+ 						}
+@@ -412,6 +416,7 @@ imp_statements:					{ $$ = NULL; }
+ 	| imp_statements namespacedef '{' { push_namespace($2); } imp_statements '}'
+ 						{ pop_namespace($2); $$ = append_statements($1, $5); }
+ 	| imp_statements interfacedef		{ $$ = append_statement($1, make_statement_type_decl($2)); }
++	| imp_statements delegatedef		{ $$ = append_statement($1, make_statement_type_decl($2)); }
+ 	| imp_statements coclass ';'		{ $$ = $1; reg_type($2, $2->name, current_namespace, 0); }
+ 	| imp_statements coclassdef		{ $$ = append_statement($1, make_statement_type_decl($2));
+ 						  reg_type($2, $2->name, current_namespace, 0);
+@@ -1066,6 +1071,17 @@ type_parameters:
+ 	| type_parameters ',' type_parameter	{ $$ = append_type($1, $3); }
+ 	;
+ 
++delegatedef:
++	  m_attributes tDELEGATE type ident '(' m_args ')'
++	  semicolon_opt				{ $$ = get_type(TYPE_DELEGATE, $4->name, current_namespace, 0);
++						  check_def($$);
++						  $$->attrs = check_iface_attrs($$->name, $1);
++						  $$->defined = TRUE;
++						  type_delegate_define($$, append_statement(NULL, make_statement_delegate($3, $6)));
++						  check_async_uuid($$);
++						}
++	;
++
+ required_types:
+ 	  qualified_type			{ $$ = append_type(NULL, $1); }
+ 	| parameterized_type			{ $$ = append_type(NULL, $1); }
+@@ -2716,6 +2732,7 @@ static int is_allowed_conf_type(const type_t *type)
+     case TYPE_INTERFACE:
+     case TYPE_BITFIELD:
+     case TYPE_RUNTIMECLASS:
++    case TYPE_DELEGATE:
+         return FALSE;
+     case TYPE_APICONTRACT:
+     case TYPE_PARAMETERIZED_TYPE:
+@@ -3357,6 +3374,14 @@ static statement_t *make_statement_parameterized_type(type_t *type, type_list_t
+     return stmt;
+ }
+ 
++static statement_t *make_statement_delegate(type_t *ret, var_list_t *args)
++{
++    declarator_t *decl = make_declarator(make_var(xstrdup("Invoke")));
++    decl_spec_t *spec = make_decl_spec(ret, NULL, NULL, STG_NONE, 0, 0);
++    append_chain_type(decl, type_new_function(args), 0);
++    return make_statement_declaration(declare_var(NULL, spec, decl, FALSE));
++}
++
+ static statement_list_t *append_statements(statement_list_t *l1, statement_list_t *l2)
+ {
+     if (!l2) return l1;
+diff --git a/tools/widl/typegen.c b/tools/widl/typegen.c
+index f37b54eb65d..4557d24b3ff 100644
+--- a/tools/widl/typegen.c
++++ b/tools/widl/typegen.c
+@@ -354,6 +354,7 @@ enum typegen_type typegen_detect_type(const type_t *type, const attr_list_t *att
+     case TYPE_POINTER:
+         if (type_get_type(type_pointer_get_ref_type(type)) == TYPE_INTERFACE ||
+             type_get_type(type_pointer_get_ref_type(type)) == TYPE_RUNTIMECLASS ||
++            type_get_type(type_pointer_get_ref_type(type)) == TYPE_DELEGATE ||
+             (type_get_type(type_pointer_get_ref_type(type)) == TYPE_VOID && is_attr(attrs, ATTR_IIDIS)))
+             return TGT_IFACE_POINTER;
+         else if (is_aliaschain_attr(type_pointer_get_ref_type(type), ATTR_CONTEXTHANDLE))
+@@ -375,6 +376,7 @@ enum typegen_type typegen_detect_type(const type_t *type, const attr_list_t *att
+     case TYPE_ALIAS:
+     case TYPE_BITFIELD:
+     case TYPE_RUNTIMECLASS:
++    case TYPE_DELEGATE:
+         break;
+     case TYPE_APICONTRACT:
+     case TYPE_PARAMETERIZED_TYPE:
+@@ -1978,6 +1980,7 @@ unsigned int type_memsize_and_alignment(const type_t *t, unsigned int *align)
+     case TYPE_RUNTIMECLASS:
+     case TYPE_PARAMETERIZED_TYPE:
+     case TYPE_PARAMETER:
++    case TYPE_DELEGATE:
+         /* these types should not be encountered here due to language
+          * restrictions (interface, void, coclass, module), logical
+          * restrictions (alias - due to type_get_type call above) or
+@@ -2083,6 +2086,7 @@ static unsigned int type_buffer_alignment(const type_t *t)
+     case TYPE_RUNTIMECLASS:
+     case TYPE_PARAMETERIZED_TYPE:
+     case TYPE_PARAMETER:
++    case TYPE_DELEGATE:
+         /* these types should not be encountered here due to language
+          * restrictions (interface, void, coclass, module), logical
+          * restrictions (alias - due to type_get_type call above) or
+diff --git a/tools/widl/typelib.c b/tools/widl/typelib.c
+index 6f6c5f3ccc8..8b2a2401367 100644
+--- a/tools/widl/typelib.c
++++ b/tools/widl/typelib.c
+@@ -219,6 +219,7 @@ unsigned short get_type_vt(type_t *t)
+   case TYPE_UNION:
+   case TYPE_ENCAPSULATED_UNION:
+   case TYPE_RUNTIMECLASS:
++  case TYPE_DELEGATE:
+     return VT_USERDEFINED;
+ 
+   case TYPE_VOID:
+diff --git a/tools/widl/typetree.c b/tools/widl/typetree.c
+index 8f1e2d71aff..15629113cec 100644
+--- a/tools/widl/typetree.c
++++ b/tools/widl/typetree.c
+@@ -523,6 +523,13 @@ static unsigned int compute_method_indexes(type_t *iface)
+     return idx;
+ }
+ 
++static void compute_delegate_iface_name(type_t *delegate)
++{
++    char *name = xmalloc(strlen(delegate->name) + 2);
++    sprintf(name, "I%s", delegate->name);
++    delegate->details.delegate.iface->name = name;
++}
++
+ static type_t *replace_type_parameters_in_type(type_t *type, type_list_t *orig, type_list_t *repl);
+ 
+ static type_list_t *replace_type_parameters_in_type_list(type_list_t *type_list, type_list_t *orig, type_list_t *repl)
+@@ -635,6 +642,7 @@ static type_t *replace_type_parameters_in_type(type_t *type, type_list_t *orig,
+     case TYPE_BITFIELD:
+     case TYPE_INTERFACE:
+     case TYPE_RUNTIMECLASS:
++    case TYPE_DELEGATE:
+         return type;
+     case TYPE_PARAMETER:
+         for (o = orig, r = repl; o && r; o = o->next, r = r->next)
+@@ -778,6 +786,27 @@ void type_interface_define(type_t *iface, type_t *inherit, statement_list_t *stm
+     compute_method_indexes(iface);
+ }
+ 
++void type_delegate_define(type_t *delegate, statement_list_t *stmts)
++{
++    type_t *iface = make_type(TYPE_INTERFACE);
++
++    iface->namespace = delegate->namespace;
++    iface->details.iface = xmalloc(sizeof(*iface->details.iface));
++    iface->details.iface->disp_props = NULL;
++    iface->details.iface->disp_methods = NULL;
++    iface->details.iface->stmts = stmts;
++    iface->details.iface->inherit = find_type("IUnknown", NULL, 0);
++    if (!iface->details.iface->inherit) error_loc("IUnknown is undefined\n");
++    iface->details.iface->disp_inherit = NULL;
++    iface->details.iface->async_iface = NULL;
++    iface->details.iface->requires = NULL;
++    iface->defined = TRUE;
++    compute_method_indexes(iface);
++
++    delegate->details.delegate.iface = iface;
++    compute_delegate_iface_name(delegate);
++}
++
+ void type_dispinterface_define(type_t *iface, var_list_t *props, var_list_t *methods)
+ {
+     iface->details.iface = xmalloc(sizeof(*iface->details.iface));
+diff --git a/tools/widl/typetree.h b/tools/widl/typetree.h
+index e1a52d21d09..de3db4e7c7e 100644
+--- a/tools/widl/typetree.h
++++ b/tools/widl/typetree.h
+@@ -52,6 +52,7 @@ type_t *find_parameterized_type(type_t *type, type_list_t *params, int t);
+ void type_parameterized_interface_declare(type_t *type, type_list_t *params);
+ void type_parameterized_interface_define(type_t *type, type_list_t *params, type_t *inherit, statement_list_t *stmts);
+ void type_interface_define(type_t *iface, type_t *inherit, statement_list_t *stmts, type_list_t *requires);
++void type_delegate_define(type_t *iface, statement_list_t *stmts);
+ void type_dispinterface_define(type_t *iface, var_list_t *props, var_list_t *methods);
+ void type_dispinterface_define_from_iface(type_t *dispiface, type_t *iface);
+ void type_module_define(type_t *module, statement_list_t *stmts);
+@@ -238,6 +239,7 @@ static inline int type_is_complete(const type_t *type)
+     case TYPE_ARRAY:
+     case TYPE_BITFIELD:
+     case TYPE_RUNTIMECLASS:
++    case TYPE_DELEGATE:
+         return TRUE;
+     case TYPE_APICONTRACT:
+     case TYPE_PARAMETERIZED_TYPE:
+@@ -361,6 +363,13 @@ static inline type_t *type_runtimeclass_get_default_iface(const type_t *type)
+     return NULL;
+ }
+ 
++static inline type_t *type_delegate_get_iface(const type_t *type)
++{
++    type = type_get_real_type(type);
++    assert(type_get_type(type) == TYPE_DELEGATE);
++    return type->details.delegate.iface;
++}
++
+ static inline const decl_spec_t *type_pointer_get_ref(const type_t *type)
+ {
+     type = type_get_real_type(type);
+diff --git a/tools/widl/widltypes.h b/tools/widl/widltypes.h
+index 9863c4f72ff..3938d0d5294 100644
+--- a/tools/widl/widltypes.h
++++ b/tools/widl/widltypes.h
+@@ -435,6 +435,11 @@ struct parameterized_details
+     type_list_t *params;
+ };
+ 
++struct delegate_details
++{
++    type_t *iface;
++};
++
+ #define HASHMAX 64
+ 
+ struct namespace {
+@@ -465,6 +470,7 @@ enum type_type
+     TYPE_RUNTIMECLASS,
+     TYPE_PARAMETERIZED_TYPE,
+     TYPE_PARAMETER,
++    TYPE_DELEGATE,
+ };
+ 
+ struct _type_t {
+@@ -487,6 +493,7 @@ struct _type_t {
+     struct alias_details alias;
+     struct runtimeclass_details runtimeclass;
+     struct parameterized_details parameterized;
++    struct delegate_details delegate;
+   } details;
+   const char *c_name;
+   unsigned int typestring_offset;
+-- 
+2.28.0
+

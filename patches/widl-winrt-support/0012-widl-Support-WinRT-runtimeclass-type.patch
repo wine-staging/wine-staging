@@ -1,0 +1,742 @@
+From ef00d7d2e0178d9f3ad3405613c6c4a1ddd3c2b1 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Tue, 13 Oct 2020 15:57:04 +0200
+Subject: [PATCH 12/28] widl: Support WinRT runtimeclass type.
+
+MIDL doesn't generate anything special in the header files for these
+types. They can however be used instead of interfaces as function
+arguments or type parameters, but pointer to their default interface
+type is instead used in the generated code.
+---
+ include/windows.media.speechsynthesis.idl |  25 ++
+ tools/widl/expr.c                         |   1 +
+ tools/widl/header.c                       |  65 +++++-
+ tools/widl/parser.l                       |   1 +
+ tools/widl/parser.y                       | 265 +++++++++++++---------
+ tools/widl/typegen.c                      |   4 +
+ tools/widl/typelib.c                      |   1 +
+ tools/widl/typetree.c                     |  17 ++
+ tools/widl/typetree.h                     |  24 ++
+ tools/widl/widltypes.h                    |   7 +
+ 10 files changed, 298 insertions(+), 112 deletions(-)
+
+diff --git a/include/windows.media.speechsynthesis.idl b/include/windows.media.speechsynthesis.idl
+index 7a1de5fcba6..90bc9f279c6 100644
+--- a/include/windows.media.speechsynthesis.idl
++++ b/include/windows.media.speechsynthesis.idl
+@@ -29,6 +29,8 @@ namespace Windows {
+             typedef enum VoiceGender VoiceGender;
+             interface IInstalledVoicesStatic;
+             interface IVoiceInformation;
++            runtimeclass VoiceInformation;
++            runtimeclass SpeechSynthesizer;
+         }
+     }
+ }
+@@ -42,6 +44,29 @@ namespace Windows {
+                 Male   = 0,
+                 Female = 1
+             };
++
++            [
++                contract(Windows.Foundation.UniversalApiContract, 1.0),
++                exclusiveto(Windows.Media.SpeechSynthesis.VoiceInformation),
++                uuid(b127d6a4-1291-4604-aa9c-83134083352c)
++            ]
++            interface IVoiceInformation : IInspectable
++            {
++                [propget] HRESULT DisplayName([out] [retval] HSTRING* value);
++                [propget] HRESULT Id([out] [retval] HSTRING* value);
++                [propget] HRESULT Language([out] [retval] HSTRING* value);
++                [propget] HRESULT Description([out] [retval] HSTRING* value);
++                [propget] HRESULT Gender([out] [retval] VoiceGender* value);
++            }
++
++            [
++                contract(Windows.Foundation.UniversalApiContract, 1.0),
++                marshaling_behavior(agile)
++            ]
++            runtimeclass VoiceInformation
++            {
++                [default] interface IVoiceInformation;
++            }
+         }
+     }
+ }
+diff --git a/tools/widl/expr.c b/tools/widl/expr.c
+index be8311cfb7f..13bd5a889aa 100644
+--- a/tools/widl/expr.c
++++ b/tools/widl/expr.c
+@@ -463,6 +463,7 @@ static type_t *find_identifier(const char *identifier, const type_t *cont_type,
+         case TYPE_ARRAY:
+         case TYPE_BITFIELD:
+         case TYPE_APICONTRACT:
++        case TYPE_RUNTIMECLASS:
+             /* nothing to do */
+             break;
+         case TYPE_ALIAS:
+diff --git a/tools/widl/header.c b/tools/widl/header.c
+index 8aed9be3f57..065a82ea384 100644
+--- a/tools/widl/header.c
++++ b/tools/widl/header.c
+@@ -465,6 +465,9 @@ void write_type_left(FILE *h, const decl_spec_t *ds, enum name_type name_type, i
+       case TYPE_COCLASS:
+         fprintf(h, "%s", name);
+         break;
++      case TYPE_RUNTIMECLASS:
++        fprintf(h, "%s", type_get_name(type_runtimeclass_get_default_iface(t), name_type));
++        break;
+       case TYPE_VOID:
+         fprintf(h, "void");
+         break;
+@@ -547,6 +550,7 @@ void write_type_right(FILE *h, type_t *t, int is_field)
+   case TYPE_MODULE:
+   case TYPE_COCLASS:
+   case TYPE_INTERFACE:
++  case TYPE_RUNTIMECLASS:
+     break;
+   case TYPE_APICONTRACT:
+     /* not supposed to be here */
+@@ -1033,7 +1037,8 @@ static int is_aggregate_return(const var_t *func)
+ {
+   enum type_type type = type_get_type(type_function_get_rettype(func->declspec.type));
+   return type == TYPE_STRUCT || type == TYPE_UNION ||
+-         type == TYPE_COCLASS || type == TYPE_INTERFACE;
++         type == TYPE_COCLASS || type == TYPE_INTERFACE ||
++         type == TYPE_RUNTIMECLASS;
+ }
+ 
+ static char *get_vtbl_entry_name(const type_t *iface, const var_t *func)
+@@ -1501,6 +1506,21 @@ static void write_winrt_type_comments(FILE *header, const type_t *type)
+         fprintf(header, " * Interface is a part of the implementation of type %s\n *\n", name);
+         free(name);
+     }
++    if (type_get_type(type) == TYPE_RUNTIMECLASS)
++    {
++        ifref_list_t *ifaces = type_runtimeclass_get_ifaces(type);
++        ifref_t *entry;
++        fprintf(header, " * Class implements the following interfaces:\n");
++        LIST_FOR_EACH_ENTRY(entry, ifaces, ifref_t, entry)
++        {
++            char *name = format_namespace(entry->iface->namespace, "", ".", entry->iface->name, NULL);
++            fprintf(header, " *    %s", name);
++            if (is_attr(entry->attrs, ATTR_DEFAULT)) fprintf(header, " ** Default Interface **");
++            fprintf(header, "\n");
++            free(name);
++        }
++        fprintf(header, " *\n");
++    }
+     switch (get_attrv(type->attrs, ATTR_THREADING))
+     {
+         case THREADING_SINGLE: fprintf(header, " * Class Threading Model:  Single Threaded Apartment\n *\n"); break;
+@@ -1728,6 +1748,45 @@ static void write_apicontract(FILE *header, type_t *apicontract)
+     free(name);
+ }
+ 
++static void write_runtimeclass(FILE *header, type_t *runtimeclass)
++{
++    expr_t *contract = get_attrp(runtimeclass->attrs, ATTR_CONTRACT);
++    size_t i, len;
++    char *name, *c_name;
++    name = format_namespace(runtimeclass->namespace, "", ".", runtimeclass->name, NULL);
++    c_name = format_namespace(runtimeclass->namespace, "", "_", runtimeclass->name, NULL);
++    fprintf(header, "/*\n");
++    fprintf(header, " * Class %s\n", name);
++    write_winrt_type_comments(header, runtimeclass);
++    fprintf(header, " */\n");
++    if (contract) write_apicontract_guard_start(header, contract);
++    fprintf(header, "#ifndef RUNTIMECLASS_%s_DEFINED\n", c_name);
++    fprintf(header, "#define RUNTIMECLASS_%s_DEFINED\n", c_name);
++    /* MIDL generates extern const here */
++    fprintf(header, "static const DECLSPEC_SELECTANY WCHAR RuntimeClass_%s[] = {", c_name);
++    for (i = 0, len = strlen(name); i < len; ++i) fprintf(header, "'%c',", name[i]);
++    fprintf(header, "0};\n");
++    fprintf(header, "#endif /* RUNTIMECLASS_%s_DEFINED */\n", c_name);
++    free(c_name);
++    free(name);
++    if (contract) write_apicontract_guard_end(header, contract);
++    fprintf(header, "\n");
++}
++
++static void write_runtimeclass_forward(FILE *header, type_t *runtimeclass)
++{
++    fprintf(header, "#ifndef __%s_FWD_DEFINED__\n", runtimeclass->c_name);
++    fprintf(header, "#define __%s_FWD_DEFINED__\n", runtimeclass->c_name);
++    fprintf(header, "#ifdef __cplusplus\n");
++    write_namespace_start(header, runtimeclass->namespace);
++    write_line(header, 0, "class %s;", runtimeclass->name);
++    write_namespace_end(header, runtimeclass->namespace);
++    fprintf(header, "#else\n");
++    fprintf(header, "typedef struct %s %s;\n", runtimeclass->c_name, runtimeclass->c_name);
++    fprintf(header, "#endif /* defined __cplusplus */\n");
++    fprintf(header, "#endif /* defined __%s_FWD_DEFINED__ */\n\n", runtimeclass->c_name);
++}
++
+ static void write_import(FILE *header, const char *fname)
+ {
+   char *hname, *p;
+@@ -1792,6 +1851,8 @@ static void write_forward_decls(FILE *header, const statement_list_t *stmts)
+         }
+         else if (type_get_type(stmt->u.type) == TYPE_COCLASS)
+           write_coclass_forward(header, stmt->u.type);
++        else if (type_get_type(stmt->u.type) == TYPE_RUNTIMECLASS)
++          write_runtimeclass_forward(header, stmt->u.type);
+         break;
+       case STMT_TYPEREF:
+       case STMT_IMPORTLIB:
+@@ -1848,6 +1909,8 @@ static void write_header_stmts(FILE *header, const statement_list_t *stmts, cons
+           write_coclass(header, stmt->u.type);
+         else if (type_get_type(stmt->u.type) == TYPE_APICONTRACT)
+           write_apicontract(header, stmt->u.type);
++        else if (type_get_type(stmt->u.type) == TYPE_RUNTIMECLASS)
++          write_runtimeclass(header, stmt->u.type);
+         else
+         {
+           write_type_definition(header, stmt->u.type, stmt->declonly);
+diff --git a/tools/widl/parser.l b/tools/widl/parser.l
+index 498071a1992..31b97951b31 100644
+--- a/tools/widl/parser.l
++++ b/tools/widl/parser.l
+@@ -298,6 +298,7 @@ static const struct keyword keywords[] = {
+ 	{"pascal",          tPASCAL,         0},
+ 	{"properties",      tPROPERTIES,     0},
+ 	{"register",        tREGISTER,       0},
++	{"runtimeclass",    tRUNTIMECLASS,   1},
+ 	{"short",           tSHORT,          0},
+ 	{"signed",          tSIGNED,         0},
+ 	{"sizeof",          tSIZEOF,         0},
+diff --git a/tools/widl/parser.y b/tools/widl/parser.y
+index 88cc029c3ae..8b88e031fb5 100644
+--- a/tools/widl/parser.y
++++ b/tools/widl/parser.y
+@@ -99,6 +99,7 @@ static attr_list_t *check_library_attrs(const char *name, attr_list_t *attrs);
+ static attr_list_t *check_dispiface_attrs(const char *name, attr_list_t *attrs);
+ static attr_list_t *check_module_attrs(const char *name, attr_list_t *attrs);
+ static attr_list_t *check_coclass_attrs(const char *name, attr_list_t *attrs);
++static attr_list_t *check_runtimeclass_attrs(const char *name, attr_list_t *attrs);
+ static attr_list_t *check_apicontract_attrs(const char *name, attr_list_t *attrs);
+ const char *get_attr_display_name(enum attr_type type);
+ static void add_explicit_handle_if_necessary(const type_t *iface, var_t *func);
+@@ -245,6 +246,7 @@ static typelib_t *current_typelib;
+ %token tREQUESTEDIT
+ %token tRESTRICTED
+ %token tRETVAL
++%token tRUNTIMECLASS
+ %token tSAFEARRAY
+ %token tSHORT
+ %token tSIGNED
+@@ -290,8 +292,8 @@ static typelib_t *current_typelib;
+ %type <type> base_type int_std
+ %type <type> enumdef structdef uniondef typedecl
+ %type <type> type qualified_seq qualified_type
+-%type <ifref> coclass_int
+-%type <ifref_list> coclass_ints
++%type <ifref> class_interface
++%type <ifref_list> class_interfaces
+ %type <var> arg ne_union_field union_field s_field case enum enum_member declaration
+ %type <var> funcdef
+ %type <var_list> m_args arg_list args dispint_meths
+@@ -302,6 +304,7 @@ static typelib_t *current_typelib;
+ %type <declarator> m_abstract_declarator abstract_declarator abstract_declarator_no_direct abstract_direct_declarator
+ %type <declarator_list> declarator_list struct_declarator_list
+ %type <type> coclass coclasshdr coclassdef
++%type <type> runtimeclass runtimeclass_hdr runtimeclass_def
+ %type <type> apicontract
+ %type <num> contract_ver
+ %type <num> pointer_type threading_type marshaling_behavior version
+@@ -361,6 +364,9 @@ gbl_statements:					{ $$ = NULL; }
+ 						}
+ 	| gbl_statements apicontract ';'        { $$ = append_statement($1, make_statement_type_decl($2));
+ 	                                          reg_type($2, $2->name, current_namespace, 0); }
++	| gbl_statements runtimeclass ';'       { $$ = $1; reg_type($2, $2->name, current_namespace, 0); }
++	| gbl_statements runtimeclass_def       { $$ = append_statement($1, make_statement_type_decl($2));
++	                                          reg_type($2, $2->name, current_namespace, 0); }
+ 	| gbl_statements moduledef		{ $$ = append_statement($1, make_statement_module($2)); }
+ 	| gbl_statements librarydef		{ $$ = append_statement($1, make_statement_library($2)); }
+ 	| gbl_statements statement		{ $$ = append_statement($1, $2); }
+@@ -377,6 +383,9 @@ imp_statements:					{ $$ = NULL; }
+ 						}
+ 	| imp_statements apicontract ';'        { $$ = append_statement($1, make_statement_type_decl($2));
+ 	                                          reg_type($2, $2->name, current_namespace, 0); }
++	| imp_statements runtimeclass ';'       { $$ = $1; reg_type($2, $2->name, current_namespace, 0); }
++	| imp_statements runtimeclass_def       { $$ = append_statement($1, make_statement_type_decl($2));
++	                                          reg_type($2, $2->name, current_namespace, 0); }
+ 	| imp_statements moduledef		{ $$ = append_statement($1, make_statement_module($2)); }
+ 	| imp_statements statement		{ $$ = append_statement($1, $2); }
+ 	| imp_statements importlib		{ $$ = append_statement($1, make_statement_importlib($2)); }
+@@ -558,7 +567,9 @@ attribute:					{ $$ = NULL; }
+ 	| tENCODE				{ $$ = make_attr(ATTR_ENCODE); }
+ 	| tENDPOINT '(' str_list ')'		{ $$ = make_attrp(ATTR_ENDPOINT, $3); }
+ 	| tENTRY '(' expr_const ')'		{ $$ = make_attrp(ATTR_ENTRY, $3); }
+-	| tEXCLUSIVETO '(' decl_spec ')'	{ $$ = make_attrp(ATTR_EXCLUSIVETO, $3->type); }
++	| tEXCLUSIVETO '(' decl_spec ')'	{ if ($3->type->type_type != TYPE_RUNTIMECLASS)
++						      error_loc("type %s is not a runtimeclass\n", $3->type->name);
++						  $$ = make_attrp(ATTR_EXCLUSIVETO, $3->type); }
+ 	| tEXPLICITHANDLE			{ $$ = make_attr(ATTR_EXPLICIT_HANDLE); }
+ 	| tFAULTSTATUS				{ $$ = make_attr(ATTR_FAULTSTATUS); }
+ 	| tFORCEALLOCATE			{ $$ = make_attr(ATTR_FORCEALLOCATE); }
+@@ -893,10 +904,29 @@ coclasshdr: attributes coclass			{ $$ = $2;
+ 						}
+ 	;
+ 
+-coclassdef: coclasshdr '{' coclass_ints '}' semicolon_opt
++coclassdef: coclasshdr '{' class_interfaces '}' semicolon_opt
+ 						{ $$ = type_coclass_define($1, $3); }
+ 	;
+ 
++runtimeclass:
++	  tRUNTIMECLASS aIDENTIFIER		{ $$ = type_new_runtimeclass($2, current_namespace); }
++	| tRUNTIMECLASS aKNOWNTYPE		{ $$ = find_type($2, NULL, 0);
++						  if (type_get_type_detect_alias($$) != TYPE_RUNTIMECLASS)
++						    error_loc("%s was not declared a runtimeclass at %s:%d\n", $2,
++						              $$->loc_info.input_name, $$->loc_info.line_number);
++						}
++	;
++
++runtimeclass_hdr: attributes runtimeclass	{ $$ = $2;
++						  check_def($$);
++						  $$->attrs = check_runtimeclass_attrs($2->name, $1);
++						}
++	;
++
++runtimeclass_def: runtimeclass_hdr '{' class_interfaces '}' semicolon_opt
++						{ $$ = type_runtimeclass_define($1, $3); }
++	;
++
+ apicontract: attributes tAPICONTRACT aIDENTIFIER '{' '}'
+ 						{ $$ = get_type(TYPE_APICONTRACT, $3, current_namespace, 0);
+ 						  check_def($$);
+@@ -908,11 +938,11 @@ namespacedef: tNAMESPACE aIDENTIFIER		{ $$ = $2; }
+ 	| tNAMESPACE aNAMESPACE                 { $$ = $2; }
+ 	;
+ 
+-coclass_ints:					{ $$ = NULL; }
+-	| coclass_ints coclass_int		{ $$ = append_ifref( $1, $2 ); }
++class_interfaces:				{ $$ = NULL; }
++	| class_interfaces class_interface	{ $$ = append_ifref( $1, $2 ); }
+ 	;
+ 
+-coclass_int:
++class_interface:
+ 	  m_attributes interfacedec		{ $$ = make_ifref($2); $$->attrs = $1; }
+ 	;
+ 
+@@ -2166,115 +2196,116 @@ struct allowed_attr
+     unsigned int on_module : 1;
+     unsigned int on_coclass : 1;
+     unsigned int on_apicontract : 1;
++    unsigned int on_runtimeclass : 1;
+     const char *display_name;
+ };
+ 
+ struct allowed_attr allowed_attr[] =
+ {
+-    /* attr                        { D ACF I Fn ARG T En Enm St Un Fi L  DI M  C AC  <display name> } */
+-    /* ATTR_AGGREGATABLE */        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, "aggregatable" },
+-    /* ATTR_ANNOTATION */          { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "annotation" },
+-    /* ATTR_APPOBJECT */           { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, "appobject" },
+-    /* ATTR_ASYNC */               { 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "async" },
+-    /* ATTR_ASYNCUUID */           { 1, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, "async_uuid" },
+-    /* ATTR_AUTO_HANDLE */         { 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "auto_handle" },
+-    /* ATTR_BINDABLE */            { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "bindable" },
+-    /* ATTR_BROADCAST */           { 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "broadcast" },
+-    /* ATTR_CALLAS */              { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "call_as" },
+-    /* ATTR_CALLCONV */            { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL },
+-    /* ATTR_CASE */                { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, "case" },
+-    /* ATTR_CODE */                { 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "code" },
+-    /* ATTR_COMMSTATUS */          { 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "comm_status" },
+-    /* ATTR_CONTEXTHANDLE */       { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "context_handle" },
+-    /* ATTR_CONTRACT */            { 0, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, "contract" },
+-    /* ATTR_CONTRACTVERSION */     { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, "contractversion" },
+-    /* ATTR_CONTROL */             { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, "control" },
+-    /* ATTR_DECODE */              { 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "decode" },
+-    /* ATTR_DEFAULT */             { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, "default" },
+-    /* ATTR_DEFAULTBIND */         { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "defaultbind" },
+-    /* ATTR_DEFAULTCOLLELEM */     { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "defaultcollelem" },
+-    /* ATTR_DEFAULTVALUE */        { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "defaultvalue" },
+-    /* ATTR_DEFAULTVTABLE */       { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, "defaultvtable" },
+- /* ATTR_DISABLECONSISTENCYCHECK */{ 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "disable_consistency_check" },
+-    /* ATTR_DISPINTERFACE */       { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL },
+-    /* ATTR_DISPLAYBIND */         { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "displaybind" },
+-    /* ATTR_DLLNAME */             { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, "dllname" },
+-    /* ATTR_DUAL */                { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "dual" },
+-    /* ATTR_ENABLEALLOCATE */      { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "enable_allocate" },
+-    /* ATTR_ENCODE */              { 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "encode" },
+-    /* ATTR_ENDPOINT */            { 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "endpoint" },
+-    /* ATTR_ENTRY */               { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "entry" },
+-    /* ATTR_EXCLUSIVETO */         { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "exclusive_to" },
+-    /* ATTR_EXPLICIT_HANDLE */     { 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "explicit_handle" },
+-    /* ATTR_FAULTSTATUS */         { 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "fault_status" },
+-    /* ATTR_FORCEALLOCATE */       { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "force_allocate" },
+-    /* ATTR_HANDLE */              { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "handle" },
+-    /* ATTR_HELPCONTEXT */         { 0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, "helpcontext" },
+-    /* ATTR_HELPFILE */            { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, "helpfile" },
+-    /* ATTR_HELPSTRING */          { 0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, "helpstring" },
+-    /* ATTR_HELPSTRINGCONTEXT */   { 0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, "helpstringcontext" },
+-    /* ATTR_HELPSTRINGDLL */       { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, "helpstringdll" },
+-    /* ATTR_HIDDEN */              { 0, 0, 1, 1, 0, 1, 1, 1, 0, 0, 0, 1, 1, 0, 1, 0, "hidden" },
+-    /* ATTR_ID */                  { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, "id" },
+-    /* ATTR_IDEMPOTENT */          { 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "idempotent" },
+-    /* ATTR_IGNORE */              { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, "ignore" },
+-    /* ATTR_IIDIS */               { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, "iid_is" },
+-    /* ATTR_IMMEDIATEBIND */       { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "immediatebind" },
+-    /* ATTR_IMPLICIT_HANDLE */     { 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "implicit_handle" },
+-    /* ATTR_IN */                  { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "in" },
+-    /* ATTR_INPUTSYNC */           { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "inputsync" },
+-    /* ATTR_LENGTHIS */            { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, "length_is" },
+-    /* ATTR_LIBLCID */             { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, "lcid" },
+-    /* ATTR_LICENSED */            { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, "licensed" },
+-    /* ATTR_LOCAL */               { 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "local" },
+-    /* ATTR_MARSHALING_BEHAVIOR */ { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "marshaling_behavior" },
+-    /* ATTR_MAYBE */               { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "maybe" },
+-    /* ATTR_MESSAGE */             { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "message" },
+-    /* ATTR_NOCODE */              { 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "nocode" },
+-    /* ATTR_NONBROWSABLE */        { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "nonbrowsable" },
+-    /* ATTR_NONCREATABLE */        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, "noncreatable" },
+-    /* ATTR_NONEXTENSIBLE */       { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "nonextensible" },
+-    /* ATTR_NOTIFY */              { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "notify" },
+-    /* ATTR_NOTIFYFLAG */          { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "notify_flag" },
+-    /* ATTR_OBJECT */              { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "object" },
+-    /* ATTR_ODL */                 { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, "odl" },
+-    /* ATTR_OLEAUTOMATION */       { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "oleautomation" },
+-    /* ATTR_OPTIMIZE */            { 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "optimize" },
+-    /* ATTR_OPTIONAL */            { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "optional" },
+-    /* ATTR_OUT */                 { 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "out" },
+-    /* ATTR_PARAMLCID */           { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "lcid" },
+-    /* ATTR_PARTIALIGNORE */       { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "partial_ignore" },
+-    /* ATTR_POINTERDEFAULT */      { 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "pointer_default" },
+-    /* ATTR_POINTERTYPE */         { 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, "ref, unique or ptr" },
+-    /* ATTR_PROGID */              { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, "progid" },
+-    /* ATTR_PROPGET */             { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "propget" },
+-    /* ATTR_PROPPUT */             { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "propput" },
+-    /* ATTR_PROPPUTREF */          { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "propputref" },
+-    /* ATTR_PROXY */               { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "proxy" },
+-    /* ATTR_PUBLIC */              { 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "public" },
+-    /* ATTR_RANGE */               { 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, "range" },
+-    /* ATTR_READONLY */            { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, "readonly" },
+-    /* ATTR_REPRESENTAS */         { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "represent_as" },
+-    /* ATTR_REQUESTEDIT */         { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "requestedit" },
+-    /* ATTR_RESTRICTED */          { 0, 0, 1, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 1, 0, "restricted" },
+-    /* ATTR_RETVAL */              { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "retval" },
+-    /* ATTR_SIZEIS */              { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, "size_is" },
+-    /* ATTR_SOURCE */              { 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, "source" },
+-    /* ATTR_STRICTCONTEXTHANDLE */ { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "strict_context_handle" },
+-    /* ATTR_STRING */              { 1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, "string" },
+-    /* ATTR_SWITCHIS */            { 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, "switch_is" },
+-    /* ATTR_SWITCHTYPE */          { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, "switch_type" },
+-    /* ATTR_THREADING */           { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, "threading" },
+-    /* ATTR_TRANSMITAS */          { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "transmit_as" },
+-    /* ATTR_UIDEFAULT */           { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "uidefault" },
+-    /* ATTR_USESGETLASTERROR */    { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "usesgetlasterror" },
+-    /* ATTR_USERMARSHAL */         { 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "user_marshal" },
+-    /* ATTR_UUID */                { 1, 0, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 1, 0, "uuid" },
+-    /* ATTR_V1ENUM */              { 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, "v1_enum" },
+-    /* ATTR_VARARG */              { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "vararg" },
+-    /* ATTR_VERSION */             { 1, 0, 1, 0, 0, 1, 1, 0, 2, 0, 0, 1, 0, 0, 1, 0, "version" },
+-    /* ATTR_VIPROGID */            { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, "vi_progid" },
+-    /* ATTR_WIREMARSHAL */         { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "wire_marshal" },
++    /* attr                        { D ACF I Fn ARG T En Enm St Un Fi L  DI M  C AC  R  <display name> } */
++    /* ATTR_AGGREGATABLE */        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, "aggregatable" },
++    /* ATTR_ANNOTATION */          { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "annotation" },
++    /* ATTR_APPOBJECT */           { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, "appobject" },
++    /* ATTR_ASYNC */               { 0, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "async" },
++    /* ATTR_ASYNCUUID */           { 1, 0, 1, 0, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, "async_uuid" },
++    /* ATTR_AUTO_HANDLE */         { 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "auto_handle" },
++    /* ATTR_BINDABLE */            { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "bindable" },
++    /* ATTR_BROADCAST */           { 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "broadcast" },
++    /* ATTR_CALLAS */              { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "call_as" },
++    /* ATTR_CALLCONV */            { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL },
++    /* ATTR_CASE */                { 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, "case" },
++    /* ATTR_CODE */                { 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "code" },
++    /* ATTR_COMMSTATUS */          { 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "comm_status" },
++    /* ATTR_CONTEXTHANDLE */       { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "context_handle" },
++    /* ATTR_CONTRACT */            { 0, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 1, "contract" },
++    /* ATTR_CONTRACTVERSION */     { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, "contractversion" },
++    /* ATTR_CONTROL */             { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, "control" },
++    /* ATTR_DECODE */              { 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "decode" },
++    /* ATTR_DEFAULT */             { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, 0, 0, 0, 0, "default" },
++    /* ATTR_DEFAULTBIND */         { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "defaultbind" },
++    /* ATTR_DEFAULTCOLLELEM */     { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "defaultcollelem" },
++    /* ATTR_DEFAULTVALUE */        { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "defaultvalue" },
++    /* ATTR_DEFAULTVTABLE */       { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, "defaultvtable" },
++ /* ATTR_DISABLECONSISTENCYCHECK */{ 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "disable_consistency_check" },
++    /* ATTR_DISPINTERFACE */       { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL },
++    /* ATTR_DISPLAYBIND */         { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "displaybind" },
++    /* ATTR_DLLNAME */             { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, "dllname" },
++    /* ATTR_DUAL */                { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "dual" },
++    /* ATTR_ENABLEALLOCATE */      { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "enable_allocate" },
++    /* ATTR_ENCODE */              { 0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "encode" },
++    /* ATTR_ENDPOINT */            { 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "endpoint" },
++    /* ATTR_ENTRY */               { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "entry" },
++    /* ATTR_EXCLUSIVETO */         { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "exclusive_to" },
++    /* ATTR_EXPLICIT_HANDLE */     { 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "explicit_handle" },
++    /* ATTR_FAULTSTATUS */         { 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "fault_status" },
++    /* ATTR_FORCEALLOCATE */       { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "force_allocate" },
++    /* ATTR_HANDLE */              { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "handle" },
++    /* ATTR_HELPCONTEXT */         { 0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, "helpcontext" },
++    /* ATTR_HELPFILE */            { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, "helpfile" },
++    /* ATTR_HELPSTRING */          { 0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, "helpstring" },
++    /* ATTR_HELPSTRINGCONTEXT */   { 0, 0, 1, 1, 0, 1, 1, 0, 0, 0, 0, 1, 1, 1, 1, 0, 0, "helpstringcontext" },
++    /* ATTR_HELPSTRINGDLL */       { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, "helpstringdll" },
++    /* ATTR_HIDDEN */              { 0, 0, 1, 1, 0, 1, 1, 1, 0, 0, 0, 1, 1, 0, 1, 0, 0, "hidden" },
++    /* ATTR_ID */                  { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, "id" },
++    /* ATTR_IDEMPOTENT */          { 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "idempotent" },
++    /* ATTR_IGNORE */              { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, "ignore" },
++    /* ATTR_IIDIS */               { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, "iid_is" },
++    /* ATTR_IMMEDIATEBIND */       { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "immediatebind" },
++    /* ATTR_IMPLICIT_HANDLE */     { 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "implicit_handle" },
++    /* ATTR_IN */                  { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "in" },
++    /* ATTR_INPUTSYNC */           { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "inputsync" },
++    /* ATTR_LENGTHIS */            { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, "length_is" },
++    /* ATTR_LIBLCID */             { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, "lcid" },
++    /* ATTR_LICENSED */            { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, "licensed" },
++    /* ATTR_LOCAL */               { 1, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "local" },
++    /* ATTR_MARSHALING_BEHAVIOR */ { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, "marshaling_behavior" },
++    /* ATTR_MAYBE */               { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "maybe" },
++    /* ATTR_MESSAGE */             { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "message" },
++    /* ATTR_NOCODE */              { 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "nocode" },
++    /* ATTR_NONBROWSABLE */        { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "nonbrowsable" },
++    /* ATTR_NONCREATABLE */        { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, "noncreatable" },
++    /* ATTR_NONEXTENSIBLE */       { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "nonextensible" },
++    /* ATTR_NOTIFY */              { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "notify" },
++    /* ATTR_NOTIFYFLAG */          { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "notify_flag" },
++    /* ATTR_OBJECT */              { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "object" },
++    /* ATTR_ODL */                 { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, "odl" },
++    /* ATTR_OLEAUTOMATION */       { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "oleautomation" },
++    /* ATTR_OPTIMIZE */            { 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "optimize" },
++    /* ATTR_OPTIONAL */            { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "optional" },
++    /* ATTR_OUT */                 { 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "out" },
++    /* ATTR_PARAMLCID */           { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "lcid" },
++    /* ATTR_PARTIALIGNORE */       { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "partial_ignore" },
++    /* ATTR_POINTERDEFAULT */      { 1, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "pointer_default" },
++    /* ATTR_POINTERTYPE */         { 1, 0, 0, 0, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, "ref, unique or ptr" },
++    /* ATTR_PROGID */              { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, "progid" },
++    /* ATTR_PROPGET */             { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "propget" },
++    /* ATTR_PROPPUT */             { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "propput" },
++    /* ATTR_PROPPUTREF */          { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "propputref" },
++    /* ATTR_PROXY */               { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "proxy" },
++    /* ATTR_PUBLIC */              { 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "public" },
++    /* ATTR_RANGE */               { 0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, "range" },
++    /* ATTR_READONLY */            { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, "readonly" },
++    /* ATTR_REPRESENTAS */         { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "represent_as" },
++    /* ATTR_REQUESTEDIT */         { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "requestedit" },
++    /* ATTR_RESTRICTED */          { 0, 0, 1, 1, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 1, 0, 0, "restricted" },
++    /* ATTR_RETVAL */              { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "retval" },
++    /* ATTR_SIZEIS */              { 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, "size_is" },
++    /* ATTR_SOURCE */              { 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, "source" },
++    /* ATTR_STRICTCONTEXTHANDLE */ { 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "strict_context_handle" },
++    /* ATTR_STRING */              { 1, 0, 0, 1, 1, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, "string" },
++    /* ATTR_SWITCHIS */            { 1, 0, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, "switch_is" },
++    /* ATTR_SWITCHTYPE */          { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, "switch_type" },
++    /* ATTR_THREADING */           { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 1, "threading" },
++    /* ATTR_TRANSMITAS */          { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "transmit_as" },
++    /* ATTR_UIDEFAULT */           { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "uidefault" },
++    /* ATTR_USESGETLASTERROR */    { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "usesgetlasterror" },
++    /* ATTR_USERMARSHAL */         { 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "user_marshal" },
++    /* ATTR_UUID */                { 1, 0, 1, 0, 0, 1, 1, 0, 1, 0, 0, 1, 1, 1, 1, 0, 1, "uuid" },
++    /* ATTR_V1ENUM */              { 0, 0, 0, 0, 0, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "v1_enum" },
++    /* ATTR_VARARG */              { 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "vararg" },
++    /* ATTR_VERSION */             { 1, 0, 1, 0, 0, 1, 1, 0, 2, 0, 0, 1, 0, 0, 1, 0, 1, "version" },
++    /* ATTR_VIPROGID */            { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, "vi_progid" },
++    /* ATTR_WIREMARSHAL */         { 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, "wire_marshal" },
+ };
+ 
+ const char *get_attr_display_name(enum attr_type type)
+@@ -2465,6 +2496,17 @@ static attr_list_t *check_coclass_attrs(const char *name, attr_list_t *attrs)
+   return attrs;
+ }
+ 
++static attr_list_t *check_runtimeclass_attrs(const char *name, attr_list_t *attrs)
++{
++    const attr_t *attr;
++    if (!attrs) return attrs;
++    LIST_FOR_EACH_ENTRY(attr, attrs, const attr_t, entry)
++        if (!allowed_attr[attr->type].on_runtimeclass)
++            error_loc("inapplicable attribute %s for runtimeclass %s\n",
++                      allowed_attr[attr->type].display_name, name);
++    return attrs;
++}
++
+ static attr_list_t *check_apicontract_attrs(const char *name, attr_list_t *attrs)
+ {
+     const attr_t *attr;
+@@ -2514,6 +2556,7 @@ static int is_allowed_conf_type(const type_t *type)
+     case TYPE_FUNCTION:
+     case TYPE_INTERFACE:
+     case TYPE_BITFIELD:
++    case TYPE_RUNTIMECLASS:
+         return FALSE;
+     case TYPE_APICONTRACT:
+         /* not supposed to be here */
+diff --git a/tools/widl/typegen.c b/tools/widl/typegen.c
+index 46aae9b69e9..86c010aa6ae 100644
+--- a/tools/widl/typegen.c
++++ b/tools/widl/typegen.c
+@@ -353,6 +353,7 @@ enum typegen_type typegen_detect_type(const type_t *type, const attr_list_t *att
+         return TGT_ENUM;
+     case TYPE_POINTER:
+         if (type_get_type(type_pointer_get_ref_type(type)) == TYPE_INTERFACE ||
++            type_get_type(type_pointer_get_ref_type(type)) == TYPE_RUNTIMECLASS ||
+             (type_get_type(type_pointer_get_ref_type(type)) == TYPE_VOID && is_attr(attrs, ATTR_IIDIS)))
+             return TGT_IFACE_POINTER;
+         else if (is_aliaschain_attr(type_pointer_get_ref_type(type), ATTR_CONTEXTHANDLE))
+@@ -373,6 +374,7 @@ enum typegen_type typegen_detect_type(const type_t *type, const attr_list_t *att
+     case TYPE_VOID:
+     case TYPE_ALIAS:
+     case TYPE_BITFIELD:
++    case TYPE_RUNTIMECLASS:
+         break;
+     case TYPE_APICONTRACT:
+         /* not supposed to be here */
+@@ -1971,6 +1973,7 @@ unsigned int type_memsize_and_alignment(const type_t *t, unsigned int *align)
+     case TYPE_FUNCTION:
+     case TYPE_BITFIELD:
+     case TYPE_APICONTRACT:
++    case TYPE_RUNTIMECLASS:
+         /* these types should not be encountered here due to language
+          * restrictions (interface, void, coclass, module), logical
+          * restrictions (alias - due to type_get_type call above) or
+@@ -2073,6 +2076,7 @@ static unsigned int type_buffer_alignment(const type_t *t)
+     case TYPE_FUNCTION:
+     case TYPE_BITFIELD:
+     case TYPE_APICONTRACT:
++    case TYPE_RUNTIMECLASS:
+         /* these types should not be encountered here due to language
+          * restrictions (interface, void, coclass, module), logical
+          * restrictions (alias - due to type_get_type call above) or
+diff --git a/tools/widl/typelib.c b/tools/widl/typelib.c
+index faf76440f93..ace6424e3a0 100644
+--- a/tools/widl/typelib.c
++++ b/tools/widl/typelib.c
+@@ -218,6 +218,7 @@ unsigned short get_type_vt(type_t *t)
+   case TYPE_MODULE:
+   case TYPE_UNION:
+   case TYPE_ENCAPSULATED_UNION:
++  case TYPE_RUNTIMECLASS:
+     return VT_USERDEFINED;
+ 
+   case TYPE_VOID:
+diff --git a/tools/widl/typetree.c b/tools/widl/typetree.c
+index d8dcd5d80b0..d075619448d 100644
+--- a/tools/widl/typetree.c
++++ b/tools/widl/typetree.c
+@@ -211,6 +211,16 @@ type_t *type_new_coclass(char *name)
+     return type;
+ }
+ 
++type_t *type_new_runtimeclass(char *name, struct namespace *namespace)
++{
++    type_t *type = get_type(TYPE_RUNTIMECLASS, name, NULL, 0);
++    if (type->type_type != TYPE_RUNTIMECLASS || type->defined)
++        error_loc("%s: redefinition error; original definition was at %s:%d\n",
++                  type->name, type->loc_info.input_name, type->loc_info.line_number);
++    type->name = name;
++    type->namespace = namespace;
++    return type;
++}
+ 
+ type_t *type_new_array(const char *name, const decl_spec_t *element, int declptr,
+                        unsigned int dim, expr_t *size_is, expr_t *length_is)
+@@ -505,6 +515,13 @@ type_t *type_coclass_define(type_t *coclass, ifref_list_t *ifaces)
+     return coclass;
+ }
+ 
++type_t *type_runtimeclass_define(type_t *runtimeclass, ifref_list_t *ifaces)
++{
++    runtimeclass->details.runtimeclass.ifaces = ifaces;
++    runtimeclass->defined = TRUE;
++    return runtimeclass;
++}
++
+ int type_is_equal(const type_t *type1, const type_t *type2)
+ {
+     if (type_get_type_detect_alias(type1) != type_get_type_detect_alias(type2))
+diff --git a/tools/widl/typetree.h b/tools/widl/typetree.h
+index 7abec41a8fd..951084cf875 100644
+--- a/tools/widl/typetree.h
++++ b/tools/widl/typetree.h
+@@ -44,11 +44,13 @@ type_t *type_new_struct(char *name, struct namespace *namespace, int defined, va
+ type_t *type_new_nonencapsulated_union(const char *name, int defined, var_list_t *fields);
+ type_t *type_new_encapsulated_union(char *name, var_t *switch_field, var_t *union_field, var_list_t *cases);
+ type_t *type_new_bitfield(type_t *field_type, const expr_t *bits);
++type_t *type_new_runtimeclass(char *name, struct namespace *namespace);
+ void type_interface_define(type_t *iface, type_t *inherit, statement_list_t *stmts);
+ void type_dispinterface_define(type_t *iface, var_list_t *props, var_list_t *methods);
+ void type_dispinterface_define_from_iface(type_t *dispiface, type_t *iface);
+ void type_module_define(type_t *module, statement_list_t *stmts);
+ type_t *type_coclass_define(type_t *coclass, ifref_list_t *ifaces);
++type_t *type_runtimeclass_define(type_t *runtimeclass, ifref_list_t *ifaces);
+ int type_is_equal(const type_t *type1, const type_t *type2);
+ const char *type_get_name(const type_t *type, enum name_type name_type);
+ char *gen_name(void);
+@@ -222,6 +224,7 @@ static inline int type_is_complete(const type_t *type)
+     case TYPE_POINTER:
+     case TYPE_ARRAY:
+     case TYPE_BITFIELD:
++    case TYPE_RUNTIMECLASS:
+         return TRUE;
+     case TYPE_APICONTRACT:
+         assert(0);
+@@ -322,6 +325,27 @@ static inline ifref_list_t *type_coclass_get_ifaces(const type_t *type)
+     return type->details.coclass.ifaces;
+ }
+ 
++static inline ifref_list_t *type_runtimeclass_get_ifaces(const type_t *type)
++{
++    type = type_get_real_type(type);
++    assert(type_get_type(type) == TYPE_RUNTIMECLASS);
++    return type->details.runtimeclass.ifaces;
++}
++
++static inline type_t *type_runtimeclass_get_default_iface(const type_t *type)
++{
++    ifref_list_t *ifaces = type_runtimeclass_get_ifaces(type);
++    ifref_t *entry;
++    attr_t *attr;
++
++    LIST_FOR_EACH_ENTRY(entry, ifaces, ifref_t, entry)
++        LIST_FOR_EACH_ENTRY(attr, entry->attrs, attr_t, entry)
++            if (attr->type == ATTR_DEFAULT) return entry->iface;
++
++    assert(0);
++    return NULL;
++}
++
+ static inline const decl_spec_t *type_pointer_get_ref(const type_t *type)
+ {
+     type = type_get_real_type(type);
+diff --git a/tools/widl/widltypes.h b/tools/widl/widltypes.h
+index e945cad33b2..0a2088574d3 100644
+--- a/tools/widl/widltypes.h
++++ b/tools/widl/widltypes.h
+@@ -418,6 +418,11 @@ struct alias_details
+     struct _decl_spec_t aliasee;
+ };
+ 
++struct runtimeclass_details
++{
++    ifref_list_t *ifaces;
++};
++
+ #define HASHMAX 64
+ 
+ struct namespace {
+@@ -445,6 +450,7 @@ enum type_type
+     TYPE_ARRAY,
+     TYPE_BITFIELD,
+     TYPE_APICONTRACT,
++    TYPE_RUNTIMECLASS,
+ };
+ 
+ struct _type_t {
+@@ -465,6 +471,7 @@ struct _type_t {
+     struct pointer_details pointer;
+     struct bitfield_details bitfield;
+     struct alias_details alias;
++    struct runtimeclass_details runtimeclass;
+   } details;
+   const char *c_name;
+   unsigned int typestring_offset;
+-- 
+2.28.0
+

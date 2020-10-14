@@ -1,0 +1,253 @@
+From c98f225368cdeac02b7c67b14d1e448f80c645e4 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Fri, 25 Sep 2020 13:39:08 +0200
+Subject: [PATCH 25/28] widl: Compute signatures for parameterized types.
+
+---
+ tools/widl/typetree.c  | 155 +++++++++++++++++++++++++++++++++++++++++
+ tools/widl/typetree.h  |  10 +++
+ tools/widl/widltypes.h |   2 +
+ 3 files changed, 167 insertions(+)
+
+diff --git a/tools/widl/typetree.c b/tools/widl/typetree.c
+index 03778aa75c3..b3718b5dc6d 100644
+--- a/tools/widl/typetree.c
++++ b/tools/widl/typetree.c
+@@ -49,6 +49,7 @@ type_t *make_type(enum type_type type)
+     t->type_type = type;
+     t->attrs = NULL;
+     t->c_name = NULL;
++    t->signature = NULL;
+     memset(&t->details, 0, sizeof(t->details));
+     t->typestring_offset = 0;
+     t->ptrdesc = 0;
+@@ -143,6 +144,142 @@ static int format_parameterized_type_c_name_buffer(char *buf, size_t len, type_t
+     return ret;
+ }
+ 
++static int format_type_signature_buffer(char *buf, size_t len, type_t *type);
++
++static int format_var_list_signature_buffer(char *buf, size_t len, var_list_t *var_list)
++{
++    var_t *var;
++    int ret = 0;
++    if (!var_list) append_buf(snprintf, ";");
++    else LIST_FOR_EACH_ENTRY(var, var_list, var_t, entry)
++    {
++        append_buf(snprintf, ";");
++        append_buf(format_type_signature_buffer, var->declspec.type);
++    }
++    return ret;
++}
++
++static int format_type_signature_buffer(char *buf, size_t len, type_t *type)
++{
++    const GUID *uuid;
++    int ret = 0;
++    if (!type) return 0;
++    switch (type->type_type)
++    {
++    case TYPE_INTERFACE:
++        if (type->signature) append_buf(snprintf, "%s", type->signature);
++        else
++        {
++             uuid = type_get_uuid(type);
++             append_buf(snprintf, "{%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x}",
++                        uuid->Data1, uuid->Data2, uuid->Data3,
++                        uuid->Data4[0], uuid->Data4[1], uuid->Data4[2], uuid->Data4[3],
++                        uuid->Data4[4], uuid->Data4[5], uuid->Data4[6], uuid->Data4[7]);
++        }
++        return ret;
++    case TYPE_DELEGATE:
++        append_buf(snprintf, "delegate(");
++        append_buf(format_type_signature_buffer, type_delegate_get_iface(type));
++        append_buf(snprintf, ")");
++        return ret;
++    case TYPE_RUNTIMECLASS:
++        append_buf(snprintf, "rc(");
++        append_buf(format_namespace_buffer, type->namespace, "", ".", type->name, NULL);
++        append_buf(snprintf, ";");
++        append_buf(format_type_signature_buffer, type_runtimeclass_get_default_iface(type));
++        append_buf(snprintf, ")");
++        return ret;
++    case TYPE_POINTER:
++        return format_type_signature_buffer(buf, len, type->details.pointer.ref.type);
++    case TYPE_ALIAS:
++        if (!strcmp(type->name, "boolean")) append_buf(snprintf, "b1");
++        else ret = format_type_signature_buffer(buf, len, type->details.alias.aliasee.type);
++        return ret;
++    case TYPE_STRUCT:
++        append_buf(snprintf, "struct(");
++        append_buf(format_namespace_buffer, type->namespace, "", ".", type->name, NULL);
++        append_buf(format_var_list_signature_buffer, type->details.structure->fields);
++        append_buf(snprintf, ")");
++        return ret;
++    case TYPE_BASIC:
++        switch (type_basic_get_type(type))
++        {
++        case TYPE_BASIC_INT:
++        case TYPE_BASIC_INT32:
++            append_buf(snprintf, type_basic_get_sign(type) < 0 ? "i4" : "u4");
++            return ret;
++        case TYPE_BASIC_INT64:
++            append_buf(snprintf, type_basic_get_sign(type) < 0 ? "i8" : "u8");
++            return ret;
++        case TYPE_BASIC_INT8:
++            assert(type_basic_get_sign(type) >= 0); /* signature string for signed char isn't specified */
++            append_buf(snprintf, "u1");
++            return ret;
++        case TYPE_BASIC_FLOAT:
++            append_buf(snprintf, "f4");
++            return ret;
++        case TYPE_BASIC_DOUBLE:
++            append_buf(snprintf, "f8");
++            return ret;
++        case TYPE_BASIC_INT16:
++        case TYPE_BASIC_INT3264:
++        case TYPE_BASIC_LONG:
++        case TYPE_BASIC_CHAR:
++        case TYPE_BASIC_HYPER:
++        case TYPE_BASIC_BYTE:
++        case TYPE_BASIC_WCHAR:
++        case TYPE_BASIC_ERROR_STATUS_T:
++        case TYPE_BASIC_HANDLE:
++            error("basic type '%d' signature not implemented\n", type_basic_get_type(type));
++            assert(0); /* FIXME: implement when needed */
++            break;
++        }
++    case TYPE_ENUM:
++        append_buf(snprintf, "enum(");
++        append_buf(format_namespace_buffer, type->namespace, "", ".", type->name, NULL);
++        if (is_attr(type->attrs, ATTR_FLAGS)) append_buf(snprintf, ";u4");
++        else append_buf(snprintf, ";i4");
++        append_buf(snprintf, ")");
++        return ret;
++    case TYPE_ARRAY:
++    case TYPE_ENCAPSULATED_UNION:
++    case TYPE_UNION:
++    case TYPE_COCLASS:
++        error("type '%d' signature for '%s' not implemented\n", type->type_type, type->name);
++        assert(0); /* FIXME: implement when needed */
++        break;
++    case TYPE_VOID:
++    case TYPE_FUNCTION:
++    case TYPE_BITFIELD:
++    case TYPE_MODULE:
++    case TYPE_PARAMETERIZED_TYPE:
++    case TYPE_PARAMETER:
++    case TYPE_APICONTRACT:
++        assert(0); /* should not be there */
++        break;
++    }
++
++    return ret;
++}
++
++static int format_parameterized_type_signature_buffer(char *buf, size_t len, type_t *type, type_list_t *params)
++{
++    type_list_t *entry;
++    const GUID *uuid = type_get_uuid(type);
++    int ret = 0;
++    append_buf(snprintf, "pinterface({%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x}",
++               uuid->Data1, uuid->Data2, uuid->Data3,
++               uuid->Data4[0], uuid->Data4[1], uuid->Data4[2], uuid->Data4[3],
++               uuid->Data4[4], uuid->Data4[5], uuid->Data4[6], uuid->Data4[7]);
++    for (entry = params; entry; entry = entry->next)
++    {
++        append_buf(snprintf, ";");
++        append_buf(format_type_signature_buffer, entry->type);
++    }
++    append_buf(snprintf, ")");
++    return ret;
++}
++
+ #undef append_buf
+ 
+ char *format_namespace(struct namespace *namespace, const char *prefix, const char *separator, const char *suffix, const char *abi_prefix)
+@@ -161,6 +298,14 @@ char *format_parameterized_type_name(type_t *type, type_list_t *params)
+     return buf;
+ }
+ 
++char *format_type_signature(type_t *type)
++{
++    int len = format_type_signature_buffer(NULL, 0, type);
++    char *buf = xmalloc(len + 1);
++    format_type_signature_buffer(buf, len + 1, type);
++    return buf;
++}
++
+ static char const *parameterized_type_shorthands[][2] = {
+     {"Windows_CFoundation_CCollections_C", "__F"},
+     {"Windows_CFoundation_C", "__F"},
+@@ -186,6 +331,14 @@ static char *format_parameterized_type_c_name(type_t *type, type_list_t *params,
+     return buf;
+ }
+ 
++static char *format_parameterized_type_signature(type_t *type, type_list_t *params)
++{
++    int len = format_parameterized_type_signature_buffer(NULL, 0, type, params);
++    char *buf = xmalloc(len + 1);
++    format_parameterized_type_signature_buffer(buf, len + 1, type, params);
++    return buf;
++}
++
+ type_t *type_new_function(var_list_t *args)
+ {
+     var_t *arg;
+@@ -752,10 +905,12 @@ type_t *type_parameterized_type_specialize_define(type_t *type, type_list_t *par
+         return NULL;
+     }
+ 
++    iface->signature = format_parameterized_type_signature(type, params);
+     iface->defined = TRUE;
+     if (iface->type_type == TYPE_DELEGATE)
+     {
+         iface = iface->details.delegate.iface;
++        iface->signature = format_parameterized_type_signature(type, params);
+         iface->defined = TRUE;
+     }
+     compute_method_indexes(iface);
+diff --git a/tools/widl/typetree.h b/tools/widl/typetree.h
+index 939bc5b412e..b4257fe615f 100644
+--- a/tools/widl/typetree.h
++++ b/tools/widl/typetree.h
+@@ -80,6 +80,16 @@ static inline enum type_type type_get_type(const type_t *type)
+     return type_get_type_detect_alias(type_get_real_type(type));
+ }
+ 
++static inline const GUID *type_get_uuid(const type_t *type)
++{
++    static const GUID empty;
++    attr_t *attr;
++    LIST_FOR_EACH_ENTRY(attr, type->attrs, attr_t, entry)
++        if (attr->type == ATTR_UUID) return attr->u.pval;
++    error("type '%s' uuid not found\n", type->name);
++    return &empty;
++}
++
+ static inline enum type_basic_type type_basic_get_type(const type_t *type)
+ {
+     type = type_get_real_type(type);
+diff --git a/tools/widl/widltypes.h b/tools/widl/widltypes.h
+index 3938d0d5294..58828a4f8e2 100644
+--- a/tools/widl/widltypes.h
++++ b/tools/widl/widltypes.h
+@@ -496,6 +496,7 @@ struct _type_t {
+     struct delegate_details delegate;
+   } details;
+   const char *c_name;
++  const char *signature;
+   unsigned int typestring_offset;
+   unsigned int ptrdesc;           /* used for complex structs */
+   int typelib_idx;
+@@ -651,6 +652,7 @@ void init_loc_info(loc_info_t *);
+ char *format_namespace(struct namespace *namespace, const char *prefix, const char *separator, const char *suffix,
+                        const char *abi_prefix);
+ char *format_parameterized_type_name(type_t *type, type_list_t *params);
++char *format_type_signature(type_t *type);
+ 
+ static inline enum type_type type_get_type_detect_alias(const type_t *type)
+ {
+-- 
+2.28.0
+

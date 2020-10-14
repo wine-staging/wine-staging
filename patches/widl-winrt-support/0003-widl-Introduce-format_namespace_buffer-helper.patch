@@ -1,0 +1,129 @@
+From ee1ce628835376e5054972ef3c39996a2b015309 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Wed, 23 Sep 2020 14:14:01 +0200
+Subject: [PATCH 03/28] widl: Introduce format_namespace_buffer helper.
+
+To compute format_namespace length and write to an existing buffer.
+
+Also add explicit abi_prefix parameter.
+---
+ tools/widl/header.c    |  2 +-
+ tools/widl/parser.y    |  2 +-
+ tools/widl/typetree.c  | 54 +++++++++++++++++++-----------------------
+ tools/widl/widltypes.h |  3 ++-
+ 4 files changed, 29 insertions(+), 32 deletions(-)
+
+diff --git a/tools/widl/header.c b/tools/widl/header.c
+index 743d86f0ee9..d67fea4cc95 100644
+--- a/tools/widl/header.c
++++ b/tools/widl/header.c
+@@ -132,7 +132,7 @@ static void write_guid(FILE *f, const char *guid_prefix, const char *name, const
+ 
+ static void write_uuid_decl(FILE *f, type_t *type, const UUID *uuid)
+ {
+-  char *name = format_namespace(type->namespace, "", "::", type->name);
++  char *name = format_namespace(type->namespace, "", "::", type->name, use_abi_namespace ? "ABI" : NULL);
+   fprintf(f, "#ifdef __CRT_UUID_DECL\n");
+   fprintf(f, "__CRT_UUID_DECL(%s, 0x%08x, 0x%04x, 0x%04x, 0x%02x,0x%02x, 0x%02x,"
+         "0x%02x,0x%02x,0x%02x,0x%02x,0x%02x)\n",
+diff --git a/tools/widl/parser.y b/tools/widl/parser.y
+index 5bc0d82703e..306e5194467 100644
+--- a/tools/widl/parser.y
++++ b/tools/widl/parser.y
+@@ -1905,7 +1905,7 @@ type_t *reg_type(type_t *type, const char *name, struct namespace *namespace, in
+   if (is_global_namespace(namespace))
+     type->c_name = name;
+   else
+-    type->c_name = format_namespace(namespace, "__x_", "_C", name);
++    type->c_name = format_namespace(namespace, "__x_", "_C", name, use_abi_namespace ? "ABI" : NULL);
+   nt->type = type;
+   nt->t = t;
+   nt->next = namespace->type_hash[hash];
+diff --git a/tools/widl/typetree.c b/tools/widl/typetree.c
+index e9afc6fdd28..ebba2c4c6bb 100644
+--- a/tools/widl/typetree.c
++++ b/tools/widl/typetree.c
+@@ -89,41 +89,37 @@ const char *type_get_name(const type_t *type, enum name_type name_type)
+     return NULL;
+ }
+ 
+-static char *append_namespace(char *ptr, struct namespace *namespace, const char *separator)
+-{
+-    if(is_global_namespace(namespace)) {
+-        if(!use_abi_namespace)
+-            return ptr;
+-        strcpy(ptr, "ABI");
+-        strcat(ptr, separator);
+-        return ptr + strlen(ptr);
+-    }
++#define append_buf(f, ...) \
++   do { int r = f(buf + ret, max(ret, len) - ret, __VA_ARGS__); assert(r >= 0); ret += r; } while(0)
+ 
+-    ptr = append_namespace(ptr, namespace->parent, separator);
+-    strcpy(ptr, namespace->name);
+-    strcat(ptr, separator);
+-    return ptr + strlen(ptr);
++static int append_namespace(char *buf, size_t len, struct namespace *namespace, const char *separator, const char *abi_prefix)
++{
++    const char *name = namespace && !is_global_namespace(namespace) ? namespace->name : abi_prefix;
++    int ret = 0;
++    if (!name) return 0;
++    if (namespace && !is_global_namespace(namespace)) append_buf(append_namespace, namespace->parent, separator, abi_prefix);
++    append_buf(snprintf, "%s%s", name, separator);
++    return ret;
+ }
+ 
+-char *format_namespace(struct namespace *namespace, const char *prefix, const char *separator, const char *suffix)
++static int format_namespace_buffer(char *buf, size_t len, struct namespace *namespace, const char *prefix,
++                                   const char *separator, const char *suffix, const char *abi_prefix)
+ {
+-    unsigned len = strlen(prefix) + strlen(suffix);
+-    unsigned sep_len = strlen(separator);
+-    struct namespace *iter;
+-    char *ret, *ptr;
+-
+-    if(use_abi_namespace && !is_global_namespace(namespace))
+-        len += 3 /* strlen("ABI") */ + sep_len;
+-
+-    for(iter = namespace; !is_global_namespace(iter); iter = iter->parent)
+-        len += strlen(iter->name) + sep_len;
++    int ret = 0;
++    append_buf(snprintf, "%s", prefix);
++    append_buf(append_namespace, namespace, separator, abi_prefix);
++    append_buf(snprintf, "%s", suffix);
++    return ret;
++}
+ 
+-    ret = xmalloc(len+1);
+-    strcpy(ret, prefix);
+-    ptr = append_namespace(ret + strlen(ret), namespace, separator);
+-    strcpy(ptr, suffix);
++#undef append_buf
+ 
+-    return ret;
++char *format_namespace(struct namespace *namespace, const char *prefix, const char *separator, const char *suffix, const char *abi_prefix)
++{
++    int len = format_namespace_buffer(NULL, 0, namespace, prefix, separator, suffix, abi_prefix);
++    char *buf = xmalloc(len + 1);
++    format_namespace_buffer(buf, len + 1, namespace, prefix, separator, suffix, abi_prefix);
++    return buf;
+ }
+ 
+ type_t *type_new_function(var_list_t *args)
+diff --git a/tools/widl/widltypes.h b/tools/widl/widltypes.h
+index 085a0ff55f5..630f42860f1 100644
+--- a/tools/widl/widltypes.h
++++ b/tools/widl/widltypes.h
+@@ -605,7 +605,8 @@ var_list_t *append_var(var_list_t *list, var_t *var);
+ 
+ void init_loc_info(loc_info_t *);
+ 
+-char *format_namespace(struct namespace *namespace, const char *prefix, const char *separator, const char *suffix);
++char *format_namespace(struct namespace *namespace, const char *prefix, const char *separator, const char *suffix,
++                       const char *abi_prefix);
+ 
+ static inline enum type_type type_get_type_detect_alias(const type_t *type)
+ {
+-- 
+2.28.0
+

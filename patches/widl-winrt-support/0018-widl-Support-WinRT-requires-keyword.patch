@@ -1,0 +1,254 @@
+From 0d3503123e3f0cb458ada24b052e1d39f1c4dddb Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Tue, 13 Oct 2020 00:31:57 +0200
+Subject: [PATCH 18/28] widl: Support WinRT requires keyword.
+
+---
+ tools/widl/header.c    | 13 +++++++++++
+ tools/widl/parser.l    |  1 +
+ tools/widl/parser.y    | 49 ++++++++++++++++++++++++++++++++----------
+ tools/widl/typetree.c  |  5 ++++-
+ tools/widl/typetree.h  |  9 +++++++-
+ tools/widl/widltypes.h |  1 +
+ 6 files changed, 65 insertions(+), 13 deletions(-)
+
+diff --git a/tools/widl/header.c b/tools/widl/header.c
+index 3bc6b452177..5dfc5e2ff8c 100644
+--- a/tools/widl/header.c
++++ b/tools/widl/header.c
+@@ -1506,6 +1506,7 @@ static void write_winrt_type_comments(FILE *header, const type_t *type)
+ {
+     expr_t *contract = get_attrp(type->attrs, ATTR_CONTRACT);
+     type_t *exclusiveto = get_attrp(type->attrs, ATTR_EXCLUSIVETO);
++    type_list_t *requires = type->type_type == TYPE_INTERFACE ? type_iface_get_requires(type) : NULL;
+     expr_list_t statics = LIST_INIT(statics);
+     get_attr_statics(type->attrs, &statics);
+     fprintf(header, " *\n");
+@@ -1523,6 +1524,18 @@ static void write_winrt_type_comments(FILE *header, const type_t *type)
+         fprintf(header, " * Interface is a part of the implementation of type %s\n *\n", name);
+         free(name);
+     }
++    if (requires)
++    {
++        type_list_t *req;
++        fprintf(header, " * Any object which implements this interface must also implement the following interfaces:\n");
++        for (req = requires; req; req = req->next)
++        {
++            char *name = format_namespace(req->type->namespace, "", ".", req->type->name, NULL);
++            fprintf(header, " *     %s\n", name);
++            free(name);
++        }
++        fprintf(header, " *\n");
++    }
+     if (!list_empty(&statics))
+     {
+         expr_t *expr;
+diff --git a/tools/widl/parser.l b/tools/widl/parser.l
+index 90791543db2..2b41bea1bc9 100644
+--- a/tools/widl/parser.l
++++ b/tools/widl/parser.l
+@@ -298,6 +298,7 @@ static const struct keyword keywords[] = {
+ 	{"pascal",          tPASCAL,         0},
+ 	{"properties",      tPROPERTIES,     0},
+ 	{"register",        tREGISTER,       0},
++	{"requires",        tREQUIRES,       1},
+ 	{"runtimeclass",    tRUNTIMECLASS,   1},
+ 	{"short",           tSHORT,          0},
+ 	{"signed",          tSIGNED,         0},
+diff --git a/tools/widl/parser.y b/tools/widl/parser.y
+index e6e67826a8f..1da667e0ced 100644
+--- a/tools/widl/parser.y
++++ b/tools/widl/parser.y
+@@ -38,12 +38,6 @@
+ #include "expr.h"
+ #include "typetree.h"
+ 
+-typedef struct list typelist_t;
+-struct typenode {
+-  type_t *type;
+-  struct list entry;
+-};
+-
+ struct _import_t
+ {
+   char *name;
+@@ -51,6 +45,8 @@ struct _import_t
+ };
+ 
+ static str_list_t *append_str(str_list_t *list, char *str);
++static type_list_t *append_type(type_list_t *list, type_t *type);
++static type_list_t *append_types(type_list_t *list, type_list_t *types);
+ static attr_list_t *append_attr(attr_list_t *list, attr_t *attr);
+ static attr_list_t *append_attr_list(attr_list_t *new_list, attr_list_t *old_list);
+ static decl_spec_t *make_decl_spec(type_t *type, decl_spec_t *left, decl_spec_t *right,
+@@ -140,6 +136,7 @@ static typelib_t *current_typelib;
+ 	expr_t *expr;
+ 	expr_list_t *expr_list;
+ 	type_t *type;
++	type_list_t *typelist;
+ 	var_t *var;
+ 	var_list_t *var_list;
+ 	declarator_t *declarator;
+@@ -247,6 +244,7 @@ static typelib_t *current_typelib;
+ %token tREADONLY tREF
+ %token tREGISTER tREPRESENTAS
+ %token tREQUESTEDIT
++%token tREQUIRES
+ %token tRESTRICTED
+ %token tRETVAL
+ %token tRUNTIMECLASS
+@@ -296,6 +294,7 @@ static typelib_t *current_typelib;
+ %type <type> base_type int_std
+ %type <type> enumdef structdef uniondef typedecl
+ %type <type> type qualified_type
++%type <typelist> requires required_types
+ %type <ifref> class_interface
+ %type <ifref_list> class_interfaces
+ %type <var> arg ne_union_field union_field s_field case enum enum_member declaration
+@@ -1009,19 +1008,27 @@ interfacehdr: attributes interface		{ $$ = $2;
+ 						}
+ 	;
+ 
+-interfacedef: interfacehdr inherit
++required_types:
++	  qualified_type			{ $$ = append_type(NULL, $1); }
++	| required_types ',' required_types	{ $$ = append_types($1, $3); }
++
++requires:					{ $$ = NULL; }
++	| tREQUIRES required_types		{ $$ = $2; }
++	;
++
++interfacedef: interfacehdr inherit requires
+ 	  '{' int_statements '}' semicolon_opt	{ $$ = $1;
+ 						  if($$ == $2)
+ 						    error_loc("Interface can't inherit from itself\n");
+-						  type_interface_define($$, $2, $4);
++						  type_interface_define($$, $2, $5, $3);
+ 						  check_async_uuid($$);
+ 						}
+ /* MIDL is able to import the definition of a base class from inside the
+  * definition of a derived class, I'll try to support it with this rule */
+-	| interfacehdr ':' aIDENTIFIER
++	| interfacehdr ':' aIDENTIFIER requires
+ 	  '{' import int_statements '}'
+ 	   semicolon_opt			{ $$ = $1;
+-						  type_interface_define($$, find_type_or_error2($3, 0), $6);
++						  type_interface_define($$, find_type_or_error2($3, 0), $7, $4);
+ 						}
+ 	| dispinterfacedef semicolon_opt	{ $$ = $1; }
+ 	;
+@@ -1317,6 +1324,26 @@ static str_list_t *append_str(str_list_t *list, char *str)
+     return list;
+ }
+ 
++static type_list_t *append_type(type_list_t *list, type_t *type)
++{
++    type_list_t *entry;
++    if (!type) return list;
++    entry = xmalloc( sizeof(*entry) );
++    entry->type = type;
++    entry->next = list;
++    return entry;
++}
++
++static type_list_t *append_types(type_list_t *list, type_list_t *types)
++{
++    type_list_t *entry;
++    if (!list) return types;
++    if (!types) return list;
++    for (entry = list; entry->next; entry = entry->next) {}
++    entry->next = types;
++    return list;
++}
++
+ static attr_list_t *move_attr(attr_list_t *dst, attr_list_t *src, enum attr_type type)
+ {
+   attr_t *attr;
+@@ -3015,7 +3042,7 @@ static void check_async_uuid(type_t *iface)
+         stmts = append_statement(stmts, make_statement_declaration(finish_func));
+     }
+ 
+-    type_interface_define(async_iface, inherit, stmts);
++    type_interface_define(async_iface, inherit, stmts, NULL);
+     iface->details.iface->async_iface = async_iface->details.iface->async_iface = async_iface;
+ }
+ 
+diff --git a/tools/widl/typetree.c b/tools/widl/typetree.c
+index d075619448d..3d26fd23b26 100644
+--- a/tools/widl/typetree.c
++++ b/tools/widl/typetree.c
+@@ -459,7 +459,7 @@ static unsigned int compute_method_indexes(type_t *iface)
+     return idx;
+ }
+ 
+-void type_interface_define(type_t *iface, type_t *inherit, statement_list_t *stmts)
++void type_interface_define(type_t *iface, type_t *inherit, statement_list_t *stmts, type_list_t *requires)
+ {
+     iface->details.iface = xmalloc(sizeof(*iface->details.iface));
+     iface->details.iface->disp_props = NULL;
+@@ -468,6 +468,7 @@ void type_interface_define(type_t *iface, type_t *inherit, statement_list_t *stm
+     iface->details.iface->inherit = inherit;
+     iface->details.iface->disp_inherit = NULL;
+     iface->details.iface->async_iface = NULL;
++    iface->details.iface->requires = requires;
+     iface->defined = TRUE;
+     compute_method_indexes(iface);
+ }
+@@ -482,6 +483,7 @@ void type_dispinterface_define(type_t *iface, var_list_t *props, var_list_t *met
+     if (!iface->details.iface->inherit) error_loc("IDispatch is undefined\n");
+     iface->details.iface->disp_inherit = NULL;
+     iface->details.iface->async_iface = NULL;
++    iface->details.iface->requires = NULL;
+     iface->defined = TRUE;
+     compute_method_indexes(iface);
+ }
+@@ -496,6 +498,7 @@ void type_dispinterface_define_from_iface(type_t *dispiface, type_t *iface)
+     if (!dispiface->details.iface->inherit) error_loc("IDispatch is undefined\n");
+     dispiface->details.iface->disp_inherit = iface;
+     dispiface->details.iface->async_iface = NULL;
++    dispiface->details.iface->requires = NULL;
+     dispiface->defined = TRUE;
+     compute_method_indexes(dispiface);
+ }
+diff --git a/tools/widl/typetree.h b/tools/widl/typetree.h
+index 951084cf875..8c555b91656 100644
+--- a/tools/widl/typetree.h
++++ b/tools/widl/typetree.h
+@@ -45,7 +45,7 @@ type_t *type_new_nonencapsulated_union(const char *name, int defined, var_list_t
+ type_t *type_new_encapsulated_union(char *name, var_t *switch_field, var_t *union_field, var_list_t *cases);
+ type_t *type_new_bitfield(type_t *field_type, const expr_t *bits);
+ type_t *type_new_runtimeclass(char *name, struct namespace *namespace);
+-void type_interface_define(type_t *iface, type_t *inherit, statement_list_t *stmts);
++void type_interface_define(type_t *iface, type_t *inherit, statement_list_t *stmts, type_list_t *requires);
+ void type_dispinterface_define(type_t *iface, var_list_t *props, var_list_t *methods);
+ void type_dispinterface_define_from_iface(type_t *dispiface, type_t *iface);
+ void type_module_define(type_t *module, statement_list_t *stmts);
+@@ -169,6 +169,13 @@ static inline type_t *type_iface_get_inherit(const type_t *type)
+     return type->details.iface->inherit;
+ }
+ 
++static inline type_list_t *type_iface_get_requires(const type_t *type)
++{
++    type = type_get_real_type(type);
++    assert(type_get_type(type) == TYPE_INTERFACE);
++    return type->details.iface->requires;
++}
++
+ static inline type_t *type_iface_get_async_iface(const type_t *type)
+ {
+     type = type_get_real_type(type);
+diff --git a/tools/widl/widltypes.h b/tools/widl/widltypes.h
+index aa3e6e75898..be71886260b 100644
+--- a/tools/widl/widltypes.h
++++ b/tools/widl/widltypes.h
+@@ -378,6 +378,7 @@ struct iface_details
+   struct _type_t *inherit;
+   struct _type_t *disp_inherit;
+   struct _type_t *async_iface;
++  type_list_t *requires;
+ };
+ 
+ struct module_details
+-- 
+2.28.0
+

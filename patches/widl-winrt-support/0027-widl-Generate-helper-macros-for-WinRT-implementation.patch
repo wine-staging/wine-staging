@@ -1,0 +1,206 @@
+From d517b9b5856840f19b3a805b812153d5c0f6d0d9 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Wed, 26 Aug 2020 22:46:02 +0200
+Subject: [PATCH 27/28] widl: Generate helper macros for WinRT implementation.
+
+This generates additional macros to help keeping implementation simple,
+guarded with WIDL_USING ifdefs, like this:
+
+    #ifdef WIDL_USING_WINDOWS_FOO_IFOO
+    #define IFooVtbl __x_ABI_CWindows_CFoo_CIFooVtbl
+    #define IFoo __x_ABI_CWindows_CFoo_CIFoo
+    #define IFoo_DoFoo __x_ABI_CWindows_CFoo_CIFoo_DoFoo
+    #endif /* WIDL_USING_WINDOWS_FOO_IFOO */
+
+Implementation files can define the desired WIDL_USING preprocessor
+macros before including the header, and then implement or use the
+interface methods with the simple non-prefixed names instead.
+---
+ tools/widl/header.c    | 71 ++++++++++++++++++++++++++++++++++++++++--
+ tools/widl/typetree.c  | 24 ++++++++++++++
+ tools/widl/widltypes.h |  1 +
+ 3 files changed, 94 insertions(+), 2 deletions(-)
+
+diff --git a/tools/widl/header.c b/tools/widl/header.c
+index 64faf89c36a..4aa6844ee99 100644
+--- a/tools/widl/header.c
++++ b/tools/widl/header.c
+@@ -50,6 +50,8 @@ static void write_winrt_type_comments(FILE *header, const type_t *type);
+ static void write_apicontract_guard_start(FILE *header, const expr_t *expr);
+ static void write_apicontract_guard_end(FILE *header, const expr_t *expr);
+ 
++static void write_widl_using_macros(FILE *header, type_t *iface);
++
+ static void indent(FILE *h, int delta)
+ {
+   int c;
+@@ -616,10 +618,11 @@ static void write_type_definition(FILE *f, type_t *t, int declonly)
+         t->written = save_written;
+         write_namespace_end(f, t->namespace);
+         fprintf(f, "extern \"C\" {\n");
+-        fprintf(f, "#else\n");
++        fprintf(f, "#else /* __cplusplus */\n");
+         write_type_left(f, &ds, NAME_C, declonly, TRUE);
+         fprintf(f, ";\n");
+-        fprintf(f, "#endif\n\n");
++        if (winrt_mode) write_widl_using_macros(f, t);
++        fprintf(f, "#endif /* __cplusplus */\n\n");
+     }
+     if (contract) write_apicontract_guard_end(f, contract);
+ }
+@@ -1643,6 +1646,69 @@ static void write_com_interface_start(FILE *header, const type_t *iface)
+   fprintf(header,"#define __%s_%sINTERFACE_DEFINED__\n\n", iface->c_name, dispinterface ? "DISP" : "");
+ }
+ 
++static char *get_winrt_guard_macro(type_t *iface)
++{
++    unsigned int len;
++    char *macro, *tmp = (char *)iface->c_name;
++    int i;
++
++    if (!strncmp(tmp, "__x", 3)) tmp += 3;
++    if (!strncmp(tmp, "_ABI", 4)) tmp += 4;
++    macro = xstrdup(tmp);
++
++    len = strlen(macro) + 1;
++    for (tmp = strstr(macro, "__F"); tmp; tmp = strstr(tmp, "__F"))
++        memmove(tmp + 1, tmp + 3, len - (tmp - macro) - 3);
++    for (tmp = strstr(macro, "__C"); tmp; tmp = strstr(tmp, "__C"))
++        memmove(tmp + 1, tmp + 3, len - (tmp - macro) - 3);
++    for (tmp = strstr(macro, "_C"); tmp; tmp = strstr(tmp, "_C"))
++        memmove(tmp + 1, tmp + 2, len - (tmp - macro) - 2);
++
++    for (i = strlen(macro); i > 0; --i) macro[i - 1] = toupper(macro[i - 1]);
++
++    return macro;
++}
++
++static void write_widl_using_method_macros(FILE *header, const type_t *iface, const type_t *top_iface)
++{
++    const statement_t *stmt;
++    const char *name = top_iface->short_name ? top_iface->short_name : top_iface->name;
++
++    if (type_iface_get_inherit(iface)) write_widl_using_method_macros(header, type_iface_get_inherit(iface), top_iface);
++
++    STATEMENTS_FOR_EACH_FUNC(stmt, type_iface_get_stmts(iface))
++    {
++        const var_t *func = stmt->u.var;
++	const char *func_name = get_name(func);
++
++        if (is_override_method(iface, top_iface, func)) continue;
++
++        if (!is_callas(func->attrs))
++            fprintf(header, "#define %s_%s %s_%s\n", name, func_name, top_iface->c_name, func_name);
++    }
++}
++
++static void write_widl_using_macros(FILE *header, type_t *iface)
++{
++    const UUID *uuid = get_attrp(iface->attrs, ATTR_UUID);
++    const char *name = iface->short_name ? iface->short_name : iface->name;
++    char *macro;
++
++    if (!strcmp(iface->name, iface->c_name)) return;
++
++    macro = get_winrt_guard_macro(iface);
++    fprintf(header, "#ifdef WIDL_USING%s\n", macro);
++
++    if (uuid) fprintf(header, "#define IID_%s IID_%s\n", name, iface->c_name);
++    if (iface->type_type == TYPE_INTERFACE) fprintf(header, "#define %sVtbl %sVtbl\n", name, iface->c_name);
++    fprintf(header, "#define %s %s\n", name, iface->c_name);
++
++    if (iface->type_type == TYPE_INTERFACE) write_widl_using_method_macros(header, iface, iface);
++
++    fprintf(header, "#endif /* WIDL_USING_%s */\n", macro);
++    free(macro);
++}
++
+ static void write_com_interface_end(FILE *header, type_t *iface)
+ {
+   int dispinterface = is_attr(iface->attrs, ATTR_DISPINTERFACE);
+@@ -1715,6 +1781,7 @@ static void write_com_interface_end(FILE *header, type_t *iface)
+   fprintf(header, "#else\n");
+   write_inline_wrappers(header, type, type, iface->c_name);
+   fprintf(header, "#endif\n");
++  if (winrt_mode) write_widl_using_macros(header, iface);
+   fprintf(header, "#endif\n");
+   fprintf(header, "\n");
+   fprintf(header, "#endif\n");
+diff --git a/tools/widl/typetree.c b/tools/widl/typetree.c
+index 2d060363d8e..f62d0eb51dc 100644
+--- a/tools/widl/typetree.c
++++ b/tools/widl/typetree.c
+@@ -51,6 +51,7 @@ type_t *make_type(enum type_type type)
+     t->attrs = NULL;
+     t->c_name = NULL;
+     t->signature = NULL;
++    t->short_name = NULL;
+     memset(&t->details, 0, sizeof(t->details));
+     t->typestring_offset = 0;
+     t->ptrdesc = 0;
+@@ -281,6 +282,19 @@ static int format_parameterized_type_signature_buffer(char *buf, size_t len, typ
+     return ret;
+ }
+ 
++static int format_parameterized_type_short_name_buffer(char *buf, size_t len, type_t *type, type_list_t *params, const char *prefix)
++{
++    type_list_t *entry;
++    int ret = 0;
++    append_buf(snprintf, "%s%s", prefix, type->name);
++    for (entry = params; entry; entry = entry->next)
++    {
++        for (type = entry->type; type->type_type == TYPE_POINTER; type = type_pointer_get_ref_type(type)) {}
++        append_buf(snprintf, "_%s", type->name);
++    }
++    return ret;
++}
++
+ #undef append_buf
+ 
+ char *format_namespace(struct namespace *namespace, const char *prefix, const char *separator, const char *suffix, const char *abi_prefix)
+@@ -340,6 +354,14 @@ static char *format_parameterized_type_signature(type_t *type, type_list_t *para
+     return buf;
+ }
+ 
++static char *format_parameterized_type_short_name(type_t *type, type_list_t *params, const char *prefix)
++{
++    int len = format_parameterized_type_short_name_buffer(NULL, 0, type, params, prefix);
++    char *buf = xmalloc(len + 1);
++    format_parameterized_type_short_name_buffer(buf, len + 1, type, params, prefix);
++    return buf;
++}
++
+ type_t *type_new_function(var_list_t *args)
+ {
+     var_t *arg;
+@@ -929,6 +951,7 @@ type_t *type_parameterized_type_specialize_declare(type_t *type, type_list_t *pa
+     new_type->name = format_parameterized_type_name(type, params);
+     reg_type(new_type, new_type->name, new_type->namespace, 0);
+     new_type->c_name = format_parameterized_type_c_name(type, params, "");
++    new_type->short_name = format_parameterized_type_short_name(type, params, "");
+ 
+     if (new_type->type_type == TYPE_DELEGATE)
+     {
+@@ -936,6 +959,7 @@ type_t *type_parameterized_type_specialize_declare(type_t *type, type_list_t *pa
+         compute_delegate_iface_name(new_type);
+         new_type->details.delegate.iface->namespace = new_type->namespace;
+         new_type->details.delegate.iface->c_name = format_parameterized_type_c_name(type, params, "I");
++        new_type->details.delegate.iface->short_name = format_parameterized_type_short_name(type, params, "I");
+     }
+ 
+     return new_type;
+diff --git a/tools/widl/widltypes.h b/tools/widl/widltypes.h
+index 58828a4f8e2..d80e9c04d51 100644
+--- a/tools/widl/widltypes.h
++++ b/tools/widl/widltypes.h
+@@ -497,6 +497,7 @@ struct _type_t {
+   } details;
+   const char *c_name;
+   const char *signature;
++  const char *short_name;
+   unsigned int typestring_offset;
+   unsigned int ptrdesc;           /* used for complex structs */
+   int typelib_idx;
+-- 
+2.28.0
+

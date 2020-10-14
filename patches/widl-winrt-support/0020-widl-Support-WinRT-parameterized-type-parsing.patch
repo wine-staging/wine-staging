@@ -1,0 +1,391 @@
+From 46f497692aa6da875d56764538eefaadb9a8ec38 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Tue, 13 Oct 2020 16:31:16 +0200
+Subject: [PATCH 20/28] widl: Support WinRT parameterized type parsing.
+
+And add IVectorView<T> and IIterator<T> parameterized interfaces to
+windows.foundation.idl for illustration and future use. They won't
+generate any additional code until they are fully specialized.
+
+This is a WIDL-specific feature, but MIDL has some magic knowledge of
+these Windows.Foundation.Collections interface templates, and we need a
+way to instruct WIDL about them too.
+
+Having these interfaces declared in the IDL, guarded with __WIDL__ ifdef
+is easier and more flexible than re-creating the types by hand in WIDL
+source.
+---
+ include/windows.foundation.idl | 29 +++++++++++++++++
+ tools/widl/expr.c              |  2 ++
+ tools/widl/header.c            | 10 +++---
+ tools/widl/parser.y            | 57 ++++++++++++++++++++++++++++++++--
+ tools/widl/typegen.c           |  6 ++++
+ tools/widl/typelib.c           |  2 ++
+ tools/widl/typetree.c          | 30 ++++++++++++++++++
+ tools/widl/typetree.h          |  4 +++
+ tools/widl/widltypes.h         |  9 ++++++
+ 9 files changed, 143 insertions(+), 6 deletions(-)
+
+diff --git a/include/windows.foundation.idl b/include/windows.foundation.idl
+index 5e17062f399..ab7c4753c3b 100644
+--- a/include/windows.foundation.idl
++++ b/include/windows.foundation.idl
+@@ -111,5 +111,34 @@ namespace Windows {
+         {
+             HRESULT ToString([out, retval] HSTRING *value);
+         }
++
++#ifdef __WIDL__
++        namespace Collections
++        {
++            [
++                contract(Windows.Foundation.FoundationContract, 1.0),
++                uuid(6a79e863-4300-459a-9966-cbb660963ee1)
++            ]
++            interface IIterator<T> : IInspectable
++            {
++                [propget] HRESULT Current([out, retval] T *value);
++                [propget] HRESULT HasCurrent([out, retval] BOOL *value);
++                HRESULT MoveNext([out, retval] BOOL *value);
++                HRESULT GetMany([in] UINT32 count, [out] T *items, [out, retval] UINT32 *value);
++            }
++
++            [
++                contract(Windows.Foundation.FoundationContract, 1.0),
++                uuid(bbe1fa4c-b0e3-4583-baef-1f1b2e483e56)
++            ]
++            interface IVectorView<T> : IInspectable
++            {
++                HRESULT GetAt([in] ULONG index, [out, retval] T *value);
++                [propget] HRESULT Size([out, retval] ULONG *value);
++                HRESULT IndexOf([in, optional] T element, [out] ULONG *index, [out, retval] BOOLEAN *value);
++                HRESULT GetMany([in] ULONG start_index, [out] T *items, [out, retval] ULONG *value);
++            }
++        }
++#endif
+     }
+ }
+diff --git a/tools/widl/expr.c b/tools/widl/expr.c
+index 13bd5a889aa..c83e9aa5ec0 100644
+--- a/tools/widl/expr.c
++++ b/tools/widl/expr.c
+@@ -464,6 +464,8 @@ static type_t *find_identifier(const char *identifier, const type_t *cont_type,
+         case TYPE_BITFIELD:
+         case TYPE_APICONTRACT:
+         case TYPE_RUNTIMECLASS:
++        case TYPE_PARAMETERIZED_TYPE:
++        case TYPE_PARAMETER:
+             /* nothing to do */
+             break;
+         case TYPE_ALIAS:
+diff --git a/tools/widl/header.c b/tools/widl/header.c
+index 5c87a997349..283f2372fee 100644
+--- a/tools/widl/header.c
++++ b/tools/widl/header.c
+@@ -501,7 +501,9 @@ void write_type_left(FILE *h, const decl_spec_t *ds, enum name_type name_type, i
+         break;
+       }
+       case TYPE_APICONTRACT:
+-        /* handled elsewhere */
++      case TYPE_PARAMETERIZED_TYPE:
++      case TYPE_PARAMETER:
++        /* handled elsewhere / shouldn't be here */
+         assert(0);
+         break;
+     }
+@@ -568,6 +570,8 @@ void write_type_right(FILE *h, type_t *t, int is_field)
+   case TYPE_RUNTIMECLASS:
+     break;
+   case TYPE_APICONTRACT:
++  case TYPE_PARAMETERIZED_TYPE:
++  case TYPE_PARAMETER:
+     /* not supposed to be here */
+     assert(0);
+     break;
+@@ -1969,10 +1973,8 @@ static void write_header_stmts(FILE *header, const statement_list_t *stmts, cons
+           write_apicontract(header, stmt->u.type);
+         else if (type_get_type(stmt->u.type) == TYPE_RUNTIMECLASS)
+           write_runtimeclass(header, stmt->u.type);
+-        else
+-        {
++        else if (type_get_type(stmt->u.type) != TYPE_PARAMETERIZED_TYPE)
+           write_type_definition(header, stmt->u.type, stmt->declonly);
+-        }
+         break;
+       case STMT_TYPEREF:
+         /* FIXME: shouldn't write out forward declarations for undefined
+diff --git a/tools/widl/parser.y b/tools/widl/parser.y
+index d24f8881147..aa6ded5ba89 100644
+--- a/tools/widl/parser.y
++++ b/tools/widl/parser.y
+@@ -80,6 +80,8 @@ static var_t *reg_const(var_t *var);
+ static void push_namespace(const char *name);
+ static void pop_namespace(const char *name);
+ static void push_lookup_namespace(const char *name);
++static void push_parameters_namespace(const char *name);
++static void pop_parameters_namespace(const char *name);
+ 
+ static void check_arg_attrs(const var_t *arg);
+ static void check_statements(const statement_list_t *stmts, int is_inside_library);
+@@ -125,6 +127,7 @@ static struct namespace global_namespace = {
+ 
+ static struct namespace *current_namespace = &global_namespace;
+ static struct namespace *lookup_namespace = &global_namespace;
++static struct namespace *parameters_namespace = NULL;
+ 
+ static typelib_t *current_typelib;
+ 
+@@ -295,6 +298,8 @@ static typelib_t *current_typelib;
+ %type <type> base_type int_std
+ %type <type> enumdef structdef uniondef typedecl
+ %type <type> type qualified_type
++%type <type> type_parameter
++%type <typelist> type_parameters
+ %type <typelist> requires required_types
+ %type <ifref> class_interface
+ %type <ifref_list> class_interfaces
+@@ -1010,6 +1015,15 @@ interfacehdr: attributes interface		{ $$ = $2;
+ 						}
+ 	;
+ 
++type_parameter: aIDENTIFIER			{ $$ = get_type(TYPE_PARAMETER, $1, parameters_namespace, 0); }
++	| aKNOWNTYPE				{ $$ = get_type(TYPE_PARAMETER, $1, parameters_namespace, 0); }
++	;
++
++type_parameters:
++	  type_parameter			{ $$ = append_type(NULL, $1); }
++	| type_parameters ',' type_parameter	{ $$ = append_type($1, $3); }
++	;
++
+ required_types:
+ 	  qualified_type			{ $$ = append_type(NULL, $1); }
+ 	| required_types ',' required_types	{ $$ = append_types($1, $3); }
+@@ -1025,6 +1039,13 @@ interfacedef: interfacehdr inherit requires
+ 						  type_interface_define($$, $2, $5, $3);
+ 						  check_async_uuid($$);
+ 						}
++	| interfacehdr '<' { push_parameters_namespace($1->name); } type_parameters '>' inherit
++	  '{' int_statements '}' semicolon_opt	{ $$ = $1;
++						  if($$ == $6) error_loc("Interface can't inherit from itself\n");
++						  type_parameterized_interface_define($$, $4, $6, $8);
++						  check_async_uuid($$);
++						  pop_parameters_namespace($1->name);
++						}
+ /* MIDL is able to import the definition of a base class from inside the
+  * definition of a derived class, I'll try to support it with this rule */
+ 	| interfacehdr ':' aIDENTIFIER requires
+@@ -1037,6 +1058,11 @@ interfacedef: interfacehdr inherit requires
+ 
+ interfacedec:
+ 	  interface ';'				{ $$ = $1; }
++	| interface '<' { push_parameters_namespace($1->name); } type_parameters '>' ';'
++						{ $$ = $1;
++						  type_parameterized_interface_declare($$, $4);
++						  pop_parameters_namespace($1->name);
++						}
+ 	| dispinterface ';'			{ $$ = $1; }
+ 	;
+ 
+@@ -1979,6 +2005,29 @@ static void push_lookup_namespace(const char *name)
+     lookup_namespace = namespace;
+ }
+ 
++static void push_parameters_namespace(const char *name)
++{
++    struct namespace *namespace;
++
++    if (!(namespace = find_sub_namespace(current_namespace, name)))
++    {
++        namespace = xmalloc(sizeof(*namespace));
++        namespace->name = xstrdup(name);
++        namespace->parent = current_namespace;
++        list_add_tail(&current_namespace->children, &namespace->entry);
++        list_init(&namespace->children);
++        memset(namespace->type_hash, 0, sizeof(namespace->type_hash));
++    }
++
++    parameters_namespace = namespace;
++}
++
++static void pop_parameters_namespace(const char *name)
++{
++    assert(!strcmp(parameters_namespace->name, name) && parameters_namespace->parent);
++    parameters_namespace = NULL;
++}
++
+ struct rtype {
+   const char *name;
+   type_t *type;
+@@ -2110,7 +2159,8 @@ static type_t *find_qualified_type_or_error(const char *name, int t)
+ static type_t *find_type_or_error(const char *name, int t)
+ {
+     type_t *type;
+-    if (!(type = find_type(name, current_namespace, t)))
++    if (!(type = find_type(name, current_namespace, t)) &&
++        !(type = find_type(name, parameters_namespace, t)))
+     {
+         error_loc("type '%s' not found\n", name);
+         return NULL;
+@@ -2130,7 +2180,8 @@ int is_type(const char *name)
+     if (lookup_namespace != &global_namespace)
+         return find_type(name, lookup_namespace, 0) != NULL;
+     else
+-        return find_type(name, current_namespace, 0) != NULL;
++        return find_type(name, current_namespace, 0) != NULL ||
++               find_type(name, parameters_namespace, 0) != NULL;
+ }
+ 
+ int is_namespace(const char *name)
+@@ -2623,6 +2674,8 @@ static int is_allowed_conf_type(const type_t *type)
+     case TYPE_RUNTIMECLASS:
+         return FALSE;
+     case TYPE_APICONTRACT:
++    case TYPE_PARAMETERIZED_TYPE:
++    case TYPE_PARAMETER:
+         /* not supposed to be here */
+         assert(0);
+         break;
+diff --git a/tools/widl/typegen.c b/tools/widl/typegen.c
+index 86c010aa6ae..f37b54eb65d 100644
+--- a/tools/widl/typegen.c
++++ b/tools/widl/typegen.c
+@@ -377,6 +377,8 @@ enum typegen_type typegen_detect_type(const type_t *type, const attr_list_t *att
+     case TYPE_RUNTIMECLASS:
+         break;
+     case TYPE_APICONTRACT:
++    case TYPE_PARAMETERIZED_TYPE:
++    case TYPE_PARAMETER:
+         /* not supposed to be here */
+         assert(0);
+         break;
+@@ -1974,6 +1976,8 @@ unsigned int type_memsize_and_alignment(const type_t *t, unsigned int *align)
+     case TYPE_BITFIELD:
+     case TYPE_APICONTRACT:
+     case TYPE_RUNTIMECLASS:
++    case TYPE_PARAMETERIZED_TYPE:
++    case TYPE_PARAMETER:
+         /* these types should not be encountered here due to language
+          * restrictions (interface, void, coclass, module), logical
+          * restrictions (alias - due to type_get_type call above) or
+@@ -2077,6 +2081,8 @@ static unsigned int type_buffer_alignment(const type_t *t)
+     case TYPE_BITFIELD:
+     case TYPE_APICONTRACT:
+     case TYPE_RUNTIMECLASS:
++    case TYPE_PARAMETERIZED_TYPE:
++    case TYPE_PARAMETER:
+         /* these types should not be encountered here due to language
+          * restrictions (interface, void, coclass, module), logical
+          * restrictions (alias - due to type_get_type call above) or
+diff --git a/tools/widl/typelib.c b/tools/widl/typelib.c
+index ace6424e3a0..6f6c5f3ccc8 100644
+--- a/tools/widl/typelib.c
++++ b/tools/widl/typelib.c
+@@ -226,6 +226,8 @@ unsigned short get_type_vt(type_t *t)
+ 
+   case TYPE_ALIAS:
+   case TYPE_APICONTRACT:
++  case TYPE_PARAMETERIZED_TYPE:
++  case TYPE_PARAMETER:
+     /* not supposed to be here */
+     assert(0);
+     break;
+diff --git a/tools/widl/typetree.c b/tools/widl/typetree.c
+index 3d26fd23b26..bbd519d98ab 100644
+--- a/tools/widl/typetree.c
++++ b/tools/widl/typetree.c
+@@ -459,6 +459,36 @@ static unsigned int compute_method_indexes(type_t *iface)
+     return idx;
+ }
+ 
++void type_parameterized_interface_declare(type_t *type, type_list_t *params)
++{
++    type_t *iface = make_type(TYPE_INTERFACE);
++    type->type_type = TYPE_PARAMETERIZED_TYPE;
++    type->details.parameterized.type = iface;
++    type->details.parameterized.params = params;
++}
++
++void type_parameterized_interface_define(type_t *type, type_list_t *params, type_t *inherit, statement_list_t *stmts)
++{
++    type_t *iface;
++
++    if (type->type_type != TYPE_PARAMETERIZED_TYPE) type_parameterized_interface_declare(type, params);
++    iface = type->details.parameterized.type;
++
++    /* The parameterized type UUID is actually a PIID that is then used as a seed to generate
++     * a new type GUID with the rules described in:
++     *   https://docs.microsoft.com/en-us/uwp/winrt-cref/winrt-type-system#parameterized-types
++     * FIXME: store type signatures for generated interfaces, and generate their GUIDs
++     */
++    iface->details.iface = xmalloc(sizeof(*iface->details.iface));
++    iface->details.iface->disp_props = NULL;
++    iface->details.iface->disp_methods = NULL;
++    iface->details.iface->stmts = stmts;
++    iface->details.iface->inherit = inherit;
++    iface->details.iface->disp_inherit = NULL;
++    iface->details.iface->async_iface = NULL;
++    iface->details.iface->requires = NULL;
++}
++
+ void type_interface_define(type_t *iface, type_t *inherit, statement_list_t *stmts, type_list_t *requires)
+ {
+     iface->details.iface = xmalloc(sizeof(*iface->details.iface));
+diff --git a/tools/widl/typetree.h b/tools/widl/typetree.h
+index 8c555b91656..b04a67f6b47 100644
+--- a/tools/widl/typetree.h
++++ b/tools/widl/typetree.h
+@@ -45,6 +45,8 @@ type_t *type_new_nonencapsulated_union(const char *name, int defined, var_list_t
+ type_t *type_new_encapsulated_union(char *name, var_t *switch_field, var_t *union_field, var_list_t *cases);
+ type_t *type_new_bitfield(type_t *field_type, const expr_t *bits);
+ type_t *type_new_runtimeclass(char *name, struct namespace *namespace);
++void type_parameterized_interface_declare(type_t *type, type_list_t *params);
++void type_parameterized_interface_define(type_t *type, type_list_t *params, type_t *inherit, statement_list_t *stmts);
+ void type_interface_define(type_t *iface, type_t *inherit, statement_list_t *stmts, type_list_t *requires);
+ void type_dispinterface_define(type_t *iface, var_list_t *props, var_list_t *methods);
+ void type_dispinterface_define_from_iface(type_t *dispiface, type_t *iface);
+@@ -234,6 +236,8 @@ static inline int type_is_complete(const type_t *type)
+     case TYPE_RUNTIMECLASS:
+         return TRUE;
+     case TYPE_APICONTRACT:
++    case TYPE_PARAMETERIZED_TYPE:
++    case TYPE_PARAMETER:
+         assert(0);
+         break;
+     }
+diff --git a/tools/widl/widltypes.h b/tools/widl/widltypes.h
+index 7ca770b67ea..e2ffec6da8a 100644
+--- a/tools/widl/widltypes.h
++++ b/tools/widl/widltypes.h
+@@ -429,6 +429,12 @@ struct runtimeclass_details
+     ifref_list_t *ifaces;
+ };
+ 
++struct parameterized_details
++{
++    type_t *type;
++    type_list_t *params;
++};
++
+ #define HASHMAX 64
+ 
+ struct namespace {
+@@ -457,6 +463,8 @@ enum type_type
+     TYPE_BITFIELD,
+     TYPE_APICONTRACT,
+     TYPE_RUNTIMECLASS,
++    TYPE_PARAMETERIZED_TYPE,
++    TYPE_PARAMETER,
+ };
+ 
+ struct _type_t {
+@@ -478,6 +486,7 @@ struct _type_t {
+     struct bitfield_details bitfield;
+     struct alias_details alias;
+     struct runtimeclass_details runtimeclass;
++    struct parameterized_details parameterized;
+   } details;
+   const char *c_name;
+   unsigned int typestring_offset;
+-- 
+2.28.0
+

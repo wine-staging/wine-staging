@@ -1,0 +1,542 @@
+From dfbafe5f504cc35003199e63716c9ce5c6a5729e Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Mon, 12 Oct 2020 17:38:53 +0200
+Subject: [PATCH 22/28] widl: Support WinRT parameterized interface type.
+
+This allows parameterized interfaces to be instanciated in declare
+blocks, in the same way MIDL does, generating a new interface to the
+header from the parameterized type template, replacing its parameters
+with the given types.
+---
+ include/windows.media.speechsynthesis.idl |  23 ++
+ tools/widl/header.c                       |   7 +-
+ tools/widl/parser.l                       |   1 +
+ tools/widl/parser.y                       |  63 +++++-
+ tools/widl/typetree.c                     | 243 ++++++++++++++++++++++
+ tools/widl/typetree.h                     |   2 +
+ 6 files changed, 334 insertions(+), 5 deletions(-)
+
+diff --git a/include/windows.media.speechsynthesis.idl b/include/windows.media.speechsynthesis.idl
+index 89fe616b9b3..40c45c82051 100644
+--- a/include/windows.media.speechsynthesis.idl
++++ b/include/windows.media.speechsynthesis.idl
+@@ -35,6 +35,18 @@ namespace Windows {
+     }
+ }
+ 
++namespace Windows {
++    namespace Media {
++        namespace SpeechSynthesis {
++            declare {
++                interface Windows.Foundation.Collections.IIterator<Windows.Media.SpeechSynthesis.VoiceInformation*>;
++                interface Windows.Foundation.Collections.IIterable<Windows.Media.SpeechSynthesis.VoiceInformation*>;
++                interface Windows.Foundation.Collections.IVectorView<Windows.Media.SpeechSynthesis.VoiceInformation*>;
++            }
++        }
++    }
++}
++
+ namespace Windows {
+     namespace Media {
+         namespace SpeechSynthesis {
+@@ -59,6 +71,17 @@ namespace Windows {
+                 [propget] HRESULT Gender([out] [retval] VoiceGender* value);
+             }
+ 
++            [
++                contract(Windows.Foundation.UniversalApiContract, 1.0),
++                exclusiveto(Windows.Media.SpeechSynthesis.SpeechSynthesizer),
++                uuid(7d526ecc-7533-4c3f-85be-888c2baeebdc)
++            ]
++            interface IInstalledVoicesStatic : IInspectable
++            {
++                [propget] HRESULT AllVoices([out, retval] Windows.Foundation.Collections.IVectorView<VoiceInformation*>** value);
++                [propget] HRESULT DefaultVoice([out, retval] VoiceInformation** value);
++            }
++
+             [
+                 contract(Windows.Foundation.UniversalApiContract, 1.0),
+                 marshaling_behavior(agile)
+diff --git a/tools/widl/header.c b/tools/widl/header.c
+index 283f2372fee..db83f3aac13 100644
+--- a/tools/widl/header.c
++++ b/tools/widl/header.c
+@@ -1492,7 +1492,8 @@ static void write_forward(FILE *header, type_t *iface)
+   fprintf(header, "typedef interface %s %s;\n", iface->c_name, iface->c_name);
+   fprintf(header, "#ifdef __cplusplus\n");
+   write_namespace_start(header, iface->namespace);
+-  write_line(header, 0, "interface %s;", iface->name);
++  if (strchr(iface->name, '<')) write_line(header, 0, "template<> struct %s;", iface->name);
++  else write_line(header, 0, "interface %s;", iface->name);
+   write_namespace_end(header, iface->namespace);
+   fprintf(header, "#endif /* __cplusplus */\n");
+   fprintf(header, "#endif\n\n" );
+@@ -1655,11 +1656,13 @@ static void write_com_interface_end(FILE *header, type_t *iface)
+       write_namespace_start(header, iface->namespace);
+   }
+   if (uuid) {
++      if (strchr(iface->name, '<')) write_line(header, 0, "template<>");
+       write_line(header, 0, "MIDL_INTERFACE(\"%s\")", uuid_string(uuid));
+       indent(header, 0);
+   }else {
+       indent(header, 0);
+-      fprintf(header, "interface ");
++      if (strchr(iface->name, '<')) fprintf(header, "template<> struct ");
++      else fprintf(header, "interface ");
+   }
+   if (type_iface_get_inherit(iface))
+   {
+diff --git a/tools/widl/parser.l b/tools/widl/parser.l
+index a47c490ec4c..b7f8844c7a9 100644
+--- a/tools/widl/parser.l
++++ b/tools/widl/parser.l
+@@ -276,6 +276,7 @@ static const struct keyword keywords[] = {
+ 	{"coclass",         tCOCLASS,        0},
+ 	{"const",           tCONST,          0},
+ 	{"cpp_quote",       tCPPQUOTE,       0},
++	{"declare",         tDECLARE,        1},
+ 	{"default",         tDEFAULT,        0},
+ 	{"dispinterface",   tDISPINTERFACE,  0},
+ 	{"double",          tDOUBLE,         0},
+diff --git a/tools/widl/parser.y b/tools/widl/parser.y
+index c9806ced633..2fb73a46dc1 100644
+--- a/tools/widl/parser.y
++++ b/tools/widl/parser.y
+@@ -83,6 +83,7 @@ static void push_lookup_namespace(const char *name);
+ static void push_parameters_namespace(const char *name);
+ static void pop_parameters_namespace(const char *name);
+ 
++static statement_list_t *append_parameterized_type_stmts(statement_list_t *stmts);
+ static void check_arg_attrs(const var_t *arg);
+ static void check_statements(const statement_list_t *stmts, int is_inside_library);
+ static void check_all_user_types(const statement_list_t *stmts);
+@@ -117,6 +118,7 @@ static statement_t *make_statement_importlib(const char *str);
+ static statement_t *make_statement_module(type_t *type);
+ static statement_t *make_statement_typedef(var_list_t *names, int declonly);
+ static statement_t *make_statement_import(const char *str);
++static statement_t *make_statement_parameterized_type(type_t *type, type_list_t *params);
+ static statement_list_t *append_statement(statement_list_t *list, statement_t *stmt);
+ static statement_list_t *append_statements(statement_list_t *, statement_list_t *);
+ static attr_list_t *append_attribs(attr_list_t *, attr_list_t *);
+@@ -128,6 +130,7 @@ static struct namespace global_namespace = {
+ static struct namespace *current_namespace = &global_namespace;
+ static struct namespace *lookup_namespace = &global_namespace;
+ static struct namespace *parameters_namespace = NULL;
++static statement_list_t *parameterized_type_stmts = NULL;
+ 
+ static typelib_t *current_typelib;
+ 
+@@ -188,6 +191,7 @@ static typelib_t *current_typelib;
+ %token tCONTRACT
+ %token tCONTRACTVERSION
+ %token tCONTROL tCPPQUOTE
++%token tDECLARE
+ %token tDECODE tDEFAULT tDEFAULTBIND
+ %token tDEFAULTCOLLELEM
+ %token tDEFAULTVALUE
+@@ -325,6 +329,8 @@ static typelib_t *current_typelib;
+ %type <typelib> library_start librarydef
+ %type <statement> statement typedef pragma_warning
+ %type <stmt_list> gbl_statements imp_statements int_statements
++%type <stmt_list> decl_block decl_statements
++%type <stmt_list> imp_decl_block imp_decl_statements
+ %type <warning_list> warnings
+ 
+ %left ','
+@@ -346,7 +352,8 @@ static typelib_t *current_typelib;
+ 
+ %%
+ 
+-input: gbl_statements m_acf			{ check_statements($1, FALSE);
++input: gbl_statements m_acf			{ $1 = append_parameterized_type_stmts($1);
++						  check_statements($1, FALSE);
+ 						  check_all_user_types($1);
+ 						  write_header($1);
+ 						  write_id_data($1);
+@@ -362,6 +369,22 @@ input: gbl_statements m_acf			{ check_statements($1, FALSE);
+ 
+ m_acf: /* empty */ | aACF acf_statements
+ 
++decl_statements:				{ $$ = NULL; }
++	| decl_statements tINTERFACE qualified_type '<' parameterized_types '>' ';'
++						{ parameterized_type_stmts = append_statement(parameterized_type_stmts, make_statement_parameterized_type($3, $5));
++						  $$ = append_statement($1, make_statement_reference(type_parameterized_type_specialize_declare($3, $5)));
++						}
++	;
++
++decl_block: tDECLARE '{' decl_statements '}' { $$ = $3; }
++
++imp_decl_statements:				{ $$ = NULL; }
++	| imp_decl_statements tINTERFACE qualified_type '<' parameterized_types '>' ';'
++						{ $$ = append_statement($1, make_statement_reference(type_parameterized_type_specialize_declare($3, $5))); }
++	;
++
++imp_decl_block: tDECLARE '{' imp_decl_statements '}' { $$ = $3; }
++
+ gbl_statements:					{ $$ = NULL; }
+ 	| gbl_statements namespacedef '{' { push_namespace($2); } gbl_statements '}'
+ 						{ pop_namespace($2); $$ = append_statements($1, $5); }
+@@ -381,6 +404,7 @@ gbl_statements:					{ $$ = NULL; }
+ 	| gbl_statements moduledef		{ $$ = append_statement($1, make_statement_module($2)); }
+ 	| gbl_statements librarydef		{ $$ = append_statement($1, make_statement_library($2)); }
+ 	| gbl_statements statement		{ $$ = append_statement($1, $2); }
++	| gbl_statements decl_block		{ $$ = append_statements($1, $2); }
+ 	;
+ 
+ imp_statements:					{ $$ = NULL; }
+@@ -401,6 +425,7 @@ imp_statements:					{ $$ = NULL; }
+ 	| imp_statements statement		{ $$ = append_statement($1, $2); }
+ 	| imp_statements importlib		{ $$ = append_statement($1, make_statement_importlib($2)); }
+ 	| imp_statements librarydef		{ $$ = append_statement($1, make_statement_library($2)); }
++	| imp_statements imp_decl_block		{ $$ = append_statements($1, $2); }
+ 	;
+ 
+ int_statements:					{ $$ = NULL; }
+@@ -3121,6 +3146,27 @@ static void check_async_uuid(type_t *iface)
+     iface->details.iface->async_iface = async_iface->details.iface->async_iface = async_iface;
+ }
+ 
++static statement_list_t *append_parameterized_type_stmts(statement_list_t *stmts)
++{
++    statement_t *stmt, *next;
++    if (stmts && parameterized_type_stmts) LIST_FOR_EACH_ENTRY_SAFE(stmt, next, parameterized_type_stmts, statement_t, entry)
++    {
++        switch(stmt->type) {
++        case STMT_TYPE:
++            stmt->u.type = type_parameterized_type_specialize_define(stmt->u.type_list->type, stmt->u.type_list->next);
++            stmt->declonly = FALSE;
++            list_remove(&stmt->entry);
++            stmts = append_statement(stmts, stmt);
++            break;
++        default:
++            assert(0); /* should not be there */
++            break;
++        }
++    }
++
++    return stmts;
++}
++
+ static void check_statements(const statement_list_t *stmts, int is_inside_library)
+ {
+     const statement_t *stmt;
+@@ -3302,6 +3348,15 @@ static statement_t *make_statement_typedef(declarator_list_t *decls, int declonl
+     return stmt;
+ }
+ 
++static statement_t *make_statement_parameterized_type(type_t *type, type_list_t *params)
++{
++    statement_t *stmt = make_statement(STMT_TYPE);
++    stmt->u.type_list = xmalloc(sizeof(type_list_t));
++    stmt->u.type_list->type = type;
++    stmt->u.type_list->next = params;
++    return stmt;
++}
++
+ static statement_list_t *append_statements(statement_list_t *l1, statement_list_t *l2)
+ {
+     if (!l2) return l1;
+@@ -3353,8 +3408,10 @@ type_t *find_parameterized_type(type_t *type, type_list_t *params, int t)
+         assert(type->type_type == TYPE_PARAMETERIZED_TYPE);
+         type = type_parameterized_type_specialize_partial(type, params);
+     }
+-    /* FIXME: If not in another parameterized type, we'll have to look for the declared specialization. */
+-    else error_loc("parameterized type '%s' not declared\n", name);
++    else if ((type = find_type(name, type->namespace, t)))
++        assert(type->type_type != TYPE_PARAMETERIZED_TYPE);
++    else
++        error_loc("parameterized type '%s' not declared\n", name);
+ 
+     free(name);
+     return type;
+diff --git a/tools/widl/typetree.c b/tools/widl/typetree.c
+index 9d50cabf172..8f1e2d71aff 100644
+--- a/tools/widl/typetree.c
++++ b/tools/widl/typetree.c
+@@ -128,6 +128,21 @@ static int format_parameterized_type_name_buffer(char *buf, size_t len, type_t *
+     return ret;
+ }
+ 
++static int format_parameterized_type_c_name_buffer(char *buf, size_t len, type_t *type, type_list_t *params)
++{
++    type_list_t *entry;
++    int ret = 0, count = 0;
++    append_buf(format_namespace_buffer, type->namespace, "__x_", "_C", type->name, use_abi_namespace ? "ABI" : NULL);
++    for (entry = params; entry; entry = entry->next) count++;
++    append_buf(snprintf, "_%d", count);
++    for (entry = params; entry; entry = entry->next)
++    {
++        for (type = entry->type; type->type_type == TYPE_POINTER; type = type_pointer_get_ref_type(type)) {}
++        append_buf(format_namespace_buffer, type->namespace, "_", "__C", type->name, NULL);
++    }
++    return ret;
++}
++
+ #undef append_buf
+ 
+ char *format_namespace(struct namespace *namespace, const char *prefix, const char *separator, const char *suffix, const char *abi_prefix)
+@@ -146,6 +161,31 @@ char *format_parameterized_type_name(type_t *type, type_list_t *params)
+     return buf;
+ }
+ 
++static char const *parameterized_type_shorthands[][2] = {
++    {"Windows_CFoundation_CCollections_C", "__F"},
++    {"Windows_CFoundation_C", "__F"},
++};
++
++static char *format_parameterized_type_c_name(type_t *type, type_list_t *params)
++{
++    int i, len = format_parameterized_type_c_name_buffer(NULL, 0, type, params);
++    char *buf = xmalloc(len + 1), *tmp;
++    format_parameterized_type_c_name_buffer(buf, len + 1, type, params);
++
++    for (i = 0; i < ARRAY_SIZE(parameterized_type_shorthands); ++i)
++    {
++        if ((tmp = strstr(buf, parameterized_type_shorthands[i][0])) &&
++            (tmp - buf) == strlen(use_abi_namespace ? "__x_ABI_C" : "__x_C"))
++        {
++           tmp += strlen(parameterized_type_shorthands[i][0]);
++           strcpy(buf, parameterized_type_shorthands[i][1]);
++           memmove(buf + 3, tmp, len - (tmp - buf) + 1);
++        }
++    }
++
++    return buf;
++}
++
+ type_t *type_new_function(var_list_t *args)
+ {
+     var_t *arg;
+@@ -483,6 +523,177 @@ static unsigned int compute_method_indexes(type_t *iface)
+     return idx;
+ }
+ 
++static type_t *replace_type_parameters_in_type(type_t *type, type_list_t *orig, type_list_t *repl);
++
++static type_list_t *replace_type_parameters_in_type_list(type_list_t *type_list, type_list_t *orig, type_list_t *repl)
++{
++    type_list_t *entry, *new_entry, **next, *first = NULL;
++
++    if (!type_list) return type_list;
++
++    next = &first;
++    for (entry = type_list; entry; entry = entry->next)
++    {
++        new_entry = xmalloc(sizeof(*new_entry));
++        new_entry->type = replace_type_parameters_in_type(entry->type, orig, repl);
++        new_entry->next = NULL;
++        *next = new_entry;
++        next = &new_entry->next;
++    }
++
++    return first;
++}
++
++static var_t *replace_type_parameters_in_var(var_t *var, type_list_t *orig, type_list_t *repl)
++{
++    var_t *new_var = xmalloc(sizeof(*new_var));
++    *new_var = *var;
++    list_init(&new_var->entry);
++    new_var->declspec.type = replace_type_parameters_in_type(var->declspec.type, orig, repl);
++    return new_var;
++}
++
++static var_list_t *replace_type_parameters_in_var_list(var_list_t *var_list, type_list_t *orig, type_list_t *repl)
++{
++    var_list_t *new_var_list;
++    var_t *var, *new_var;
++
++    if (!var_list) return var_list;
++
++    new_var_list = xmalloc(sizeof(*new_var_list));
++    list_init(new_var_list);
++
++    LIST_FOR_EACH_ENTRY(var, var_list, var_t, entry)
++    {
++        new_var = replace_type_parameters_in_var(var, orig, repl);
++        list_add_tail(new_var_list, &new_var->entry);
++    }
++
++    return new_var_list;
++}
++
++static statement_t *replace_type_parameters_in_statement(statement_t *stmt, type_list_t *orig, type_list_t *repl)
++{
++    statement_t *new_stmt = xmalloc(sizeof(*new_stmt));
++    *new_stmt = *stmt;
++    list_init(&new_stmt->entry);
++
++    switch (stmt->type)
++    {
++    case STMT_DECLARATION:
++        new_stmt->u.var = replace_type_parameters_in_var(stmt->u.var, orig, repl);
++        break;
++    case STMT_LIBRARY:
++    case STMT_TYPE:
++    case STMT_TYPEREF:
++    case STMT_MODULE:
++    case STMT_TYPEDEF:
++        new_stmt->u.type_list = replace_type_parameters_in_type_list(stmt->u.type_list, orig, repl);
++        break;
++    case STMT_IMPORT:
++    case STMT_IMPORTLIB:
++    case STMT_PRAGMA:
++    case STMT_CPPQUOTE:
++        fprintf(stderr, "%d\n", stmt->type);
++        assert(0);
++        break;
++    }
++
++    return new_stmt;
++}
++
++static statement_list_t *replace_type_parameters_in_statement_list(statement_list_t *stmt_list, type_list_t *orig, type_list_t *repl)
++{
++    statement_list_t *new_stmt_list;
++    statement_t *stmt, *new_stmt;
++
++    if (!stmt_list) return stmt_list;
++
++    new_stmt_list = xmalloc(sizeof(*new_stmt_list));
++    list_init(new_stmt_list);
++
++    LIST_FOR_EACH_ENTRY(stmt, stmt_list, statement_t, entry)
++    {
++        new_stmt = replace_type_parameters_in_statement(stmt, orig, repl);
++        list_add_tail(new_stmt_list, &new_stmt->entry);
++    }
++
++    return new_stmt_list;
++}
++
++static type_t *replace_type_parameters_in_type(type_t *type, type_list_t *orig, type_list_t *repl)
++{
++    type_list_t *o, *r;
++    type_t *t;
++
++    if (!type) return type;
++    switch (type->type_type)
++    {
++    case TYPE_VOID:
++    case TYPE_BASIC:
++    case TYPE_ENUM:
++    case TYPE_BITFIELD:
++    case TYPE_INTERFACE:
++    case TYPE_RUNTIMECLASS:
++        return type;
++    case TYPE_PARAMETER:
++        for (o = orig, r = repl; o && r; o = o->next, r = r->next)
++            if (type == o->type) return r->type;
++        return type;
++    case TYPE_POINTER:
++        t = replace_type_parameters_in_type(type->details.pointer.ref.type, orig, repl);
++        if (t == type->details.pointer.ref.type) return type;
++        type = duptype(type, 0);
++        type->details.pointer.ref.type = t;
++        return type;
++    case TYPE_ALIAS:
++        t = replace_type_parameters_in_type(type->details.alias.aliasee.type, orig, repl);
++        if (t == type->details.alias.aliasee.type) return type;
++        type = duptype(type, 0);
++        type->details.alias.aliasee.type = t;
++        return type;
++    case TYPE_ARRAY:
++        t = replace_type_parameters_in_type(type->details.array.elem.type, orig, repl);
++        if (t == t->details.array.elem.type) return type;
++        type = duptype(type, 0);
++        t->details.array.elem.type = t;
++        return type;
++    case TYPE_FUNCTION:
++        t = duptype(type, 0);
++        t->details.function = xmalloc(sizeof(*t->details.function));
++        t->details.function->args = replace_type_parameters_in_var_list(type->details.function->args, orig, repl);
++        t->details.function->retval = replace_type_parameters_in_var(type->details.function->retval, orig, repl);
++        return t;
++    case TYPE_PARAMETERIZED_TYPE:
++        t = type->details.parameterized.type;
++        if (t->type_type != TYPE_PARAMETERIZED_TYPE) return find_parameterized_type(type, repl, 0);
++        repl = replace_type_parameters_in_type_list(type->details.parameterized.params, orig, repl);
++        return replace_type_parameters_in_type(t, t->details.parameterized.params, repl);
++    case TYPE_STRUCT:
++    case TYPE_ENCAPSULATED_UNION:
++    case TYPE_UNION:
++    case TYPE_MODULE:
++    case TYPE_COCLASS:
++    case TYPE_APICONTRACT:
++        assert(0); /* FIXME: implement when needed */
++        break;
++    }
++
++    return type;
++}
++
++static void type_parameterized_interface_specialize(type_t *tmpl, type_t *iface, type_list_t *orig, type_list_t *repl)
++{
++    iface->details.iface = xmalloc(sizeof(*iface->details.iface));
++    iface->details.iface->disp_methods = NULL;
++    iface->details.iface->disp_props = NULL;
++    iface->details.iface->stmts = replace_type_parameters_in_statement_list(tmpl->details.iface->stmts, orig, repl);
++    iface->details.iface->inherit = replace_type_parameters_in_type(tmpl->details.iface->inherit, orig, repl);
++    iface->details.iface->disp_inherit = NULL;
++    iface->details.iface->async_iface = NULL;
++    iface->details.iface->requires = NULL;
++}
++
+ type_t *type_parameterized_type_specialize_partial(type_t *type, type_list_t *params)
+ {
+     type_t *new_type = duptype(type, 0);
+@@ -491,6 +702,38 @@ type_t *type_parameterized_type_specialize_partial(type_t *type, type_list_t *pa
+     return new_type;
+ }
+ 
++type_t *type_parameterized_type_specialize_declare(type_t *type, type_list_t *params)
++{
++    type_t *tmpl = type->details.parameterized.type;
++    type_t *new_type = duptype(tmpl, 0);
++
++    new_type->namespace = type->namespace;
++    new_type->name = format_parameterized_type_name(type, params);
++    reg_type(new_type, new_type->name, new_type->namespace, 0);
++    new_type->c_name = format_parameterized_type_c_name(type, params);
++
++    return new_type;
++}
++
++type_t *type_parameterized_type_specialize_define(type_t *type, type_list_t *params)
++{
++    type_list_t *orig = type->details.parameterized.params;
++    type_t *tmpl = type->details.parameterized.type;
++    type_t *iface = find_parameterized_type(type, params, 0);
++
++    if (tmpl->type_type == TYPE_INTERFACE)
++        type_parameterized_interface_specialize(tmpl, iface, orig, params);
++    else
++    {
++        error_loc("Unsupported parameterized type template %d\n", tmpl->type_type);
++        return NULL;
++    }
++
++    iface->defined = TRUE;
++    compute_method_indexes(iface);
++    return iface;
++}
++
+ void type_parameterized_interface_declare(type_t *type, type_list_t *params)
+ {
+     type_t *iface = make_type(TYPE_INTERFACE);
+diff --git a/tools/widl/typetree.h b/tools/widl/typetree.h
+index 472fdf2d5fc..e1a52d21d09 100644
+--- a/tools/widl/typetree.h
++++ b/tools/widl/typetree.h
+@@ -46,6 +46,8 @@ type_t *type_new_encapsulated_union(char *name, var_t *switch_field, var_t *unio
+ type_t *type_new_bitfield(type_t *field_type, const expr_t *bits);
+ type_t *type_new_runtimeclass(char *name, struct namespace *namespace);
+ type_t *type_parameterized_type_specialize_partial(type_t *type, type_list_t *params);
++type_t *type_parameterized_type_specialize_declare(type_t *type, type_list_t *params);
++type_t *type_parameterized_type_specialize_define(type_t *type, type_list_t *params);
+ type_t *find_parameterized_type(type_t *type, type_list_t *params, int t);
+ void type_parameterized_interface_declare(type_t *type, type_list_t *params);
+ void type_parameterized_interface_define(type_t *type, type_list_t *params, type_t *inherit, statement_list_t *stmts);
+-- 
+2.28.0
+

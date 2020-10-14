@@ -1,0 +1,181 @@
+From f8fa58f5bdfac8adc9fba4af5ff294a11f48b556 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Mon, 28 Sep 2020 16:46:34 +0200
+Subject: [PATCH 24/28] widl: Support WinRT parameterized delegate type.
+
+---
+ include/windows.foundation.idl |  6 ++++
+ tools/widl/parser.y            | 11 +++++++
+ tools/widl/typetree.c          | 56 +++++++++++++++++++++++++++++-----
+ tools/widl/typetree.h          |  1 +
+ 4 files changed, 67 insertions(+), 7 deletions(-)
+
+diff --git a/include/windows.foundation.idl b/include/windows.foundation.idl
+index 5f7a49c38e4..9583fa5bcc8 100644
+--- a/include/windows.foundation.idl
++++ b/include/windows.foundation.idl
+@@ -113,6 +113,12 @@ namespace Windows {
+         }
+ 
+ #ifdef __WIDL__
++        [
++            contract(Windows.Foundation.FoundationContract, 1.0),
++            uuid(9de1c535-6ae1-11e0-84e1-18a905bcc53f)
++        ]
++        delegate void EventHandler<T>([in] IInspectable *sender, [in] T args);
++
+         namespace Collections
+         {
+             [
+diff --git a/tools/widl/parser.y b/tools/widl/parser.y
+index d0166eb3af2..f7fb7a303a8 100644
+--- a/tools/widl/parser.y
++++ b/tools/widl/parser.y
+@@ -1080,6 +1080,17 @@ delegatedef:
+ 						  type_delegate_define($$, append_statement(NULL, make_statement_delegate($3, $6)));
+ 						  check_async_uuid($$);
+ 						}
++	| m_attributes tDELEGATE type ident
++	  '<' { push_parameters_namespace($4->name); } type_parameters '>'
++	  '(' m_args ')'
++	  semicolon_opt				{ $$ = get_type(TYPE_DELEGATE, $4->name, current_namespace, 0);
++						  check_def($$);
++						  $$->attrs = check_iface_attrs($$->name, $1);
++						  $$->defined = TRUE;
++						  type_parameterized_delegate_define($$, $7, append_statement(NULL, make_statement_delegate($3, $10)));
++						  check_async_uuid($$);
++						  pop_parameters_namespace($4->name);
++						}
+ 	;
+ 
+ required_types:
+diff --git a/tools/widl/typetree.c b/tools/widl/typetree.c
+index 15629113cec..03778aa75c3 100644
+--- a/tools/widl/typetree.c
++++ b/tools/widl/typetree.c
+@@ -128,13 +128,13 @@ static int format_parameterized_type_name_buffer(char *buf, size_t len, type_t *
+     return ret;
+ }
+ 
+-static int format_parameterized_type_c_name_buffer(char *buf, size_t len, type_t *type, type_list_t *params)
++static int format_parameterized_type_c_name_buffer(char *buf, size_t len, type_t *type, type_list_t *params, const char *prefix)
+ {
+     type_list_t *entry;
+     int ret = 0, count = 0;
+-    append_buf(format_namespace_buffer, type->namespace, "__x_", "_C", type->name, use_abi_namespace ? "ABI" : NULL);
++    append_buf(format_namespace_buffer, type->namespace, "__x_", "_C", "", use_abi_namespace ? "ABI" : NULL);
+     for (entry = params; entry; entry = entry->next) count++;
+-    append_buf(snprintf, "_%d", count);
++    append_buf(snprintf, "%s%s_%d", prefix, type->name, count);
+     for (entry = params; entry; entry = entry->next)
+     {
+         for (type = entry->type; type->type_type == TYPE_POINTER; type = type_pointer_get_ref_type(type)) {}
+@@ -166,11 +166,11 @@ static char const *parameterized_type_shorthands[][2] = {
+     {"Windows_CFoundation_C", "__F"},
+ };
+ 
+-static char *format_parameterized_type_c_name(type_t *type, type_list_t *params)
++static char *format_parameterized_type_c_name(type_t *type, type_list_t *params, const char *prefix)
+ {
+-    int i, len = format_parameterized_type_c_name_buffer(NULL, 0, type, params);
++    int i, len = format_parameterized_type_c_name_buffer(NULL, 0, type, params, prefix);
+     char *buf = xmalloc(len + 1), *tmp;
+-    format_parameterized_type_c_name_buffer(buf, len + 1, type, params);
++    format_parameterized_type_c_name_buffer(buf, len + 1, type, params, prefix);
+ 
+     for (i = 0; i < ARRAY_SIZE(parameterized_type_shorthands); ++i)
+     {
+@@ -702,6 +702,11 @@ static void type_parameterized_interface_specialize(type_t *tmpl, type_t *iface,
+     iface->details.iface->requires = NULL;
+ }
+ 
++static void type_parameterized_delegate_specialize(type_t *tmpl, type_t *delegate, type_list_t *orig, type_list_t *repl)
++{
++    type_parameterized_interface_specialize(tmpl->details.delegate.iface, delegate->details.delegate.iface, orig, repl);
++}
++
+ type_t *type_parameterized_type_specialize_partial(type_t *type, type_list_t *params)
+ {
+     type_t *new_type = duptype(type, 0);
+@@ -718,7 +723,15 @@ type_t *type_parameterized_type_specialize_declare(type_t *type, type_list_t *pa
+     new_type->namespace = type->namespace;
+     new_type->name = format_parameterized_type_name(type, params);
+     reg_type(new_type, new_type->name, new_type->namespace, 0);
+-    new_type->c_name = format_parameterized_type_c_name(type, params);
++    new_type->c_name = format_parameterized_type_c_name(type, params, "");
++
++    if (new_type->type_type == TYPE_DELEGATE)
++    {
++        new_type->details.delegate.iface = duptype(tmpl->details.delegate.iface, 0);
++        compute_delegate_iface_name(new_type);
++        new_type->details.delegate.iface->namespace = new_type->namespace;
++        new_type->details.delegate.iface->c_name = format_parameterized_type_c_name(type, params, "I");
++    }
+ 
+     return new_type;
+ }
+@@ -731,6 +744,8 @@ type_t *type_parameterized_type_specialize_define(type_t *type, type_list_t *par
+ 
+     if (tmpl->type_type == TYPE_INTERFACE)
+         type_parameterized_interface_specialize(tmpl, iface, orig, params);
++    else if (tmpl->type_type == TYPE_DELEGATE)
++        type_parameterized_delegate_specialize(tmpl, iface, orig, params);
+     else
+     {
+         error_loc("Unsupported parameterized type template %d\n", tmpl->type_type);
+@@ -738,6 +753,11 @@ type_t *type_parameterized_type_specialize_define(type_t *type, type_list_t *par
+     }
+ 
+     iface->defined = TRUE;
++    if (iface->type_type == TYPE_DELEGATE)
++    {
++        iface = iface->details.delegate.iface;
++        iface->defined = TRUE;
++    }
+     compute_method_indexes(iface);
+     return iface;
+ }
+@@ -807,6 +827,28 @@ void type_delegate_define(type_t *delegate, statement_list_t *stmts)
+     compute_delegate_iface_name(delegate);
+ }
+ 
++void type_parameterized_delegate_define(type_t *type, type_list_t *params, statement_list_t *stmts)
++{
++    type_t *delegate = make_type(TYPE_DELEGATE);
++    type_t *iface = make_type(TYPE_INTERFACE);
++
++    type->type_type = TYPE_PARAMETERIZED_TYPE;
++    type->details.parameterized.type = delegate;
++    type->details.parameterized.params = params;
++
++    delegate->details.delegate.iface = iface;
++
++    iface->details.iface = xmalloc(sizeof(*iface->details.iface));
++    iface->details.iface->disp_props = NULL;
++    iface->details.iface->disp_methods = NULL;
++    iface->details.iface->stmts = stmts;
++    iface->details.iface->inherit = find_type("IUnknown", NULL, 0);
++    if (!iface->details.iface->inherit) error_loc("IUnknown is undefined\n");
++    iface->details.iface->disp_inherit = NULL;
++    iface->details.iface->async_iface = NULL;
++    iface->details.iface->requires = NULL;
++}
++
+ void type_dispinterface_define(type_t *iface, var_list_t *props, var_list_t *methods)
+ {
+     iface->details.iface = xmalloc(sizeof(*iface->details.iface));
+diff --git a/tools/widl/typetree.h b/tools/widl/typetree.h
+index de3db4e7c7e..939bc5b412e 100644
+--- a/tools/widl/typetree.h
++++ b/tools/widl/typetree.h
+@@ -53,6 +53,7 @@ void type_parameterized_interface_declare(type_t *type, type_list_t *params);
+ void type_parameterized_interface_define(type_t *type, type_list_t *params, type_t *inherit, statement_list_t *stmts);
+ void type_interface_define(type_t *iface, type_t *inherit, statement_list_t *stmts, type_list_t *requires);
+ void type_delegate_define(type_t *iface, statement_list_t *stmts);
++void type_parameterized_delegate_define(type_t *type, type_list_t *params, statement_list_t *stmts);
+ void type_dispinterface_define(type_t *iface, var_list_t *props, var_list_t *methods);
+ void type_dispinterface_define_from_iface(type_t *dispiface, type_t *iface);
+ void type_module_define(type_t *module, statement_list_t *stmts);
+-- 
+2.28.0
+
