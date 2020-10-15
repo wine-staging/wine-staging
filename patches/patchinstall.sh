@@ -2661,33 +2661,33 @@ fi
 # |   *	[#49692] mfplat: Improved support for multiple video formats.
 # |
 # | Modified files:
-# |   *	configure.ac, dlls/mf/Makefile.in, dlls/mf/handler.c, dlls/mf/handler.h, dlls/mf/main.c, dlls/mf/sar.c,
-# | 	dlls/mf/session.c, dlls/mf/tests/mf.c, dlls/mf/topology.c, dlls/mfplat/mediatype.c, dlls/mfplat/tests/mfplat.c,
-# | 	dlls/mfplat/tests/test.mp4, dlls/mfreadwrite/reader.c, dlls/mfreadwrite/tests/mfplat.c,
-# | 	dlls/mfreadwrite/tests/resource.rc, dlls/mfreadwrite/tests/test.mp4, dlls/winegstreamer/Makefile.in,
-# | 	dlls/winegstreamer/audioconvert.c, dlls/winegstreamer/colorconvert.c, dlls/winegstreamer/gst_cbs.c,
-# | 	dlls/winegstreamer/gst_cbs.h, dlls/winegstreamer/gst_private.h, dlls/winegstreamer/main.c,
-# | 	dlls/winegstreamer/media_source.c, dlls/winegstreamer/mf_decode.c, dlls/winegstreamer/mfplat.c,
-# | 	dlls/winegstreamer/winegstreamer_classes.idl, include/mfidl.idl, tools/make_makefiles, tools/makedep.c
+# |   *	dlls/mf/Makefile.in, dlls/mf/handler.c, dlls/mf/handler.h, dlls/mf/main.c, dlls/mf/sar.c, dlls/mf/session.c,
+# | 	dlls/mf/tests/mf.c, dlls/mf/topology.c, dlls/mfplat/mediatype.c, dlls/mfplat/tests/mfplat.c, dlls/mfplat/tests/test.mp4,
+# | 	dlls/mfreadwrite/reader.c, dlls/mfreadwrite/tests/mfplat.c, dlls/mfreadwrite/tests/resource.rc,
+# | 	dlls/mfreadwrite/tests/test.mp4, dlls/winegstreamer/Makefile.in, dlls/winegstreamer/audioconvert.c,
+# | 	dlls/winegstreamer/colorconvert.c, dlls/winegstreamer/gst_cbs.c, dlls/winegstreamer/gst_cbs.h,
+# | 	dlls/winegstreamer/gst_private.h, dlls/winegstreamer/main.c, dlls/winegstreamer/media_source.c,
+# | 	dlls/winegstreamer/mf_decode.c, dlls/winegstreamer/mfplat.c, dlls/winegstreamer/winegstreamer_classes.idl,
+# | 	include/mfidl.idl, tools/make_makefiles, tools/makedep.c
 # |
 if test "$enable_mfplat_streaming_support" -eq 1; then
-	patch_apply mfplat-streaming-support/0001-winegstreamer-Insert-parser-into-pipeline-to-rectify.patch
+	patch_apply mfplat-streaming-support/0001-mf-Unconditionally-deliver-NULL-EOS-samples.patch
 	patch_apply mfplat-streaming-support/0002-winegstreamer-Insert-videoconvert-into-decoded-video.patch
 	patch_apply mfplat-streaming-support/0003-winegstreamer-Insert-audioconvert-into-decoded-audio.patch
-	patch_apply mfplat-streaming-support/0004-winegstreamer-Translate-H.264-caps-to-attributes.patch
-	patch_apply mfplat-streaming-support/0005-winegstreamer-Translate-WMV-caps-to-attributes.patch
-	patch_apply mfplat-streaming-support/0006-winegstreamer-Translate-AAC-caps-to-attributes.patch
-	patch_apply mfplat-streaming-support/0007-winegstreamer-Translate-MPEG-4-Section-2-caps-to-att.patch
-	patch_apply mfplat-streaming-support/0008-winegstreamer-Translate-WMA-caps-to-attributes.patch
-	patch_apply mfplat-streaming-support/0009-winegstreamer-Implement-IMFMediaSource-CreatePresent.patch
-	patch_apply mfplat-streaming-support/0010-winegstreamer-Introduce-IMFMediaType-GstCaps-convert.patch
-	patch_apply mfplat-streaming-support/0011-winegstreamer-Translate-H.264-attributes-to-caps.patch
-	patch_apply mfplat-streaming-support/0012-winegstreamer-Translate-WMV-attributes-to-caps.patch
-	patch_apply mfplat-streaming-support/0013-winegstreamer-Translate-AAC-attributes-to-caps.patch
-	patch_apply mfplat-streaming-support/0014-winegstreamer-Translate-MPEG-4-Section-2-attributes-.patch
-	patch_apply mfplat-streaming-support/0015-winegstreamer-Translate-WMA-attributes-to-caps.patch
-	patch_apply mfplat-streaming-support/0016-winegstreamer-Implement-IMFMediaSource-Start.patch
-	patch_apply mfplat-streaming-support/0017-winegstreamer-Implement-IMFMediaStream-RequestSample.patch
+	patch_apply mfplat-streaming-support/0004-winegstreamer-Implement-IMFMediaSource-CreatePresent.patch
+	patch_apply mfplat-streaming-support/0005-winegstreamer-Implement-IMFMediaSource-Start.patch
+	patch_apply mfplat-streaming-support/0006-winegstreamer-Implement-IMFMediaStream-RequestSample.patch
+	patch_apply mfplat-streaming-support/0007-winegstreamer-Insert-parser-into-pipeline-to-rectify.patch
+	patch_apply mfplat-streaming-support/0008-winegstreamer-Translate-H.264-caps-to-attributes.patch
+	patch_apply mfplat-streaming-support/0009-winegstreamer-Translate-WMV-caps-to-attributes.patch
+	patch_apply mfplat-streaming-support/0010-winegstreamer-Translate-AAC-caps-to-attributes.patch
+	patch_apply mfplat-streaming-support/0011-winegstreamer-Translate-MPEG-4-Section-2-caps-to-att.patch
+	patch_apply mfplat-streaming-support/0012-winegstreamer-Translate-WMA-caps-to-attributes.patch
+	patch_apply mfplat-streaming-support/0013-winegstreamer-Translate-H.264-attributes-to-caps.patch
+	patch_apply mfplat-streaming-support/0014-winegstreamer-Translate-WMV-attributes-to-caps.patch
+	patch_apply mfplat-streaming-support/0015-winegstreamer-Translate-AAC-attributes-to-caps.patch
+	patch_apply mfplat-streaming-support/0016-winegstreamer-Translate-MPEG-4-Section-2-attributes-.patch
+	patch_apply mfplat-streaming-support/0017-winegstreamer-Translate-WMA-attributes-to-caps.patch
 	patch_apply mfplat-streaming-support/0018-winegstreamer-Implement-IMFMediaSource-GetCharacteri.patch
 	patch_apply mfplat-streaming-support/0019-winegstreamer-Calculate-the-MF_PD_DURATION-of-the-me.patch
 	patch_apply mfplat-streaming-support/0020-tools-Add-support-for-multiple-parent-directories.patch
@@ -2720,8 +2720,8 @@ if test "$enable_mfplat_streaming_support" -eq 1; then
 	patch_apply mfplat-streaming-support/0047-Rewrite-branch-resolver.patch
 	patch_apply mfplat-streaming-support/0048-mf-sar-Compare-against-native-media-type-in-IsMediaT.patch
 	patch_apply mfplat-streaming-support/0049-winegstreamer-Implement-audio-conversion-MFT.patch
+	patch_apply mfplat-streaming-support/0050-HACK-Shutdown-media-sinks-on-session-shutdown.patch
 	patch_apply mfplat-streaming-support/0053-winegstreamer-Support-eAVEncH264VProfile_Constrained.patch
-	patch_apply mfplat-streaming-support/0054-winegstreamer-Support-older-versions.patch
 fi
 
 # Patchset mmsystem.dll16-MIDIHDR_Refcount

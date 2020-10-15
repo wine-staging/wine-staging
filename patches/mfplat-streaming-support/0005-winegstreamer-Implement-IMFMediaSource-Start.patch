@@ -1,19 +1,21 @@
-From 94891a5e484b97577df09a4e6ef3106c79d2391a Mon Sep 17 00:00:00 2001
+From 747e873ecc739c3808629b8b16ae3cbf5e8a07d7 Mon Sep 17 00:00:00 2001
 From: Derek Lesho <dlesho@codeweavers.com>
-Date: Tue, 31 Mar 2020 15:10:03 -0500
+Date: Tue, 24 Mar 2020 16:15:35 -0500
 Subject: [PATCH] winegstreamer: Implement IMFMediaSource::Start.
 
 Signed-off-by: Derek Lesho <dlesho@codeweavers.com>
 ---
  dlls/mfplat/tests/mfplat.c        |   8 +-
- dlls/winegstreamer/media_source.c | 319 +++++++++++++++++++++++++++++-
- 2 files changed, 317 insertions(+), 10 deletions(-)
+ dlls/winegstreamer/gst_private.h  |   1 +
+ dlls/winegstreamer/media_source.c | 307 +++++++++++++++++++++++++++++-
+ dlls/winegstreamer/mfplat.c       | 125 ++++++++++++
+ 4 files changed, 433 insertions(+), 8 deletions(-)
 
 diff --git a/dlls/mfplat/tests/mfplat.c b/dlls/mfplat/tests/mfplat.c
-index 72d06e31880..e6a1694a11f 100644
+index 7491b53896f..ef9837c0a8a 100644
 --- a/dlls/mfplat/tests/mfplat.c
 +++ b/dlls/mfplat/tests/mfplat.c
-@@ -604,10 +604,7 @@ static void test_source_resolver(void)
+@@ -605,10 +605,7 @@ todo_wine
  
      var.vt = VT_EMPTY;
      hr = IMFMediaSource_Start(mediasource, descriptor, &GUID_NULL, &var);
@@ -24,7 +26,7 @@ index 72d06e31880..e6a1694a11f 100644
  
      get_event((IMFMediaEventGenerator *)mediasource, MENewStream, &var);
      ok(var.vt == VT_UNKNOWN, "Unexpected value type %u from MENewStream event.\n", var.vt);
-@@ -625,10 +622,13 @@ todo_wine
+@@ -626,10 +623,13 @@ todo_wine
          hr = IMFMediaStream_RequestSample(video_stream, NULL);
          if (i == sample_count)
              break;
@@ -38,7 +40,7 @@ index 72d06e31880..e6a1694a11f 100644
  
      for (i = 0; i < sample_count; ++i)
      {
-@@ -666,11 +666,11 @@ todo_wine
+@@ -667,11 +667,11 @@ todo_wine
  
      hr = IMFMediaStream_RequestSample(video_stream, NULL);
      ok(hr == MF_E_END_OF_STREAM, "Unexpected hr %#x.\n", hr);
@@ -51,20 +53,31 @@ index 72d06e31880..e6a1694a11f 100644
      IMFMediaTypeHandler_Release(handler);
      IMFPresentationDescriptor_Release(descriptor);
  
+diff --git a/dlls/winegstreamer/gst_private.h b/dlls/winegstreamer/gst_private.h
+index 60b38a48f5a..07556802a51 100644
+--- a/dlls/winegstreamer/gst_private.h
++++ b/dlls/winegstreamer/gst_private.h
+@@ -57,6 +57,7 @@ extern HRESULT mfplat_get_class_object(REFCLSID rclsid, REFIID riid, void **obj)
+ 
+ HRESULT winegstreamer_stream_handler_create(REFIID riid, void **obj) DECLSPEC_HIDDEN;
+ IMFMediaType *mf_media_type_from_caps(const GstCaps *caps) DECLSPEC_HIDDEN;
++GstCaps *caps_from_mf_media_type(IMFMediaType *type) DECLSPEC_HIDDEN;
+ 
+ HRESULT winegstreamer_stream_handler_create(REFIID riid, void **obj) DECLSPEC_HIDDEN;
+ 
 diff --git a/dlls/winegstreamer/media_source.c b/dlls/winegstreamer/media_source.c
-index 5f203a946bc..d6ea8b52aca 100644
+index 9b2c2174318..70c5b47ba84 100644
 --- a/dlls/winegstreamer/media_source.c
 +++ b/dlls/winegstreamer/media_source.c
-@@ -55,14 +55,39 @@ struct media_stream
+@@ -55,14 +55,38 @@ struct media_stream
      {
          STREAM_INACTIVE,
          STREAM_SHUTDOWN,
 +        STREAM_RUNNING,
      } state;
      DWORD stream_id;
-+    BOOL eos;
-+};
-+
+ };
+ 
 +enum source_async_op
 +{
 +    SOURCE_ASYNC_START,
@@ -84,8 +97,8 @@ index 5f203a946bc..d6ea8b52aca 100644
 +            PROPVARIANT position;
 +        } start;
 +    } u;
- };
- 
++};
++
  struct media_source
  {
      IMFMediaSource IMFMediaSource_iface;
@@ -95,7 +108,7 @@ index 5f203a946bc..d6ea8b52aca 100644
      IMFMediaEventQueue *event_queue;
      IMFByteStream *byte_stream;
      struct media_stream **streams;
-@@ -76,6 +101,7 @@ struct media_source
+@@ -76,6 +100,7 @@ struct media_source
      {
          SOURCE_OPENING,
          SOURCE_STOPPED,
@@ -103,7 +116,7 @@ index 5f203a946bc..d6ea8b52aca 100644
          SOURCE_SHUTDOWN,
      } state;
      HANDLE no_more_pads_event;
-@@ -91,7 +117,265 @@ static inline struct media_source *impl_from_IMFMediaSource(IMFMediaSource *ifac
+@@ -91,7 +116,260 @@ static inline struct media_source *impl_from_IMFMediaSource(IMFMediaSource *ifac
      return CONTAINING_RECORD(iface, struct media_source, IMFMediaSource_iface);
  }
  
@@ -214,11 +227,12 @@ index 5f203a946bc..d6ea8b52aca 100644
 +{
 +    ULONG sd_count;
 +    IMFStreamDescriptor *ret;
++    unsigned int i;
 +
 +    if (FAILED(IMFPresentationDescriptor_GetStreamDescriptorCount(pres_desc, &sd_count)))
 +        return NULL;
 +
-+    for (unsigned int i = 0; i < sd_count; i++)
++    for (i = 0; i < sd_count; i++)
 +    {
 +        DWORD stream_id;
 +
@@ -233,13 +247,16 @@ index 5f203a946bc..d6ea8b52aca 100644
 +    return NULL;
 +}
 +
-+static HRESULT start_pipeline(struct media_source *source, struct source_async_command *command)
++static void start_pipeline(struct media_source *source, struct source_async_command *command)
 +{
 +    PROPVARIANT *position = &command->u.start.position;
 +    BOOL seek_message = source->state != SOURCE_STOPPED && position->vt != VT_EMPTY;
++    GstStateChangeReturn ret;
++    unsigned int i;
 +
 +    gst_element_set_state(source->container, GST_STATE_PAUSED);
-+    assert(gst_element_get_state(source->container, NULL, NULL, -1) == GST_STATE_CHANGE_SUCCESS);
++    ret = gst_element_get_state(source->container, NULL, NULL, -1);
++    assert(ret == GST_STATE_CHANGE_SUCCESS);
 +
 +    /* seek to beginning on stop->play */
 +    if (source->state == SOURCE_STOPPED && position->vt == VT_EMPTY)
@@ -248,7 +265,7 @@ index 5f203a946bc..d6ea8b52aca 100644
 +        position->u.hVal.QuadPart = 0;
 +    }
 +
-+    for (unsigned int i = 0; i < source->stream_count; i++)
++    for (i = 0; i < source->stream_count; i++)
 +    {
 +        struct media_stream *stream;
 +        IMFStreamDescriptor *sd;
@@ -259,7 +276,6 @@ index 5f203a946bc..d6ea8b52aca 100644
 +        DWORD stream_id;
 +        BOOL was_active;
 +        BOOL selected;
-+        BOOL changed_caps;
 +
 +        stream = source->streams[i];
 +
@@ -278,12 +294,10 @@ index 5f203a946bc..d6ea8b52aca 100644
 +            IMFMediaTypeHandler_GetCurrentMediaType(mth, &current_mt);
 +            current_caps = caps_from_mf_media_type(current_mt);
 +            g_object_get(stream->appsink, "caps", &prev_caps, NULL);
-+            changed_caps = !gst_caps_is_equal(prev_caps, current_caps);
-+
-+            if (changed_caps)
++            if (!gst_caps_is_equal(prev_caps, current_caps))
 +            {
-+                g_object_set(stream->appsink, "caps", current_caps, NULL);
 +                GstEvent *reconfigure_event = gst_event_new_reconfigure();
++                g_object_set(stream->appsink, "caps", current_caps, NULL);
 +                gst_pad_push_event(gst_element_get_static_pad(stream->appsink, "sink"), reconfigure_event);
 +            }
 +
@@ -293,24 +307,23 @@ index 5f203a946bc..d6ea8b52aca 100644
 +            IMFMediaTypeHandler_Release(mth);
 +        }
 +
++        g_object_set(stream->appsink, "drop", !selected, NULL);
++
 +        if (position->vt != VT_EMPTY)
 +        {
 +            GstEvent *seek_event = gst_event_new_seek(1.0, GST_FORMAT_TIME, GST_SEEK_FLAG_FLUSH,
 +                    GST_SEEK_TYPE_SET, position->u.hVal.QuadPart / 100, GST_SEEK_TYPE_NONE, 0);
-+
++            GstSample *preroll;
 +
 +            gst_pad_push_event(stream->my_sink, seek_event);
-+            gst_bus_poll(source->bus, GST_MESSAGE_RESET_TIME, -1);
-+
-+            stream->eos = FALSE;
 +        }
 +
 +        if (selected)
 +        {
 +            TRACE("Stream %u (%p) selected\n", i, stream);
 +            IMFMediaEventQueue_QueueEventParamUnk(source->event_queue,
-+            was_active ? MEUpdatedStream : MENewStream, &GUID_NULL,
-+            S_OK, (IUnknown*) &stream->IMFMediaStream_iface);
++                was_active ? MEUpdatedStream : MENewStream, &GUID_NULL,
++                S_OK, (IUnknown*) &stream->IMFMediaStream_iface);
 +
 +            IMFMediaEventQueue_QueueEventParamVar(stream->event_queue,
 +                seek_message ? MEStreamSeeked : MEStreamStarted, &GUID_NULL, S_OK, position);
@@ -324,9 +337,6 @@ index 5f203a946bc..d6ea8b52aca 100644
 +    source->state = SOURCE_RUNNING;
 +
 +    gst_element_set_state(source->container, GST_STATE_PLAYING);
-+    gst_element_get_state(source->container, NULL, NULL, -1);
-+
-+    return S_OK;
 +}
 +
 +static HRESULT WINAPI source_async_commands_Invoke(IMFAsyncCallback *iface, IMFAsyncResult *result)
@@ -348,8 +358,6 @@ index 5f203a946bc..d6ea8b52aca 100644
 +        case SOURCE_ASYNC_START:
 +            start_pipeline(source, command);
 +            break;
-+        default:
-+            ;
 +    }
 +
 +    IUnknown_Release(state);
@@ -370,18 +378,7 @@ index 5f203a946bc..d6ea8b52aca 100644
          GstBuffer **buf)
  {
      struct media_source *source = gst_pad_get_element_private(pad);
-@@ -240,8 +524,8 @@ GstBusSyncReply bus_watch(GstBus *bus, GstMessage *message, gpointer user)
-             break;
-     }
- 
--    gst_message_unref(message);
--    return GST_BUS_DROP;
-+    /* FIXME: drop messages and find a substitute for gst_bus_poll */
-+    return GST_BUS_PASS;
- }
- 
- static HRESULT WINAPI media_stream_QueryInterface(IMFMediaStream *iface, REFIID riid, void **out)
-@@ -798,16 +1082,32 @@ static HRESULT WINAPI media_source_CreatePresentationDescriptor(IMFMediaSource *
+@@ -683,16 +961,30 @@ static HRESULT WINAPI media_source_CreatePresentationDescriptor(IMFMediaSource *
  }
  
  static HRESULT WINAPI media_source_Start(IMFMediaSource *iface, IMFPresentationDescriptor *descriptor,
@@ -400,9 +397,7 @@ index 5f203a946bc..d6ea8b52aca 100644
  
 -    return E_NOTIMPL;
 +    if (!(IsEqualIID(time_format, &GUID_NULL)))
-+    {
 +        return MF_E_UNSUPPORTED_TIME_FORMAT;
-+    }
 +
 +    if (SUCCEEDED(hr = source_create_async_op(SOURCE_ASYNC_START, &command)))
 +    {
@@ -417,7 +412,7 @@ index 5f203a946bc..d6ea8b52aca 100644
  }
  
  static HRESULT WINAPI media_source_Stop(IMFMediaSource *iface)
-@@ -876,6 +1176,9 @@ static HRESULT WINAPI media_source_Shutdown(IMFMediaSource *iface)
+@@ -773,6 +1065,9 @@ static HRESULT WINAPI media_source_Shutdown(IMFMediaSource *iface)
      if (source->no_more_pads_event)
          CloseHandle(source->no_more_pads_event);
  
@@ -427,7 +422,7 @@ index 5f203a946bc..d6ea8b52aca 100644
      return S_OK;
  }
  
-@@ -973,6 +1276,7 @@ static HRESULT media_source_constructor(IMFByteStream *bytestream, struct media_
+@@ -853,6 +1148,7 @@ static HRESULT media_source_constructor(IMFByteStream *bytestream, struct media_
          return E_OUTOFMEMORY;
  
      object->IMFMediaSource_iface.lpVtbl = &IMFMediaSource_vtbl;
@@ -435,7 +430,7 @@ index 5f203a946bc..d6ea8b52aca 100644
      object->ref = 1;
      object->byte_stream = bytestream;
      IMFByteStream_AddRef(bytestream);
-@@ -981,6 +1285,9 @@ static HRESULT media_source_constructor(IMFByteStream *bytestream, struct media_
+@@ -861,6 +1157,9 @@ static HRESULT media_source_constructor(IMFByteStream *bytestream, struct media_
      if (FAILED(hr = MFCreateEventQueue(&object->event_queue)))
          goto fail;
  
@@ -445,6 +440,139 @@ index 5f203a946bc..d6ea8b52aca 100644
      object->container = gst_bin_new(NULL);
      object->bus = gst_bus_new();
      gst_bus_set_sync_handler(object->bus, mf_src_bus_watch_wrapper, object, NULL);
+diff --git a/dlls/winegstreamer/mfplat.c b/dlls/winegstreamer/mfplat.c
+index 2e8b0978648..43895c2cb5d 100644
+--- a/dlls/winegstreamer/mfplat.c
++++ b/dlls/winegstreamer/mfplat.c
+@@ -601,3 +601,128 @@ IMFMediaType *mf_media_type_from_caps(const GstCaps *caps)
+ 
+     return media_type;
+ }
++
++GstCaps *caps_from_mf_media_type(IMFMediaType *type)
++{
++    GUID major_type;
++    GUID subtype;
++    GstCaps *output = NULL;
++
++    if (FAILED(IMFMediaType_GetMajorType(type, &major_type)))
++        return NULL;
++    if (FAILED(IMFMediaType_GetGUID(type, &MF_MT_SUBTYPE, &subtype)))
++        return NULL;
++
++    if (IsEqualGUID(&major_type, &MFMediaType_Video))
++    {
++        UINT64 frame_rate = 0, frame_size = 0;
++        DWORD width, height;
++        UINT32 unused;
++        GstVideoFormat format = GST_VIDEO_FORMAT_UNKNOWN;
++        GUID subtype_base;
++        GstVideoInfo info;
++        unsigned int i;
++
++        if (FAILED(IMFMediaType_GetUINT64(type, &MF_MT_FRAME_SIZE, &frame_size)))
++            return NULL;
++        width = frame_size >> 32;
++        height = frame_size;
++
++        output = gst_caps_new_empty_simple("video/x-raw");
++
++        for (i = 0; i < ARRAY_SIZE(uncompressed_video_formats); i++)
++        {
++            if (IsEqualGUID(uncompressed_video_formats[i].subtype, &subtype))
++            {
++                format = uncompressed_video_formats[i].format;
++                break;
++            }
++        }
++
++        subtype_base = subtype;
++        subtype_base.Data1 = 0;
++        if (format == GST_VIDEO_FORMAT_UNKNOWN && IsEqualGUID(&MFVideoFormat_Base, &subtype_base))
++            format = gst_video_format_from_fourcc(subtype.Data1);
++
++        if (format == GST_VIDEO_FORMAT_UNKNOWN)
++        {
++            FIXME("Unrecognized format %s\n", debugstr_guid(&subtype));
++            return NULL;
++        }
++
++        gst_video_info_set_format(&info, format, width, height);
++        output = gst_video_info_to_caps(&info);
++
++        if (frame_size)
++        {
++            gst_caps_set_simple(output, "width", G_TYPE_INT, width, NULL);
++            gst_caps_set_simple(output, "height", G_TYPE_INT, height, NULL);
++        }
++        if (SUCCEEDED(IMFMediaType_GetUINT64(type, &MF_MT_FRAME_RATE, &frame_rate)))
++            gst_caps_set_simple(output, "framerate", GST_TYPE_FRACTION, frame_rate >> 32, (DWORD32) frame_rate, NULL);
++        return output;
++    }
++    else if (IsEqualGUID(&major_type, &MFMediaType_Audio))
++    {
++        DWORD rate, channels, channel_mask, bitrate;
++
++        if (IsEqualGUID(&subtype, &MFAudioFormat_Float))
++        {
++            output = gst_caps_new_empty_simple("audio/x-raw");
++
++            gst_caps_set_simple(output, "format", G_TYPE_STRING, "F32LE", NULL);
++            gst_caps_set_simple(output, "layout", G_TYPE_STRING, "interleaved", NULL);
++        }
++        else if (IsEqualGUID(&subtype, &MFAudioFormat_PCM))
++        {
++            DWORD bits_per_sample;
++
++            if (SUCCEEDED(IMFMediaType_GetUINT32(type, &MF_MT_AUDIO_BITS_PER_SAMPLE, &bits_per_sample)))
++            {
++                char format[6];
++                char type;
++
++                type = bits_per_sample > 8 ? 'S' : 'U';
++
++                output = gst_caps_new_empty_simple("audio/x-raw");
++
++                sprintf(format, "%c%u%s", type, bits_per_sample, bits_per_sample > 8 ? "LE" : "");
++
++                gst_caps_set_simple(output, "format", G_TYPE_STRING, format, NULL);
++            }
++            else
++            {
++                ERR("Bits per sample not set.\n");
++                return NULL;
++            }
++        }
++        else
++        {
++            FIXME("Unrecognized subtype %s\n", debugstr_guid(&subtype));
++            return NULL;
++        }
++
++        if (SUCCEEDED(IMFMediaType_GetUINT32(type, &MF_MT_AUDIO_SAMPLES_PER_SECOND, &rate)))
++        {
++            gst_caps_set_simple(output, "rate", G_TYPE_INT, rate, NULL);
++        }
++        if (SUCCEEDED(IMFMediaType_GetUINT32(type, &MF_MT_AUDIO_NUM_CHANNELS, &channels)))
++        {
++            gst_caps_set_simple(output, "channels", G_TYPE_INT, channels, NULL);
++        }
++        if (SUCCEEDED(IMFMediaType_GetUINT32(type, &MF_MT_AUDIO_CHANNEL_MASK, &channel_mask)))
++        {
++            gst_caps_set_simple(output, "channel-mask", GST_TYPE_BITMASK, (guint64) channel_mask, NULL);
++        }
++
++        if (SUCCEEDED(IMFMediaType_GetUINT32(type, &MF_MT_AVG_BITRATE, &bitrate)))
++        {
++            gst_caps_set_simple(output, "bitrate", G_TYPE_INT, bitrate, NULL);
++        }
++
++        return output;
++    }
++
++    FIXME("Unrecognized major type %s\n", debugstr_guid(&major_type));
++    return NULL;
++}
 -- 
 2.28.0
 
