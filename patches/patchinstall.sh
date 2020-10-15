@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "e909986e6ea5ecd49b2b847f321ad89b2ae4f6f1"
+	echo "de679af492ed93d70c99dff7f7cfc01cc8f25eb0"
 }
 
 # Show version information
@@ -3545,11 +3545,10 @@ fi
 # Patchset riched20-IText_Interface
 # |
 # | Modified files:
-# |   *	dlls/riched20/richole.c, dlls/riched20/run.c, dlls/riched20/tests/richole.c
+# |   *	dlls/riched20/richole.c, dlls/riched20/tests/richole.c
 # |
 if test "$enable_riched20_IText_Interface" -eq 1; then
 	patch_apply riched20-IText_Interface/0003-riched20-Stub-for-ITextPara-interface-and-implement-.patch
-	patch_apply riched20-IText_Interface/0004-riched20-Fix-ME_RunOfsFromCharOfs-when-nCharOfs-strl.patch
 	patch_apply riched20-IText_Interface/0010-riched20-Silence-repeated-FIXMEs-triggered-by-Adobe-.patch
 fi
 
