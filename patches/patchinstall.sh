@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "de679af492ed93d70c99dff7f7cfc01cc8f25eb0"
+	echo "0c249e6125fc9dc6ee86b4ef6ae0d9fa2fc6291b"
 }
 
 # Show version information
@@ -126,6 +126,7 @@ patch_enable_all ()
 	enable_dwrite_FontFallback="$1"
 	enable_dxdiagn_Enumerate_DirectSound="$1"
 	enable_dxdiagn_GetChildContainer_Leaf_Nodes="$1"
+	enable_eventfd_synchronization="$1"
 	enable_explorer_Video_Registry_Key="$1"
 	enable_fonts_Missing_Fonts="$1"
 	enable_gdi32_rotation="$1"
@@ -467,6 +468,9 @@ patch_enable ()
 			;;
 		dxdiagn-GetChildContainer_Leaf_Nodes)
 			enable_dxdiagn_GetChildContainer_Leaf_Nodes="$2"
+			;;
+		eventfd_synchronization)
+			enable_eventfd_synchronization="$2"
 			;;
 		explorer-Video_Registry_Key)
 			enable_explorer_Video_Registry_Key="$2"
@@ -1621,17 +1625,6 @@ if test "$enable_ntdll_NtDevicePath" -eq 1; then
 	enable_ntdll_Pipe_SpecialCharacters=1
 fi
 
-if test "$enable_ntdll_Junction_Points" -eq 1; then
-	if test "$enable_ntdll_DOS_Attributes" -gt 1; then
-		abort "Patchset ntdll-DOS_Attributes disabled, but ntdll-Junction_Points depends on that."
-	fi
-	if test "$enable_ntdll_NtQueryEaFile" -gt 1; then
-		abort "Patchset ntdll-NtQueryEaFile disabled, but ntdll-Junction_Points depends on that."
-	fi
-	enable_ntdll_DOS_Attributes=1
-	enable_ntdll_NtQueryEaFile=1
-fi
-
 if test "$enable_ntdll_Builtin_Prot" -eq 1; then
 	if test "$enable_ntdll_WRITECOPY" -gt 1; then
 		abort "Patchset ntdll-WRITECOPY disabled, but ntdll-Builtin_Prot depends on that."
@@ -1658,6 +1651,36 @@ if test "$enable_kernel32_CopyFileEx" -eq 1; then
 		abort "Patchset ntdll-FileDispositionInformation disabled, but kernel32-CopyFileEx depends on that."
 	fi
 	enable_ntdll_FileDispositionInformation=1
+fi
+
+if test "$enable_eventfd_synchronization" -eq 1; then
+	if test "$enable_ntdll_Junction_Points" -gt 1; then
+		abort "Patchset ntdll-Junction_Points disabled, but eventfd_synchronization depends on that."
+	fi
+	if test "$enable_server_PeekMessage" -gt 1; then
+		abort "Patchset server-PeekMessage disabled, but eventfd_synchronization depends on that."
+	fi
+	if test "$enable_server_Realtime_Priority" -gt 1; then
+		abort "Patchset server-Realtime_Priority disabled, but eventfd_synchronization depends on that."
+	fi
+	if test "$enable_server_Signal_Thread" -gt 1; then
+		abort "Patchset server-Signal_Thread disabled, but eventfd_synchronization depends on that."
+	fi
+	enable_ntdll_Junction_Points=1
+	enable_server_PeekMessage=1
+	enable_server_Realtime_Priority=1
+	enable_server_Signal_Thread=1
+fi
+
+if test "$enable_ntdll_Junction_Points" -eq 1; then
+	if test "$enable_ntdll_DOS_Attributes" -gt 1; then
+		abort "Patchset ntdll-DOS_Attributes disabled, but ntdll-Junction_Points depends on that."
+	fi
+	if test "$enable_ntdll_NtQueryEaFile" -gt 1; then
+		abort "Patchset ntdll-NtQueryEaFile disabled, but ntdll-Junction_Points depends on that."
+	fi
+	enable_ntdll_DOS_Attributes=1
+	enable_ntdll_NtQueryEaFile=1
 fi
 
 if test "$enable_dxdiagn_GetChildContainer_Leaf_Nodes" -eq 1; then
@@ -2419,6 +2442,185 @@ if test "$enable_dxdiagn_GetChildContainer_Leaf_Nodes" -eq 1; then
 	patch_apply dxdiagn-GetChildContainer_Leaf_Nodes/0001-dxdiagn-Calling-GetChildContainer-with-an-empty-stri.patch
 fi
 
+# Patchset ntdll-DOS_Attributes
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#9158] Support for DOS hidden/system file attributes
+# |   *	[#15679] cygwin symlinks not working in wine
+# |
+# | Modified files:
+# |   *	configure.ac, dlls/ntdll/tests/directory.c, dlls/ntdll/tests/file.c, dlls/ntdll/unix/file.c
+# |
+if test "$enable_ntdll_DOS_Attributes" -eq 1; then
+	patch_apply ntdll-DOS_Attributes/0001-ntdll-Implement-retrieving-DOS-attributes-in-fd_-get.patch
+	patch_apply ntdll-DOS_Attributes/0003-ntdll-Implement-storing-DOS-attributes-in-NtSetInfor.patch
+	patch_apply ntdll-DOS_Attributes/0004-ntdll-Implement-storing-DOS-attributes-in-NtCreateFi.patch
+	patch_apply ntdll-DOS_Attributes/0005-libport-Add-support-for-Mac-OS-X-style-extended-attr.patch
+	patch_apply ntdll-DOS_Attributes/0006-libport-Add-support-for-FreeBSD-style-extended-attri.patch
+	patch_apply ntdll-DOS_Attributes/0007-ntdll-Perform-the-Unix-style-hidden-file-check-withi.patch
+	patch_apply ntdll-DOS_Attributes/0008-ntdll-Always-store-SAMBA_XATTR_DOS_ATTRIB-when-path-.patch
+fi
+
+# Patchset ntdll-NtQueryEaFile
+# |
+# | Modified files:
+# |   *	dlls/ntdll/tests/file.c, dlls/ntdll/unix/file.c
+# |
+if test "$enable_ntdll_NtQueryEaFile" -eq 1; then
+	patch_apply ntdll-NtQueryEaFile/0001-ntdll-Improve-stub-of-NtQueryEaFile.patch
+fi
+
+# Patchset ntdll-Junction_Points
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	ntdll-DOS_Attributes, ntdll-NtQueryEaFile
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#12401] NET Framework 2.0, 3.0, 4.0 installers and other apps that make use of GAC API for managed assembly
+# | 	installation on NTFS filesystems need reparse point/junction API support
+# | 	(FSCTL_SET_REPARSE_POINT/FSCTL_GET_REPARSE_POINT)
+# |   *	[#44948] Multiple apps (Spine (Mod starter for Gothic), MS Office 365 installer) need CreateSymbolicLinkW implementation
+# |
+# | Modified files:
+# |   *	configure.ac, dlls/kernel32/tests/path.c, dlls/kernelbase/file.c, dlls/msvcp120/tests/msvcp120.c,
+# | 	dlls/msvcp140/tests/msvcp140.c, dlls/ntdll/tests/file.c, dlls/ntdll/unix/file.c, include/Makefile.in, include/ntifs.h,
+# | 	include/winternl.h, programs/cmd/builtins.c, programs/cmd/directory.c, server/fd.c, server/protocol.def
+# |
+if test "$enable_ntdll_Junction_Points" -eq 1; then
+	patch_apply ntdll-Junction_Points/0001-ntdll-Add-support-for-junction-point-creation.patch
+	patch_apply ntdll-Junction_Points/0002-ntdll-Add-support-for-reading-junction-points.patch
+	patch_apply ntdll-Junction_Points/0003-ntdll-Add-support-for-deleting-junction-points.patch
+	patch_apply ntdll-Junction_Points/0004-ntdll-Add-a-test-for-junction-point-advertisement.patch
+	patch_apply ntdll-Junction_Points/0005-server-Add-support-for-deleting-junction-points-with.patch
+	patch_apply ntdll-Junction_Points/0007-ntdll-Add-support-for-absolute-symlink-creation.patch
+	patch_apply ntdll-Junction_Points/0008-ntdll-Add-support-for-reading-absolute-symlinks.patch
+	patch_apply ntdll-Junction_Points/0009-ntdll-Add-support-for-deleting-symlinks.patch
+	patch_apply ntdll-Junction_Points/0010-ntdll-Add-support-for-relative-symlink-creation.patch
+	patch_apply ntdll-Junction_Points/0011-ntdll-Add-support-for-reading-relative-symlinks.patch
+	patch_apply ntdll-Junction_Points/0012-ntdll-Add-support-for-file-symlinks.patch
+	patch_apply ntdll-Junction_Points/0013-ntdll-Allow-creation-of-dangling-reparse-points-to-n.patch
+	patch_apply ntdll-Junction_Points/0014-ntdll-Correctly-report-file-symbolic-links-as-files.patch
+	patch_apply ntdll-Junction_Points/0015-kernel32-Set-error-code-when-attempting-to-delete-fi.patch
+	patch_apply ntdll-Junction_Points/0016-server-Properly-handle-file-symlink-deletion.patch
+	patch_apply ntdll-Junction_Points/0017-ntdll-Always-report-symbolic-links-as-containing-zer.patch
+	patch_apply ntdll-Junction_Points/0018-ntdll-Find-dangling-symlinks-quickly.patch
+	patch_apply ntdll-Junction_Points/0019-kernel32-Implement-CreateSymbolicLink-A-W-with-ntdll.patch
+	patch_apply ntdll-Junction_Points/0020-kernel32-Add-reparse-support-to-FindNextFile.patch
+	patch_apply ntdll-Junction_Points/0021-wcmd-Display-reparse-point-type-in-directory-listing.patch
+	patch_apply ntdll-Junction_Points/0022-wcmd-Show-reparse-point-target-in-directory-listing.patch
+	patch_apply ntdll-Junction_Points/0023-wcmd-Add-junction-point-support-to-mklink.patch
+	patch_apply ntdll-Junction_Points/0024-server-Fix-obtaining-information-about-a-symlink.patch
+fi
+
+# Patchset server-PeekMessage
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#28884] GetMessage should remove already seen messages with higher priority
+# |
+# | Modified files:
+# |   *	dlls/user32/tests/msg.c, server/queue.c
+# |
+if test "$enable_server_PeekMessage" -eq 1; then
+	patch_apply server-PeekMessage/0001-server-Fix-handling-of-GetMessage-after-previous-Pee.patch
+fi
+
+# Patchset server-Realtime_Priority
+# |
+# | Modified files:
+# |   *	server/Makefile.in, server/main.c, server/scheduler.c, server/thread.c, server/thread.h
+# |
+if test "$enable_server_Realtime_Priority" -eq 1; then
+	patch_apply server-Realtime_Priority/0001-wineserver-Draft-to-implement-priority-levels-throug.patch
+fi
+
+# Patchset server-Signal_Thread
+# |
+# | Modified files:
+# |   *	server/thread.c, server/thread.h
+# |
+if test "$enable_server_Signal_Thread" -eq 1; then
+	patch_apply server-Signal_Thread/0001-server-Do-not-signal-thread-until-it-is-really-gone.patch
+fi
+
+# Patchset eventfd_synchronization
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	ntdll-DOS_Attributes, ntdll-NtQueryEaFile, ntdll-Junction_Points, server-PeekMessage, server-Realtime_Priority, server-
+# | 	Signal_Thread
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#36692] Many multi-threaded applications have poor performance due to heavy use of synchronization primitives
+# |
+# | Modified files:
+# |   *	README.esync, configure, configure.ac, dlls/kernel32/tests/sync.c, dlls/ntdll/Makefile.in, dlls/ntdll/unix/esync.c,
+# | 	dlls/ntdll/unix/esync.h, dlls/ntdll/unix/loader.c, dlls/ntdll/unix/server.c, dlls/ntdll/unix/sync.c,
+# | 	dlls/ntdll/unix/unix_private.h, dlls/ntdll/unix/virtual.c, dlls/rpcrt4/rpc_server.c, include/config.h.in,
+# | 	server/Makefile.in, server/async.c, server/atom.c, server/change.c, server/clipboard.c, server/completion.c,
+# | 	server/console.c, server/debugger.c, server/device.c, server/directory.c, server/esync.c, server/esync.h,
+# | 	server/event.c, server/fd.c, server/file.c, server/file.h, server/handle.c, server/hook.c, server/mailslot.c,
+# | 	server/main.c, server/mapping.c, server/mutex.c, server/named_pipe.c, server/object.h, server/process.c,
+# | 	server/process.h, server/protocol.def, server/queue.c, server/registry.c, server/request.c, server/semaphore.c,
+# | 	server/serial.c, server/signal.c, server/sock.c, server/symlink.c, server/thread.c, server/thread.h, server/timer.c,
+# | 	server/token.c, server/winstation.c
+# |
+if test "$enable_eventfd_synchronization" -eq 1; then
+	patch_apply eventfd_synchronization/0001-configure-Check-for-sys-eventfd.h-ppoll-and-shm_open.patch
+	patch_apply eventfd_synchronization/0002-server-Create-server-objects-for-eventfd-based-synch.patch
+	patch_apply eventfd_synchronization/0003-ntdll-Create-eventfd-based-objects-for-semaphores.patch
+	patch_apply eventfd_synchronization/0004-ntdll-Implement-NtReleaseSemaphore.patch
+	patch_apply eventfd_synchronization/0005-ntdll-Implement-NtClose.patch
+	patch_apply eventfd_synchronization/0006-ntdll-Implement-NtWaitForMultipleObjects.patch
+	patch_apply eventfd_synchronization/0007-ntdll-server-Implement-NtCreateEvent.patch
+	patch_apply eventfd_synchronization/0008-ntdll-Implement-NtSetEvent.patch
+	patch_apply eventfd_synchronization/0009-ntdll-Implement-NtResetEvent.patch
+	patch_apply eventfd_synchronization/0010-ntdll-Implement-waiting-on-manual-reset-events.patch
+	patch_apply eventfd_synchronization/0011-server-Add-an-object-operation-to-grab-the-esync-fil.patch
+	patch_apply eventfd_synchronization/0012-server-Add-a-request-to-get-the-eventfd-file-descrip.patch
+	patch_apply eventfd_synchronization/0013-server-Create-eventfd-file-descriptors-for-process-o.patch
+	patch_apply eventfd_synchronization/0014-ntdll-server-Implement-waiting-on-server-bound-objec.patch
+	patch_apply eventfd_synchronization/0015-server-Create-eventfd-file-descriptors-for-event-obj.patch
+	patch_apply eventfd_synchronization/0016-server-Allow-re-setting-esync-events-on-the-server-s.patch
+	patch_apply eventfd_synchronization/0017-ntdll-Try-again-if-poll-returns-EINTR.patch
+	patch_apply eventfd_synchronization/0018-server-Create-eventfd-file-descriptors-for-thread-ob.patch
+	patch_apply eventfd_synchronization/0019-rpcrt4-Avoid-closing-the-server-thread-handle-while-.patch
+	patch_apply eventfd_synchronization/0020-server-Create-eventfd-file-descriptors-for-message-q.patch
+	patch_apply eventfd_synchronization/0021-server-ntdll-Implement-message-waits.patch
+	patch_apply eventfd_synchronization/0022-server-Create-eventfd-descriptors-for-device-manager.patch
+	patch_apply eventfd_synchronization/0023-ntdll-server-Implement-NtCreateMutant.patch
+	patch_apply eventfd_synchronization/0024-ntdll-Implement-NtReleaseMutant.patch
+	patch_apply eventfd_synchronization/0025-ntdll-Implement-waiting-on-mutexes.patch
+	patch_apply eventfd_synchronization/0026-ntdll-Implement-wait-all.patch
+	patch_apply eventfd_synchronization/0027-esync-Add-a-README.patch
+	patch_apply eventfd_synchronization/0028-ntdll-Implement-NtSignalAndWaitForSingleObject.patch
+	patch_apply eventfd_synchronization/0029-ntdll-Implement-NtOpenSemaphore.patch
+	patch_apply eventfd_synchronization/0030-ntdll-Implement-NtOpenEvent.patch
+	patch_apply eventfd_synchronization/0031-ntdll-Implement-NtOpenMutant.patch
+	patch_apply eventfd_synchronization/0032-server-Implement-esync_map_access.patch
+	patch_apply eventfd_synchronization/0033-server-Implement-NtDuplicateObject.patch
+	patch_apply eventfd_synchronization/0034-server-Create-eventfd-descriptors-for-timers.patch
+	patch_apply eventfd_synchronization/0035-ntdll-server-Implement-alertable-waits.patch
+	patch_apply eventfd_synchronization/0036-esync-Update-README.patch
+	patch_apply eventfd_synchronization/0037-kernel32-tests-Mark-some-existing-tests-as-failing-u.patch
+	patch_apply eventfd_synchronization/0038-kernel32-tests-Add-some-semaphore-tests.patch
+	patch_apply eventfd_synchronization/0039-kernel32-tests-Add-some-event-tests.patch
+	patch_apply eventfd_synchronization/0040-kernel32-tests-Add-some-mutex-tests.patch
+	patch_apply eventfd_synchronization/0041-kernel32-tests-Add-some-tests-for-wait-timeouts.patch
+	patch_apply eventfd_synchronization/0042-kernel32-tests-Zigzag-test.patch
+	patch_apply eventfd_synchronization/0043-ntdll-Implement-NtQuerySemaphore.patch
+	patch_apply eventfd_synchronization/0044-ntdll-Implement-NtQueryEvent.patch
+	patch_apply eventfd_synchronization/0045-ntdll-Implement-NtQueryMutant.patch
+	patch_apply eventfd_synchronization/0046-server-Create-eventfd-descriptors-for-pseudo-fd-obje.patch
+	patch_apply eventfd_synchronization/0047-esync-Update-README.patch
+	patch_apply eventfd_synchronization/0048-esync-Add-note-about-file-limits-not-being-raised-wh.patch
+	patch_apply eventfd_synchronization/0049-ntdll-Try-to-avoid-poll-for-uncontended-objects.patch
+	patch_apply eventfd_synchronization/0050-ntdll-server-Try-to-avoid-poll-for-signaled-events.patch
+	patch_apply eventfd_synchronization/0051-esync-Update-README.patch
+	patch_apply eventfd_synchronization/0052-ntdll-Implement-NtPulseEvent.patch
+	patch_apply eventfd_synchronization/0053-esync-Update-README.patch
+	patch_apply eventfd_synchronization/0054-server-Create-esync-file-descriptors-for-true-file-o.patch
+	patch_apply eventfd_synchronization/0055-ntdll-server-Abandon-esync-mutexes-on-thread-exit.patch
+fi
+
 # Patchset explorer-Video_Registry_Key
 # |
 # | Modified files:
@@ -2945,25 +3147,6 @@ if test "$enable_ntdll_CriticalSection" -eq 1; then
 	patch_apply ntdll-CriticalSection/0004-ntdll-Use-fast-CS-functions-for-threadpool-locking.patch
 fi
 
-# Patchset ntdll-DOS_Attributes
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#9158] Support for DOS hidden/system file attributes
-# |   *	[#15679] cygwin symlinks not working in wine
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/ntdll/tests/directory.c, dlls/ntdll/tests/file.c, dlls/ntdll/unix/file.c
-# |
-if test "$enable_ntdll_DOS_Attributes" -eq 1; then
-	patch_apply ntdll-DOS_Attributes/0001-ntdll-Implement-retrieving-DOS-attributes-in-fd_-get.patch
-	patch_apply ntdll-DOS_Attributes/0003-ntdll-Implement-storing-DOS-attributes-in-NtSetInfor.patch
-	patch_apply ntdll-DOS_Attributes/0004-ntdll-Implement-storing-DOS-attributes-in-NtCreateFi.patch
-	patch_apply ntdll-DOS_Attributes/0005-libport-Add-support-for-Mac-OS-X-style-extended-attr.patch
-	patch_apply ntdll-DOS_Attributes/0006-libport-Add-support-for-FreeBSD-style-extended-attri.patch
-	patch_apply ntdll-DOS_Attributes/0007-ntdll-Perform-the-Unix-style-hidden-file-check-withi.patch
-	patch_apply ntdll-DOS_Attributes/0008-ntdll-Always-store-SAMBA_XATTR_DOS_ATTRIB-when-path-.patch
-fi
-
 # Patchset ntdll-Dealloc_Thread_Stack
 # |
 # | Modified files:
@@ -3051,57 +3234,6 @@ fi
 # |
 if test "$enable_ntdll_Interrupt_0x2e" -eq 1; then
 	patch_apply ntdll-Interrupt-0x2e/0001-ntdll-Catch-windows-int-0x2e-syscall-on-i386.patch
-fi
-
-# Patchset ntdll-NtQueryEaFile
-# |
-# | Modified files:
-# |   *	dlls/ntdll/tests/file.c, dlls/ntdll/unix/file.c
-# |
-if test "$enable_ntdll_NtQueryEaFile" -eq 1; then
-	patch_apply ntdll-NtQueryEaFile/0001-ntdll-Improve-stub-of-NtQueryEaFile.patch
-fi
-
-# Patchset ntdll-Junction_Points
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-DOS_Attributes, ntdll-NtQueryEaFile
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#12401] NET Framework 2.0, 3.0, 4.0 installers and other apps that make use of GAC API for managed assembly
-# | 	installation on NTFS filesystems need reparse point/junction API support
-# | 	(FSCTL_SET_REPARSE_POINT/FSCTL_GET_REPARSE_POINT)
-# |   *	[#44948] Multiple apps (Spine (Mod starter for Gothic), MS Office 365 installer) need CreateSymbolicLinkW implementation
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/kernel32/tests/path.c, dlls/kernelbase/file.c, dlls/msvcp120/tests/msvcp120.c,
-# | 	dlls/msvcp140/tests/msvcp140.c, dlls/ntdll/tests/file.c, dlls/ntdll/unix/file.c, include/Makefile.in, include/ntifs.h,
-# | 	include/winternl.h, programs/cmd/builtins.c, programs/cmd/directory.c, server/fd.c, server/protocol.def
-# |
-if test "$enable_ntdll_Junction_Points" -eq 1; then
-	patch_apply ntdll-Junction_Points/0001-ntdll-Add-support-for-junction-point-creation.patch
-	patch_apply ntdll-Junction_Points/0002-ntdll-Add-support-for-reading-junction-points.patch
-	patch_apply ntdll-Junction_Points/0003-ntdll-Add-support-for-deleting-junction-points.patch
-	patch_apply ntdll-Junction_Points/0004-ntdll-Add-a-test-for-junction-point-advertisement.patch
-	patch_apply ntdll-Junction_Points/0005-server-Add-support-for-deleting-junction-points-with.patch
-	patch_apply ntdll-Junction_Points/0007-ntdll-Add-support-for-absolute-symlink-creation.patch
-	patch_apply ntdll-Junction_Points/0008-ntdll-Add-support-for-reading-absolute-symlinks.patch
-	patch_apply ntdll-Junction_Points/0009-ntdll-Add-support-for-deleting-symlinks.patch
-	patch_apply ntdll-Junction_Points/0010-ntdll-Add-support-for-relative-symlink-creation.patch
-	patch_apply ntdll-Junction_Points/0011-ntdll-Add-support-for-reading-relative-symlinks.patch
-	patch_apply ntdll-Junction_Points/0012-ntdll-Add-support-for-file-symlinks.patch
-	patch_apply ntdll-Junction_Points/0013-ntdll-Allow-creation-of-dangling-reparse-points-to-n.patch
-	patch_apply ntdll-Junction_Points/0014-ntdll-Correctly-report-file-symbolic-links-as-files.patch
-	patch_apply ntdll-Junction_Points/0015-kernel32-Set-error-code-when-attempting-to-delete-fi.patch
-	patch_apply ntdll-Junction_Points/0016-server-Properly-handle-file-symlink-deletion.patch
-	patch_apply ntdll-Junction_Points/0017-ntdll-Always-report-symbolic-links-as-containing-zer.patch
-	patch_apply ntdll-Junction_Points/0018-ntdll-Find-dangling-symlinks-quickly.patch
-	patch_apply ntdll-Junction_Points/0019-kernel32-Implement-CreateSymbolicLink-A-W-with-ntdll.patch
-	patch_apply ntdll-Junction_Points/0020-kernel32-Add-reparse-support-to-FindNextFile.patch
-	patch_apply ntdll-Junction_Points/0021-wcmd-Display-reparse-point-type-in-directory-listing.patch
-	patch_apply ntdll-Junction_Points/0022-wcmd-Show-reparse-point-target-in-directory-listing.patch
-	patch_apply ntdll-Junction_Points/0023-wcmd-Add-junction-point-support-to-mklink.patch
-	patch_apply ntdll-Junction_Points/0024-server-Fix-obtaining-information-about-a-symlink.patch
 fi
 
 # Patchset ntdll-Manifest_Range
@@ -3657,27 +3789,6 @@ if test "$enable_server_Object_Types" -eq 1; then
 	patch_apply server-Object_Types/0010-ntdll-Mimic-object-type-behavior-for-different-windo.patch
 fi
 
-# Patchset server-PeekMessage
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#28884] GetMessage should remove already seen messages with higher priority
-# |
-# | Modified files:
-# |   *	dlls/user32/tests/msg.c, server/queue.c
-# |
-if test "$enable_server_PeekMessage" -eq 1; then
-	patch_apply server-PeekMessage/0001-server-Fix-handling-of-GetMessage-after-previous-Pee.patch
-fi
-
-# Patchset server-Realtime_Priority
-# |
-# | Modified files:
-# |   *	server/Makefile.in, server/main.c, server/scheduler.c, server/thread.c, server/thread.h
-# |
-if test "$enable_server_Realtime_Priority" -eq 1; then
-	patch_apply server-Realtime_Priority/0001-wineserver-Draft-to-implement-priority-levels-throug.patch
-fi
-
 # Patchset server-Registry_Notifications
 # |
 # | Modified files:
@@ -3686,15 +3797,6 @@ fi
 if test "$enable_server_Registry_Notifications" -eq 1; then
 	patch_apply server-Registry_Notifications/0001-server-Allow-multiple-registry-notifications-for-the.patch
 	patch_apply server-Registry_Notifications/0002-server-Introduce-refcounting-for-registry-notificati.patch
-fi
-
-# Patchset server-Signal_Thread
-# |
-# | Modified files:
-# |   *	server/thread.c, server/thread.h
-# |
-if test "$enable_server_Signal_Thread" -eq 1; then
-	patch_apply server-Signal_Thread/0001-server-Do-not-signal-thread-until-it-is-really-gone.patch
 fi
 
 # Patchset setupapi-DiskSpaceList

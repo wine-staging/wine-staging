@@ -1,0 +1,134 @@
+From 05c4a58d8cc0fbafc760d3a0d4d6c14975e33fe2 Mon Sep 17 00:00:00 2001
+From: Zebediah Figura <zfigura@codeweavers.com>
+Date: Mon, 6 Jul 2020 15:11:12 -0500
+Subject: [PATCH] server: Create eventfd file descriptors for process objects.
+
+---
+ server/esync.c   | 18 ++++++++++++++++++
+ server/esync.h   |  1 +
+ server/process.c | 16 +++++++++++++++-
+ server/process.h |  1 +
+ 4 files changed, 35 insertions(+), 1 deletion(-)
+
+diff --git a/server/esync.c b/server/esync.c
+index cfbbcf55c48..61513333bfd 100644
+--- a/server/esync.c
++++ b/server/esync.c
+@@ -297,6 +297,24 @@ struct esync *create_esync( struct object *root, const struct unicode_str *name,
+ #endif
+ }
+ 
++/* Create a file descriptor for an existing handle.
++ * Caller must close the handle when it's done; it's not linked to an esync
++ * server object in any way. */
++int esync_create_fd( int initval, int flags )
++{
++#ifdef HAVE_SYS_EVENTFD_H
++    int fd;
++
++    fd = eventfd( initval, flags | EFD_CLOEXEC | EFD_NONBLOCK );
++    if (fd == -1)
++        perror( "eventfd" );
++
++    return fd;
++#else
++    return -1;
++#endif
++}
++
+ DECL_HANDLER(create_esync)
+ {
+     struct esync *esync;
+diff --git a/server/esync.h b/server/esync.h
+index 7ca4ca89394..6a0a367124d 100644
+--- a/server/esync.h
++++ b/server/esync.h
+@@ -20,3 +20,4 @@
+ 
+ extern int do_esync(void);
+ void esync_init(void);
++int esync_create_fd( int initval, int flags );
+diff --git a/server/process.c b/server/process.c
+index 30699fbaeae..febfc0237c6 100644
+--- a/server/process.c
++++ b/server/process.c
+@@ -49,6 +49,7 @@
+ #include "request.h"
+ #include "user.h"
+ #include "security.h"
++#include "esync.h"
+ 
+ /* process structure */
+ 
+@@ -68,6 +69,7 @@ static struct security_descriptor *process_get_sd( struct object *obj );
+ static void process_poll_event( struct fd *fd, int event );
+ static struct list *process_get_kernel_obj_list( struct object *obj );
+ static void process_destroy( struct object *obj );
++static int process_get_esync_fd( struct object *obj, enum esync_type *type );
+ static void terminate_process( struct process *process, struct thread *skip, int exit_code );
+ 
+ static const struct object_ops process_ops =
+@@ -78,7 +80,7 @@ static const struct object_ops process_ops =
+     add_queue,                   /* add_queue */
+     remove_queue,                /* remove_queue */
+     process_signaled,            /* signaled */
+-    NULL,                        /* get_esync_fd */
++    process_get_esync_fd,        /* get_esync_fd */
+     no_satisfied,                /* satisfied */
+     no_signal,                   /* signal */
+     no_get_fd,                   /* get_fd */
+@@ -545,6 +547,7 @@ struct process *create_process( int fd, struct process *parent, int inherit_all,
+     process->trace_data      = 0;
+     process->rawinput_mouse  = NULL;
+     process->rawinput_kbd    = NULL;
++    process->esync_fd        = -1;
+     list_init( &process->kernel_object );
+     list_init( &process->thread_list );
+     list_init( &process->locks );
+@@ -601,6 +604,9 @@ struct process *create_process( int fd, struct process *parent, int inherit_all,
+     if (!token_assign_label( process->token, security_high_label_sid ))
+         goto error;
+ 
++    if (do_esync())
++        process->esync_fd = esync_create_fd( 0, 0 );
++
+     set_fd_events( process->msg_fd, POLLIN );  /* start listening to events */
+     return process;
+ 
+@@ -649,6 +655,7 @@ static void process_destroy( struct object *obj )
+     if (process->id) free_ptid( process->id );
+     if (process->token) release_object( process->token );
+     free( process->dir_cache );
++    if (do_esync()) close( process->esync_fd );
+ }
+ 
+ /* dump a process on stdout for debugging purposes */
+@@ -673,6 +680,13 @@ static int process_signaled( struct object *obj, struct wait_queue_entry *entry
+     return !process->running_threads;
+ }
+ 
++static int process_get_esync_fd( struct object *obj, enum esync_type *type )
++{
++    struct process *process = (struct process *)obj;
++    *type = ESYNC_MANUAL_SERVER;
++    return process->esync_fd;
++}
++
+ static unsigned int process_map_access( struct object *obj, unsigned int access )
+ {
+     if (access & GENERIC_READ)    access |= STANDARD_RIGHTS_READ | PROCESS_QUERY_INFORMATION | PROCESS_VM_READ;
+diff --git a/server/process.h b/server/process.h
+index 56092e5b1ac..eec69ddbcaf 100644
+--- a/server/process.h
++++ b/server/process.h
+@@ -98,6 +98,7 @@ struct process
+     const struct rawinput_device *rawinput_mouse; /* rawinput mouse device, if any */
+     const struct rawinput_device *rawinput_kbd;   /* rawinput keyboard device, if any */
+     struct list          kernel_object;   /* list of kernel object pointers */
++    int                  esync_fd;        /* esync file descriptor (signaled on exit) */
+ };
+ 
+ #define CPU_FLAG(cpu) (1 << (cpu))
+-- 
+2.28.0
+

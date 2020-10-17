@@ -1,0 +1,192 @@
+From 5126b7e8cd315c7e85d84b897fd2d271d62d91c1 Mon Sep 17 00:00:00 2001
+From: Zebediah Figura <zfigura@codeweavers.com>
+Date: Mon, 6 Jul 2020 18:01:32 -0500
+Subject: [PATCH] ntdll, server: Abandon esync mutexes on thread exit.
+
+---
+ dlls/ntdll/unix/esync.c | 31 ++++++++++++++++++++++++++-----
+ server/esync.c          | 25 +++++++++++++++++++++++++
+ server/esync.h          |  1 +
+ server/thread.c         |  2 ++
+ 4 files changed, 54 insertions(+), 5 deletions(-)
+
+diff --git a/dlls/ntdll/unix/esync.c b/dlls/ntdll/unix/esync.c
+index d7511f39601..ed801c71991 100644
+--- a/dlls/ntdll/unix/esync.c
++++ b/dlls/ntdll/unix/esync.c
+@@ -717,7 +717,7 @@ NTSTATUS esync_query_mutex( HANDLE handle, void *info, ULONG *ret_len )
+ 
+     out->CurrentCount = 1 - mutex->count;
+     out->OwnedByCaller = (mutex->tid == GetCurrentThreadId());
+-    out->AbandonedState = FALSE;
++    out->AbandonedState = (mutex->tid == ~0);
+     if (ret_len) *ret_len = sizeof(*out);
+ 
+     return STATUS_SUCCESS;
+@@ -767,14 +767,19 @@ static int do_poll( struct pollfd *fds, nfds_t nfds, ULONGLONG *end )
+     return ret;
+ }
+ 
+-static void update_grabbed_object( struct esync *obj )
++/* Return TRUE if abandoned. */
++static BOOL update_grabbed_object( struct esync *obj )
+ {
++    BOOL ret = FALSE;
++
+     if (obj->type == ESYNC_MUTEX)
+     {
+         struct mutex *mutex = obj->shm;
+         /* We don't have to worry about a race between this and read(); the
+          * fact that we grabbed it means the count is now zero, so nobody else
+          * can (and the only thread that can release it is us). */
++        if (mutex->tid == ~0)
++            ret = TRUE;
+         mutex->tid = GetCurrentThreadId();
+         mutex->count++;
+     }
+@@ -795,6 +800,8 @@ static void update_grabbed_object( struct esync *obj )
+          * This might already be 0, but that's okay! */
+         event->signaled = 0;
+     }
++
++    return ret;
+ }
+ 
+ /* A value of STATUS_NOT_IMPLEMENTED returned from this function means that we
+@@ -914,7 +921,13 @@ static NTSTATUS __esync_wait_objects( DWORD count, const HANDLE *handles, BOOLEA
+                     {
+                         if ((size = read( obj->fd, &value, sizeof(value) )) == sizeof(value))
+                         {
+-                            TRACE("Woken up by handle %p [%d].\n", handles[i], i);
++                            if (mutex->tid == ~0)
++                            {
++                                TRACE("Woken up by abandoned mutex %p [%d].\n", handles[i], i);
++                                i += STATUS_ABANDONED_WAIT_0;
++                            }
++                            else
++                                TRACE("Woken up by handle %p [%d].\n", handles[i], i);
+                             mutex->tid = GetCurrentThreadId();
+                             mutex->count++;
+                             return i;
+@@ -1027,7 +1040,8 @@ static NTSTATUS __esync_wait_objects( DWORD count, const HANDLE *handles, BOOLEA
+                             {
+                                 /* We found our object. */
+                                 TRACE("Woken up by handle %p [%d].\n", handles[i], i);
+-                                update_grabbed_object( obj );
++                                if (update_grabbed_object( obj ))
++                                    return STATUS_ABANDONED_WAIT_0 + i;
+                                 return i;
+                             }
+                         }
+@@ -1120,6 +1134,8 @@ tryagain:
+             ret = poll( fds, pollcount, 0 );
+             if (ret == pollcount)
+             {
++                BOOL abandoned = FALSE;
++
+                 /* Quick, grab everything. */
+                 for (i = 0; i < count; i++)
+                 {
+@@ -1160,8 +1176,13 @@ tryagain:
+                 /* Make sure to let ourselves know that we grabbed the mutexes
+                  * and semaphores. */
+                 for (i = 0; i < count; i++)
+-                    update_grabbed_object( objs[i] );
++                    abandoned |= update_grabbed_object( objs[i] );
+ 
++                if (abandoned)
++                {
++                    TRACE("Wait successful, but some object(s) were abandoned.\n");
++                    return STATUS_ABANDONED;
++                }
+                 TRACE("Wait successful.\n");
+                 return STATUS_SUCCESS;
+             }
+diff --git a/server/esync.c b/server/esync.c
+index 11785d28bab..d79be851c8f 100644
+--- a/server/esync.c
++++ b/server/esync.c
+@@ -105,12 +105,15 @@ void esync_init(void)
+     atexit( shm_cleanup );
+ }
+ 
++static struct list mutex_list = LIST_INIT(mutex_list);
++
+ struct esync
+ {
+     struct object   obj;            /* object header */
+     int             fd;             /* eventfd file descriptor */
+     enum esync_type type;
+     unsigned int    shm_idx;        /* index into the shared memory section */
++    struct list     mutex_entry;    /* entry in the mutex list (if applicable) */
+ };
+ 
+ static void esync_dump( struct object *obj, int verbose );
+@@ -170,6 +173,8 @@ static unsigned int esync_map_access( struct object *obj, unsigned int access )
+ static void esync_destroy( struct object *obj )
+ {
+     struct esync *esync = (struct esync *)obj;
++    if (esync->type == ESYNC_MUTEX)
++        list_remove( &esync->mutex_entry );
+     close( esync->fd );
+ }
+ 
+@@ -305,6 +310,7 @@ struct esync *create_esync( struct object *root, const struct unicode_str *name,
+                 struct mutex *mutex = get_shm( esync->shm_idx );
+                 mutex->tid = initval ? 0 : current->id;
+                 mutex->count = initval ? 0 : 1;
++                list_add_tail( &mutex_list, &esync->mutex_entry );
+                 break;
+             }
+             default:
+@@ -451,6 +457,25 @@ void esync_reset_event( struct esync *esync )
+     }
+ }
+ 
++void esync_abandon_mutexes( struct thread *thread )
++{
++    struct esync *esync;
++
++    LIST_FOR_EACH_ENTRY( esync, &mutex_list, struct esync, mutex_entry )
++    {
++        struct mutex *mutex = get_shm( esync->shm_idx );
++
++        if (mutex->tid == thread->id)
++        {
++            if (debug_level)
++                fprintf( stderr, "esync_abandon_mutexes() fd=%d\n", esync->fd );
++            mutex->tid = ~0;
++            mutex->count = 0;
++            esync_wake_fd( esync->fd );
++        }
++    }
++}
++
+ DECL_HANDLER(create_esync)
+ {
+     struct esync *esync;
+diff --git a/server/esync.h b/server/esync.h
+index cea025d9308..125da8e9d12 100644
+--- a/server/esync.h
++++ b/server/esync.h
+@@ -30,3 +30,4 @@ struct esync;
+ extern const struct object_ops esync_ops;
+ void esync_set_event( struct esync *esync );
+ void esync_reset_event( struct esync *esync );
++void esync_abandon_mutexes( struct thread *thread );
+diff --git a/server/thread.c b/server/thread.c
+index 6fb8684f5e0..f320f2b26e9 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -1328,6 +1328,8 @@ void kill_thread( struct thread *thread, int violent_death )
+     kill_console_processes( thread, 0 );
+     debug_exit_thread( thread );
+     abandon_mutexes( thread );
++    if (do_esync())
++        esync_abandon_mutexes( thread );
+     if (violent_death)
+     {
+         send_thread_signal( thread, SIGQUIT );
+-- 
+2.28.0
+

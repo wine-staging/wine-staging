@@ -1,0 +1,320 @@
+From ec0fc4f9f1919616dcaecd4712749761d271c7c8 Mon Sep 17 00:00:00 2001
+From: Zebediah Figura <zfigura@codeweavers.com>
+Date: Mon, 6 Jul 2020 17:17:31 -0500
+Subject: [PATCH] ntdll, server: Implement alertable waits.
+
+---
+ dlls/ntdll/unix/esync.c        | 77 +++++++++++++++++++++++++++++++---
+ dlls/ntdll/unix/unix_private.h |  1 +
+ dlls/ntdll/unix/virtual.c      |  1 +
+ server/esync.c                 | 20 +++++++--
+ server/esync.h                 |  1 +
+ server/protocol.def            |  4 ++
+ server/thread.c                | 13 ++++++
+ server/thread.h                |  1 +
+ 8 files changed, 109 insertions(+), 9 deletions(-)
+
+diff --git a/dlls/ntdll/unix/esync.c b/dlls/ntdll/unix/esync.c
+index d1a282c65e9..2a7c3865617 100644
+--- a/dlls/ntdll/unix/esync.c
++++ b/dlls/ntdll/unix/esync.c
+@@ -607,17 +607,42 @@ static void update_grabbed_object( struct esync *obj )
+ static NTSTATUS __esync_wait_objects( DWORD count, const HANDLE *handles, BOOLEAN wait_any,
+                              BOOLEAN alertable, const LARGE_INTEGER *timeout )
+ {
++    static const LARGE_INTEGER zero;
++
+     struct esync *objs[MAXIMUM_WAIT_OBJECTS];
+-    struct pollfd fds[MAXIMUM_WAIT_OBJECTS];
++    struct pollfd fds[MAXIMUM_WAIT_OBJECTS + 1];
+     int has_esync = 0, has_server = 0;
+     BOOL msgwait = FALSE;
+     LONGLONG timeleft;
+     LARGE_INTEGER now;
++    DWORD pollcount;
+     ULONGLONG end;
+     int64_t value;
+     ssize_t size;
+     int i, j, ret;
+ 
++    /* Grab the APC fd if we don't already have it. */
++    if (alertable && ntdll_get_thread_data()->esync_apc_fd == -1)
++    {
++        obj_handle_t fd_handle;
++        sigset_t sigset;
++        int fd = -1;
++
++        server_enter_uninterrupted_section( &fd_cache_mutex, &sigset );
++        SERVER_START_REQ( get_esync_apc_fd )
++        {
++            if (!(ret = wine_server_call( req )))
++            {
++                fd = receive_fd( &fd_handle );
++                assert( fd_handle == GetCurrentThreadId() );
++            }
++        }
++        SERVER_END_REQ;
++        server_leave_uninterrupted_section( &fd_cache_mutex, &sigset );
++
++        ntdll_get_thread_data()->esync_apc_fd = fd;
++    }
++
+     NtQuerySystemTime( &now );
+     if (timeout)
+     {
+@@ -656,6 +681,8 @@ static NTSTATUS __esync_wait_objects( DWORD count, const HANDLE *handles, BOOLEA
+ 
+         if (msgwait)
+             TRACE(" or driver events");
++        if (alertable)
++            TRACE(", alertable");
+ 
+         if (!timeout)
+             TRACE(", timeout = INFINITE.\n");
+@@ -692,12 +719,27 @@ static NTSTATUS __esync_wait_objects( DWORD count, const HANDLE *handles, BOOLEA
+             fds[i].fd = obj ? obj->fd : -1;
+             fds[i].events = POLLIN;
+         }
++        if (alertable)
++        {
++            fds[i].fd = ntdll_get_thread_data()->esync_apc_fd;
++            fds[i].events = POLLIN;
++            i++;
++        }
++        pollcount = i;
+ 
+         while (1)
+         {
+-            ret = do_poll( fds, count, timeout ? &end : NULL );
++            ret = do_poll( fds, pollcount, timeout ? &end : NULL );
+             if (ret > 0)
+             {
++                /* We must check this first! The server may set an event that
++                 * we're waiting on, but we need to return STATUS_USER_APC. */
++                if (alertable)
++                {
++                    if (fds[pollcount - 1].revents & POLLIN)
++                        goto userapc;
++                }
++
+                 /* Find out which object triggered the wait. */
+                 for (i = 0; i < count; i++)
+                 {
+@@ -771,6 +813,14 @@ static NTSTATUS __esync_wait_objects( DWORD count, const HANDLE *handles, BOOLEA
+ tryagain:
+             /* First step: try to poll on each object in sequence. */
+             fds[0].events = POLLIN;
++            pollcount = 1;
++            if (alertable)
++            {
++                /* We also need to wait on APCs. */
++                fds[1].fd = ntdll_get_thread_data()->esync_apc_fd;
++                fds[1].events = POLLIN;
++                pollcount++;
++            }
+             for (i = 0; i < count; i++)
+             {
+                 struct esync *obj = objs[i];
+@@ -786,9 +836,11 @@ tryagain:
+                         continue;
+                 }
+ 
+-                ret = do_poll( fds, 1, timeout ? &end : NULL );
++                ret = do_poll( fds, pollcount, timeout ? &end : NULL );
+                 if (ret <= 0)
+                     goto err;
++                else if (alertable && (fds[1].revents & POLLIN))
++                    goto userapc;
+ 
+                 if (fds[0].revents & (POLLHUP | POLLERR | POLLNVAL))
+                 {
+@@ -804,10 +856,12 @@ tryagain:
+                 fds[i].fd = objs[i] ? objs[i]->fd : -1;
+                 fds[i].events = POLLIN;
+             }
++            /* There's no reason to check for APCs here. */
++            pollcount = i;
+ 
+             /* Poll everything to see if they're still signaled. */
+-            ret = poll( fds, count, 0 );
+-            if (ret == count)
++            ret = poll( fds, pollcount, 0 );
++            if (ret == pollcount)
+             {
+                 /* Quick, grab everything. */
+                 for (i = 0; i < count; i++)
+@@ -873,6 +927,19 @@ err:
+         ERR("ppoll failed: %s\n", strerror(errno));
+         return errno_to_status( errno );
+     }
++
++userapc:
++    TRACE("Woken up by user APC.\n");
++
++    /* We have to make a server call anyway to get the APC to execute, so just
++     * delegate down to server_select(). */
++    ret = server_wait( NULL, 0, SELECT_INTERRUPTIBLE | SELECT_ALERTABLE, &zero );
++
++    /* This can happen if we received a system APC, and the APC fd was woken up
++     * before we got SIGUSR1. poll() doesn't return EINTR in that case. The
++     * right thing to do seems to be to return STATUS_USER_APC anyway. */
++    if (ret == STATUS_TIMEOUT) ret = STATUS_USER_APC;
++    return ret;
+ }
+ 
+ /* We need to let the server know when we are doing a message wait, and when we
+diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
+index c3ad0a41098..c2f215320ee 100644
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -57,6 +57,7 @@ struct ntdll_thread_data
+     struct list        entry;         /* entry in TEB list */
+     PRTL_THREAD_START_ROUTINE start;  /* thread entry point */
+     void              *param;         /* thread entry point parameter */
++    int                esync_apc_fd;  /* fd to wait on for user APCs */
+ };
+ 
+ C_ASSERT( sizeof(struct ntdll_thread_data) <= sizeof(((TEB *)0)->GdiTebBatch) );
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+index d79e3de662e..6b83072b750 100644
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -2555,6 +2555,7 @@ static void init_teb( TEB *teb, PEB *peb )
+     thread_data->reply_fd   = -1;
+     thread_data->wait_fd[0] = -1;
+     thread_data->wait_fd[1] = -1;
++    thread_data->esync_apc_fd = -1;
+     list_add_head( &teb_list, &thread_data->entry );
+ }
+ 
+diff --git a/server/esync.c b/server/esync.c
+index 7b5b0761516..33a448d0a57 100644
+--- a/server/esync.c
++++ b/server/esync.c
+@@ -348,19 +348,25 @@ int esync_create_fd( int initval, int flags )
+ #endif
+ }
+ 
++/* Wake up a specific fd. */
++void esync_wake_fd( int fd )
++{
++    static const uint64_t value = 1;
++
++    if (write( fd, &value, sizeof(value) ) == -1)
++        perror( "esync: write" );
++}
++
+ /* Wake up a server-side esync object. */
+ void esync_wake_up( struct object *obj )
+ {
+-    static const uint64_t value = 1;
+     enum esync_type dummy;
+     int fd;
+ 
+     if (obj->ops->get_esync_fd)
+     {
+         fd = obj->ops->get_esync_fd( obj, &dummy );
+-
+-        if (write( fd, &value, sizeof(value) ) == -1)
+-            perror( "esync: write" );
++        esync_wake_fd( fd );
+     }
+ }
+ 
+@@ -498,3 +504,9 @@ DECL_HANDLER(get_esync_fd)
+ 
+     release_object( obj );
+ }
++
++/* Return the fd used for waiting on user APCs. */
++DECL_HANDLER(get_esync_apc_fd)
++{
++    send_client_fd( current->process, current->esync_apc_fd, current->id );
++}
+diff --git a/server/esync.h b/server/esync.h
+index aeb58c5469c..cea025d9308 100644
+--- a/server/esync.h
++++ b/server/esync.h
+@@ -21,6 +21,7 @@
+ extern int do_esync(void);
+ void esync_init(void);
+ int esync_create_fd( int initval, int flags );
++void esync_wake_fd( int fd );
+ void esync_wake_up( struct object *obj );
+ void esync_clear( int fd );
+ 
+diff --git a/server/protocol.def b/server/protocol.def
+index 5b8f66ffd80..a110c4c60a6 100644
+--- a/server/protocol.def
++++ b/server/protocol.def
+@@ -3714,3 +3714,7 @@ enum esync_type
+ @REQ(esync_msgwait)
+     int          in_msgwait;    /* are we in a message wait? */
+ @END
++
++/* Retrieve the fd to wait on for user APCs. */
++@REQ(get_esync_apc_fd)
++@END
+diff --git a/server/thread.c b/server/thread.c
+index d22555ca317..6bf4be04af5 100644
+--- a/server/thread.c
++++ b/server/thread.c
+@@ -227,6 +227,7 @@ static inline void init_thread_structure( struct thread *thread )
+     thread->teb             = 0;
+     thread->entry_point     = 0;
+     thread->esync_fd        = -1;
++    thread->esync_apc_fd    = -1;
+     thread->debug_ctx       = NULL;
+     thread->system_regs     = 0;
+     thread->queue           = NULL;
+@@ -363,7 +364,10 @@ struct thread *create_thread( int fd, struct process *process, const struct secu
+     }
+ 
+     if (do_esync())
++    {
+         thread->esync_fd = esync_create_fd( 0, 0 );
++        thread->esync_apc_fd = esync_create_fd( 0, 0 );
++    }
+ 
+     set_fd_events( thread->request_fd, POLLIN );  /* start listening to events */
+     add_process_thread( thread->process, thread );
+@@ -1150,8 +1154,13 @@ static int queue_apc( struct process *process, struct thread *thread, struct thr
+     grab_object( apc );
+     list_add_tail( queue, &apc->entry );
+     if (!list_prev( queue, &apc->entry ))  /* first one */
++    {
+         wake_thread( thread );
+ 
++        if (do_esync() && queue == &thread->user_apc)
++            esync_wake_fd( thread->esync_apc_fd );
++    }
++
+     return 1;
+ }
+ 
+@@ -1197,6 +1206,10 @@ static struct thread_apc *thread_dequeue_apc( struct thread *thread, int system
+         apc = LIST_ENTRY( ptr, struct thread_apc, entry );
+         list_remove( ptr );
+     }
++
++    if (do_esync() && list_empty( &thread->system_apc ) && list_empty( &thread->user_apc ))
++        esync_clear( thread->esync_apc_fd );
++
+     return apc;
+ }
+ 
+diff --git a/server/thread.h b/server/thread.h
+index f19080988e9..5faa2456a81 100644
+--- a/server/thread.h
++++ b/server/thread.h
+@@ -55,6 +55,7 @@ struct thread
+     thread_id_t            id;            /* thread id */
+     struct list            mutex_list;    /* list of currently owned mutexes */
+     int                    esync_fd;      /* esync file descriptor (signalled on exit) */
++    int                    esync_apc_fd;  /* esync apc fd (signalled when APCs are present) */
+     struct debug_ctx      *debug_ctx;     /* debugger context if this thread is a debugger */
+     unsigned int           system_regs;   /* which system regs have been set */
+     struct msg_queue      *queue;         /* message queue */
+-- 
+2.28.0
+
