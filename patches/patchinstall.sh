@@ -2619,6 +2619,7 @@ if test "$enable_eventfd_synchronization" -eq 1; then
 	patch_apply eventfd_synchronization/0053-esync-Update-README.patch
 	patch_apply eventfd_synchronization/0054-server-Create-esync-file-descriptors-for-true-file-o.patch
 	patch_apply eventfd_synchronization/0055-ntdll-server-Abandon-esync-mutexes-on-thread-exit.patch
+	patch_apply eventfd_synchronization/0056-server-Create-esync-file-descriptors-for-console-ser.patch
 fi
 
 # Patchset explorer-Video_Registry_Key
