@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "42bba70a024060fbd698aadec20fbb6f61ad9e16"
+	echo "f6a5a3d03c1eb914444af96352ca54eec79d7e2c"
 }
 
 # Show version information
@@ -2853,8 +2853,8 @@ fi
 # |   *	[#49692] mfplat: Improved support for multiple video formats.
 # |
 # | Modified files:
-# |   *	dlls/mf/Makefile.in, dlls/mf/handler.c, dlls/mf/handler.h, dlls/mf/main.c, dlls/mf/sar.c, dlls/mf/session.c,
-# | 	dlls/mf/tests/mf.c, dlls/mf/topology.c, dlls/mfmediaengine/main.c, dlls/mfplat/mediatype.c, dlls/mfplat/tests/mfplat.c,
+# |   *	dlls/mf/Makefile.in, dlls/mf/handler.c, dlls/mf/handler.h, dlls/mf/main.c, dlls/mf/session.c, dlls/mf/tests/mf.c,
+# | 	dlls/mf/topology.c, dlls/mfmediaengine/main.c, dlls/mfplat/mediatype.c, dlls/mfplat/tests/mfplat.c,
 # | 	dlls/mfplat/tests/test.mp4, dlls/mfreadwrite/reader.c, dlls/mfreadwrite/tests/mfplat.c,
 # | 	dlls/mfreadwrite/tests/resource.rc, dlls/mfreadwrite/tests/test.mp4, dlls/winegstreamer/Makefile.in,
 # | 	dlls/winegstreamer/audioconvert.c, dlls/winegstreamer/colorconvert.c, dlls/winegstreamer/gst_cbs.c,
@@ -2914,7 +2914,6 @@ if test "$enable_mfplat_streaming_support" -eq 1; then
 	patch_apply mfplat-streaming-support/0049-mf-Partially-implement-the-topology-loader.patch
 	patch_apply mfplat-streaming-support/0050-mf-Miscelaneous-fixes-to-topology-resolution.patch
 	patch_apply mfplat-streaming-support/0051-Rewrite-branch-resolver.patch
-	patch_apply mfplat-streaming-support/0052-mf-sar-Compare-against-native-media-type-in-IsMediaT.patch
 	patch_apply mfplat-streaming-support/0053-winegstreamer-Implement-audio-conversion-MFT.patch
 	patch_apply mfplat-streaming-support/0054-HACK-Shutdown-media-sinks-on-session-shutdown.patch
 	patch_apply mfplat-streaming-support/0055-HACK-Flush-decoder-when-changing-times.patch
