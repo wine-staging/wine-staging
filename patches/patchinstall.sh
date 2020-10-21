@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "0c249e6125fc9dc6ee86b4ef6ae0d9fa2fc6291b"
+	echo "42bba70a024060fbd698aadec20fbb6f61ad9e16"
 }
 
 # Show version information
@@ -266,7 +266,6 @@ patch_enable_all ()
 	enable_user32_recursive_activation="$1"
 	enable_user32_window_activation="$1"
 	enable_uxtheme_CloseThemeClass="$1"
-	enable_uxtheme_GTK_Theming="$1"
 	enable_version_VerQueryValue="$1"
 	enable_widl_SLTG_Typelib_Support="$1"
 	enable_widl_winrt_support="$1"
@@ -889,9 +888,6 @@ patch_enable ()
 		uxtheme-CloseThemeClass)
 			enable_uxtheme_CloseThemeClass="$2"
 			;;
-		uxtheme-GTK_Theming)
-			enable_uxtheme_GTK_Theming="$2"
-			;;
 		version-VerQueryValue)
 			enable_version_VerQueryValue="$2"
 			;;
@@ -1489,13 +1485,6 @@ if test "$enable_windows_media_speech_dll" -eq 1; then
 		abort "Patchset widl-winrt-support disabled, but windows.media.speech.dll depends on that."
 	fi
 	enable_widl_winrt_support=1
-fi
-
-if test "$enable_uxtheme_GTK_Theming" -eq 1; then
-	if test "$enable_uxtheme_CloseThemeClass" -gt 1; then
-		abort "Patchset uxtheme-CloseThemeClass disabled, but uxtheme-GTK_Theming depends on that."
-	fi
-	enable_uxtheme_CloseThemeClass=1
 fi
 
 if test "$enable_user32_window_activation" -eq 1; then
@@ -4414,28 +4403,6 @@ if test "$enable_uxtheme_CloseThemeClass" -eq 1; then
 	patch_apply uxtheme-CloseThemeClass/0001-uxtheme-Protect-CloseThemeData-from-invalid-input.patch
 fi
 
-# Patchset uxtheme-GTK_Theming
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	uxtheme-CloseThemeClass
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/uxtheme/Makefile.in, dlls/uxtheme/buffer.c, dlls/uxtheme/draw.c, dlls/uxtheme/gtk-button.c,
-# | 	dlls/uxtheme/gtk-combobox.c, dlls/uxtheme/gtk-edit.c, dlls/uxtheme/gtk-header.c, dlls/uxtheme/gtk-listbox.c,
-# | 	dlls/uxtheme/gtk-listview.c, dlls/uxtheme/gtk-menu.c, dlls/uxtheme/gtk-rebar.c, dlls/uxtheme/gtk-status.c, dlls/uxtheme
-# | 	/gtk-tab.c, dlls/uxtheme/gtk-toolbar.c, dlls/uxtheme/gtk-trackbar.c, dlls/uxtheme/gtk-window.c, dlls/uxtheme/gtk.c,
-# | 	dlls/uxtheme/main.c, dlls/uxtheme/metric.c, dlls/uxtheme/msstyles.c, dlls/uxtheme/property.c, dlls/uxtheme/stylemap.c,
-# | 	dlls/uxtheme/system.c, dlls/uxtheme/uxini.c, dlls/uxtheme/uxthemedll.h, dlls/uxtheme/uxthemegtk.h, tools/makedep.c
-# |
-if test "$enable_uxtheme_GTK_Theming" -eq 1; then
-	patch_apply uxtheme-GTK_Theming/0000-Revert-uxtheme-Build-with-msvcrt.patch
-	patch_apply uxtheme-GTK_Theming/0001-uxtheme-Initial-implementation-of-GTK-backend.patch
-	patch_apply uxtheme-GTK_Theming/0002-makefiles-Only-apply-non-include-path-EXTRAINCL-flag.patch
-	patch_apply uxtheme-GTK_Theming/0003-uxtheme-Correctly-render-buttons-with-GTK-3.14.0.patch
-	patch_apply uxtheme-GTK_Theming/0004-uxtheme-Reset-FPU-flags-before-calling-GTK3-function.patch
-	patch_apply uxtheme-GTK_Theming/0005-uxtheme-Fix-some-incorrect-error-codes.patch
-fi
-
 # Patchset version-VerQueryValue
 # |
 # | Modified files:
@@ -5070,6 +5037,7 @@ fi
 # |   *	dlls/winex11.drv/window.c
 # |
 if test "$enable_winex11_drv_Query_server_position" -eq 1; then
+	patch_apply winex11.drv-Query_server_position/0001-winex11.drv-Let-the-Window-Manager-handle-the-off-sc.patch
 	patch_apply winex11.drv-Query_server_position/0001-winex11.drv-window-Query-the-X-server-for-the-actual.patch
 fi
 
