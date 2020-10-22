@@ -5042,7 +5042,6 @@ fi
 # |   *	dlls/winex11.drv/window.c
 # |
 if test "$enable_winex11_drv_Query_server_position" -eq 1; then
-	patch_apply winex11.drv-Query_server_position/0001-winex11.drv-Let-the-Window-Manager-handle-the-off-sc.patch
 	patch_apply winex11.drv-Query_server_position/0001-winex11.drv-window-Query-the-X-server-for-the-actual.patch
 fi
 
