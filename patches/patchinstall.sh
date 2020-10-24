@@ -166,7 +166,6 @@ patch_enable_all ()
 	enable_ntdll_Exception="$1"
 	enable_ntdll_FileDispositionInformation="$1"
 	enable_ntdll_FileFsFullSizeInformation="$1"
-	enable_ntdll_Fix_Alignment="$1"
 	enable_ntdll_ForceBottomUpAlloc="$1"
 	enable_ntdll_HashLinks="$1"
 	enable_ntdll_Heap_Improvements="$1"
@@ -587,9 +586,6 @@ patch_enable ()
 			;;
 		ntdll-FileFsFullSizeInformation)
 			enable_ntdll_FileFsFullSizeInformation="$2"
-			;;
-		ntdll-Fix_Alignment)
-			enable_ntdll_Fix_Alignment="$2"
 			;;
 		ntdll-ForceBottomUpAlloc)
 			enable_ntdll_ForceBottomUpAlloc="$2"
@@ -3170,18 +3166,6 @@ fi
 # |
 if test "$enable_ntdll_FileFsFullSizeInformation" -eq 1; then
 	patch_apply ntdll-FileFsFullSizeInformation/0001-ntdll-Add-support-for-FileFsFullSizeInformation-clas.patch
-fi
-
-# Patchset ntdll-Fix_Alignment
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#33162] Ensure NtProtectVirtualMemory and NtCreateSection are on separate pages
-# |
-# | Modified files:
-# |   *	dlls/ntdll/unix/virtual.c
-# |
-if test "$enable_ntdll_Fix_Alignment" -eq 1; then
-	patch_apply ntdll-Fix_Alignment/0001-ntdll-Move-NtProtectVirtualMemory-and-NtCreateSectio.patch
 fi
 
 # Patchset ntdll-HashLinks
