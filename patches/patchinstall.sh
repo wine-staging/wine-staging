@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "6373792eec0f122295723cae77b0115e6c96c3e4"
+	echo "93107c08f5aa7f37ad7ece9cd7ca248dba3030ce"
 }
 
 # Show version information
@@ -145,7 +145,6 @@ patch_enable_all ()
 	enable_krnl386_exe16_GDT_LDT_Emulation="$1"
 	enable_krnl386_exe16_Invalid_Console_Handles="$1"
 	enable_loader_KeyboardLayouts="$1"
-	enable_mfplat_streaming_support="$1"
 	enable_mmsystem_dll16_MIDIHDR_Refcount="$1"
 	enable_mountmgr_DosDevices="$1"
 	enable_mscoree_CorValidateImage="$1"
@@ -186,7 +185,6 @@ patch_enable_all ()
 	enable_ntdll_Status_Mapping="$1"
 	enable_ntdll_Syscall_Emulation="$1"
 	enable_ntdll_SystemCodeIntegrityInformation="$1"
-	enable_ntdll_SystemExtendedProcessInformation="$1"
 	enable_ntdll_SystemModuleInformation="$1"
 	enable_ntdll_WRITECOPY="$1"
 	enable_ntdll_Zero_mod_name="$1"
@@ -524,9 +522,6 @@ patch_enable ()
 		loader-KeyboardLayouts)
 			enable_loader_KeyboardLayouts="$2"
 			;;
-		mfplat-streaming-support)
-			enable_mfplat_streaming_support="$2"
-			;;
 		mmsystem.dll16-MIDIHDR_Refcount)
 			enable_mmsystem_dll16_MIDIHDR_Refcount="$2"
 			;;
@@ -646,9 +641,6 @@ patch_enable ()
 			;;
 		ntdll-SystemCodeIntegrityInformation)
 			enable_ntdll_SystemCodeIntegrityInformation="$2"
-			;;
-		ntdll-SystemExtendedProcessInformation)
-			enable_ntdll_SystemExtendedProcessInformation="$2"
 			;;
 		ntdll-SystemModuleInformation)
 			enable_ntdll_SystemModuleInformation="$2"
@@ -1587,13 +1579,6 @@ if test "$enable_nvcuvid_CUDA_Video_Support" -eq 1; then
 		abort "Patchset nvapi-Stub_DLL disabled, but nvcuvid-CUDA_Video_Support depends on that."
 	fi
 	enable_nvapi_Stub_DLL=1
-fi
-
-if test "$enable_ntdll_SystemCodeIntegrityInformation" -eq 1; then
-	if test "$enable_ntdll_SystemExtendedProcessInformation" -gt 1; then
-		abort "Patchset ntdll-SystemExtendedProcessInformation disabled, but ntdll-SystemCodeIntegrityInformation depends on that."
-	fi
-	enable_ntdll_SystemExtendedProcessInformation=1
 fi
 
 if test "$enable_ntdll_Syscall_Emulation" -eq 1; then
@@ -2843,80 +2828,6 @@ if test "$enable_loader_KeyboardLayouts" -eq 1; then
 	patch_apply loader-KeyboardLayouts/0002-user32-Improve-GetKeyboardLayoutList.patch
 fi
 
-# Patchset mfplat-streaming-support
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#49692] mfplat: Improved support for multiple video formats.
-# |
-# | Modified files:
-# |   *	dlls/mf/Makefile.in, dlls/mf/handler.c, dlls/mf/handler.h, dlls/mf/main.c, dlls/mf/session.c, dlls/mf/tests/mf.c,
-# | 	dlls/mf/topology.c, dlls/mfmediaengine/main.c, dlls/mfplat/mediatype.c, dlls/mfplat/tests/mfplat.c,
-# | 	dlls/mfplat/tests/test.mp4, dlls/mfreadwrite/reader.c, dlls/mfreadwrite/tests/mfplat.c,
-# | 	dlls/mfreadwrite/tests/resource.rc, dlls/mfreadwrite/tests/test.mp4, dlls/winegstreamer/Makefile.in,
-# | 	dlls/winegstreamer/audioconvert.c, dlls/winegstreamer/colorconvert.c, dlls/winegstreamer/gst_cbs.c,
-# | 	dlls/winegstreamer/gst_cbs.h, dlls/winegstreamer/gst_private.h, dlls/winegstreamer/main.c,
-# | 	dlls/winegstreamer/media_source.c, dlls/winegstreamer/mf_decode.c, dlls/winegstreamer/mfplat.c,
-# | 	dlls/winegstreamer/winegstreamer_classes.idl, include/mfidl.idl, tools/make_makefiles, tools/makedep.c
-# |
-if test "$enable_mfplat_streaming_support" -eq 1; then
-	patch_apply mfplat-streaming-support/0001-mfmediaengine-Provide-the-partial-topology-to-the-me.patch
-	patch_apply mfplat-streaming-support/0002-mfmediaengine-Issue-MF_MEDIA_ENGINE_EVENT_CANPLAY-up.patch
-	patch_apply mfplat-streaming-support/0003-mfmediaengine-Issue-MF_MEDIA_ENGINE_EVENT_PLAYING-up.patch
-	patch_apply mfplat-streaming-support/0004-mfmediaengine-Issue-MF_MEDIA_ENGINE_EVENT_ENDED-upon.patch
-	patch_apply mfplat-streaming-support/0005-mf-Unconditionally-deliver-NULL-EOS-samples.patch
-	patch_apply mfplat-streaming-support/0006-winegstreamer-Insert-videoconvert-into-decoded-video.patch
-	patch_apply mfplat-streaming-support/0007-winegstreamer-Insert-audioconvert-into-decoded-audio.patch
-	patch_apply mfplat-streaming-support/0008-winegstreamer-Implement-IMFMediaSource-CreatePresent.patch
-	patch_apply mfplat-streaming-support/0009-winegstreamer-Implement-IMFMediaSource-Start.patch
-	patch_apply mfplat-streaming-support/0010-winegstreamer-Implement-IMFMediaStream-RequestSample.patch
-	patch_apply mfplat-streaming-support/0011-winegstreamer-Insert-parser-into-pipeline-to-rectify.patch
-	patch_apply mfplat-streaming-support/0012-winegstreamer-Translate-H.264-caps-to-attributes.patch
-	patch_apply mfplat-streaming-support/0013-winegstreamer-Translate-WMV-caps-to-attributes.patch
-	patch_apply mfplat-streaming-support/0014-winegstreamer-Translate-AAC-caps-to-attributes.patch
-	patch_apply mfplat-streaming-support/0015-winegstreamer-Translate-MPEG-4-Section-2-caps-to-att.patch
-	patch_apply mfplat-streaming-support/0016-winegstreamer-Translate-WMA-caps-to-attributes.patch
-	patch_apply mfplat-streaming-support/0017-winegstreamer-Translate-H.264-attributes-to-caps.patch
-	patch_apply mfplat-streaming-support/0018-winegstreamer-Translate-WMV-attributes-to-caps.patch
-	patch_apply mfplat-streaming-support/0019-winegstreamer-Translate-AAC-attributes-to-caps.patch
-	patch_apply mfplat-streaming-support/0020-winegstreamer-Translate-MPEG-4-Section-2-attributes-.patch
-	patch_apply mfplat-streaming-support/0021-winegstreamer-Translate-WMA-attributes-to-caps.patch
-	patch_apply mfplat-streaming-support/0022-winegstreamer-Implement-IMFMediaSource-GetCharacteri.patch
-	patch_apply mfplat-streaming-support/0023-winegstreamer-Calculate-the-MF_PD_DURATION-of-the-me.patch
-	patch_apply mfplat-streaming-support/0024-tools-Add-support-for-multiple-parent-directories.patch
-	patch_apply mfplat-streaming-support/0025-mf-Introduce-handler-helper.patch
-	patch_apply mfplat-streaming-support/0026-Introduce-IMFSample-GstBuffer-converter.patch
-	patch_apply mfplat-streaming-support/0027-winegstreamer-Implement-decoder-MFT-on-gstreamer.patch
-	patch_apply mfplat-streaming-support/0028-mfreadwrite-Select-all-streams-when-creating-a-sourc.patch
-	patch_apply mfplat-streaming-support/0029-Miscellaneous.patch
-	patch_apply mfplat-streaming-support/0030-WMV.patch
-	patch_apply mfplat-streaming-support/0031-mf-Ask-for-more-samples-from-upstream-node-when-upon.patch
-	patch_apply mfplat-streaming-support/0032-winegstreamer-Implement-IMFMedisStream-GetMediaSourc.patch
-	patch_apply mfplat-streaming-support/0033-Expose-PCM-output-type-on-AAC-decoder.patch
-	patch_apply mfplat-streaming-support/0034-mfplat-Add-I420-format-information.patch
-	patch_apply mfplat-streaming-support/0035-winegstreamer-Implement-Color-Converter-MFT.patch
-	patch_apply mfplat-streaming-support/0036-HACK-Set-BPS-to-16-for-output-template.patch
-	patch_apply mfplat-streaming-support/0037-Improve-tests.patch
-	patch_apply mfplat-streaming-support/0038-Revert-Improve-tests.patch
-	patch_apply mfplat-streaming-support/0039-Report-streams-backwards-and-only-select-one-of-each.patch
-	patch_apply mfplat-streaming-support/0040-winegstreamer-Implement-IMFMediaSource-Stop.patch
-	patch_apply mfplat-streaming-support/0041-winegstreamer-Introduce-MPEG-4-Section-2-video-decod.patch
-	patch_apply mfplat-streaming-support/0042-HACK-Switch-between-all-selection-streams-on-MF_SOUR.patch
-	patch_apply mfplat-streaming-support/0043-winegstreamer-Introduce-WMA-audio-decoder.patch
-	patch_apply mfplat-streaming-support/0044-Support-stereo-down-folding.patch
-	patch_apply mfplat-streaming-support/0045-winegstreamer-Implement-MF_SD_LANGUAGE.patch
-	patch_apply mfplat-streaming-support/0046-Revert-mf-topoloader-Add-a-structure-for-iterative-b.patch
-	patch_apply mfplat-streaming-support/0047-Revert-mf-topoloader-Clone-source-nodes-as-a-first-l.patch
-	patch_apply mfplat-streaming-support/0048-Revert-mf-topoloader-Switch-to-public-interface-for-.patch
-	patch_apply mfplat-streaming-support/0049-mf-Partially-implement-the-topology-loader.patch
-	patch_apply mfplat-streaming-support/0050-mf-Miscelaneous-fixes-to-topology-resolution.patch
-	patch_apply mfplat-streaming-support/0051-Rewrite-branch-resolver.patch
-	patch_apply mfplat-streaming-support/0053-winegstreamer-Implement-audio-conversion-MFT.patch
-	patch_apply mfplat-streaming-support/0054-HACK-Shutdown-media-sinks-on-session-shutdown.patch
-	patch_apply mfplat-streaming-support/0055-HACK-Flush-decoder-when-changing-times.patch
-	patch_apply mfplat-streaming-support/0056-mfmediaengine-Implement-GetNativeVideoSize.patch
-	patch_apply mfplat-streaming-support/0060-winegstreamer-Support-eAVEncH264VProfile_Constrained.patch
-fi
-
 # Patchset mmsystem.dll16-MIDIHDR_Refcount
 # |
 # | This patchset fixes the following Wine bugs:
@@ -3370,23 +3281,7 @@ if test "$enable_ntdll_Syscall_Emulation" -eq 1; then
 	patch_apply ntdll-Syscall_Emulation/0001-ntdll-Support-x86_64-syscall-emulation.patch
 fi
 
-# Patchset ntdll-SystemExtendedProcessInformation
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#46870] League of Legends 8.12+ fails to start a game in Vista+ mode (anticheat engine,
-# | 	SystemExtendedProcessInformation)
-# |
-# | Modified files:
-# |   *	dlls/ntdll/unix/system.c
-# |
-if test "$enable_ntdll_SystemExtendedProcessInformation" -eq 1; then
-	patch_apply ntdll-SystemExtendedProcessInformation/0001-ntdll-Add-stub-for-NtQuerySystemInformation-SystemEx.patch
-fi
-
 # Patchset ntdll-SystemCodeIntegrityInformation
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-SystemExtendedProcessInformation
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#49192] ntdll: NtQuerySystemInformation support SystemCodeIntegrityInformation
