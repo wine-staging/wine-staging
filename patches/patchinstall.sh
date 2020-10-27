@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "93107c08f5aa7f37ad7ece9cd7ca248dba3030ce"
+	echo "2148167f2557cc6c7d1e2f5ffef28bd936503a9a"
 }
 
 # Show version information
@@ -185,7 +185,6 @@ patch_enable_all ()
 	enable_ntdll_Status_Mapping="$1"
 	enable_ntdll_Syscall_Emulation="$1"
 	enable_ntdll_SystemCodeIntegrityInformation="$1"
-	enable_ntdll_SystemModuleInformation="$1"
 	enable_ntdll_WRITECOPY="$1"
 	enable_ntdll_Zero_mod_name="$1"
 	enable_ntdll_aarch_TEB="$1"
@@ -641,9 +640,6 @@ patch_enable ()
 			;;
 		ntdll-SystemCodeIntegrityInformation)
 			enable_ntdll_SystemCodeIntegrityInformation="$2"
-			;;
-		ntdll-SystemModuleInformation)
-			enable_ntdll_SystemModuleInformation="$2"
 			;;
 		ntdll-WRITECOPY)
 			enable_ntdll_WRITECOPY="$2"
@@ -1526,13 +1522,6 @@ if test "$enable_shell32_Progress_Dialog" -eq 1; then
 	fi
 	enable_kernel32_CopyFileEx=1
 	enable_shell32_SHFileOperation_Move=1
-fi
-
-if test "$enable_server_Object_Types" -eq 1; then
-	if test "$enable_ntdll_SystemModuleInformation" -gt 1; then
-		abort "Patchset ntdll-SystemModuleInformation disabled, but server-Object_Types depends on that."
-	fi
-	enable_ntdll_SystemModuleInformation=1
 fi
 
 if test "$enable_server_Inherited_ACLs" -eq 1; then
@@ -3293,21 +3282,6 @@ if test "$enable_ntdll_SystemCodeIntegrityInformation" -eq 1; then
 	patch_apply ntdll-SystemCodeIntegrityInformation/0001-ntdll-NtQuerySystemInformation-support-SystemCodeInt.patch
 fi
 
-# Patchset ntdll-SystemModuleInformation
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#45550] League of Legends 8.15+ anticheat fails due to incorrect implementation of
-# | 	NtQuerySystemInformation(SystemModuleInformation)
-# |   *	[#45666] League of Legends 8.15+ fails due to missing implementation of
-# | 	NtQuerySystemInformation(SystemModuleInformationEx) in Windows Vista+ mode
-# |
-# | Modified files:
-# |   *	dlls/ntdll/unix/system.c, include/winternl.h
-# |
-if test "$enable_ntdll_SystemModuleInformation" -eq 1; then
-	patch_apply ntdll-SystemModuleInformation/0003-ntdll-Add-stub-for-NtQuerySystemInformation-SystemMo.patch
-fi
-
 # Patchset ntdll-Zero_mod_name
 # |
 # | Modified files:
@@ -3638,9 +3612,6 @@ if test "$enable_server_Key_State" -eq 1; then
 fi
 
 # Patchset server-Object_Types
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-SystemModuleInformation
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#44629] Process Hacker can't enumerate handles
@@ -4299,7 +4270,7 @@ fi
 # Patchset widl-winrt-support
 # |
 # | This patchset fixes the following Wine bugs:
-# |   *	[#68403] widl - Support WinRT idls
+# |   *	[#49998] widl - Support WinRT idls
 # |
 # | Modified files:
 # |   *	include/Makefile.in, include/windows.foundation.idl, include/windows.media.speechsynthesis.idl,
