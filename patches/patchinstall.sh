@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "c9e2deac39924473ac538ee22a2a0c0dbe3bad85"
+	echo "03eaa2cc93e5e2ea4c36495870c268797aea3ca8"
 }
 
 # Show version information
@@ -2842,9 +2842,6 @@ if test "$enable_mfplat_streaming_support" -eq 1; then
 	patch_apply mfplat-streaming-support/0003-mfmediaengine-Issue-MF_MEDIA_ENGINE_EVENT_PLAYING-up.patch
 	patch_apply mfplat-streaming-support/0004-mfmediaengine-Issue-MF_MEDIA_ENGINE_EVENT_ENDED-upon.patch
 	patch_apply mfplat-streaming-support/0005-mf-Unconditionally-deliver-NULL-EOS-samples.patch
-	patch_apply mfplat-streaming-support/0008-mfreadwrite-Abort-ReadSample-when-unable-to-request-.patch
-	patch_apply mfplat-streaming-support/0009-winegstreamer-Implement-IMFMediaSource-Start.patch
-	patch_apply mfplat-streaming-support/0010-winegstreamer-Implement-IMFMediaStream-RequestSample.patch
 	patch_apply mfplat-streaming-support/0011-winegstreamer-Insert-parser-into-pipeline-to-rectify.patch
 	patch_apply mfplat-streaming-support/0012-winegstreamer-Translate-H.264-caps-to-attributes.patch
 	patch_apply mfplat-streaming-support/0013-winegstreamer-Translate-WMV-caps-to-attributes.patch
