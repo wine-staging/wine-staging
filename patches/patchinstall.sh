@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "dfa4c07941322dbcad54507cd0acf271a6c719ab"
+	echo "908c837b17ac1c285ef32e98f53df730c3770295"
 }
 
 # Show version information
@@ -155,7 +155,6 @@ patch_enable_all ()
 	enable_msi_msi_vcl_get_cost="$1"
 	enable_msvcrt_Math_Precision="$1"
 	enable_msxml3_FreeThreadedXMLHTTP60="$1"
-	enable_netutils_dll="$1"
 	enable_ntdll_APC_Performance="$1"
 	enable_ntdll_Activation_Context="$1"
 	enable_ntdll_ApiSetMap="$1"
@@ -237,7 +236,6 @@ patch_enable_all ()
 	enable_shlwapi_SHAddDataBlock="$1"
 	enable_shlwapi_UrlCanonicalize="$1"
 	enable_shlwapi_UrlCombine="$1"
-	enable_srvcli_dll="$1"
 	enable_stdole32_idl_Typelib="$1"
 	enable_stdole32_tlb_SLTG_Typelib="$1"
 	enable_tasklist_basics="$1"
@@ -552,9 +550,6 @@ patch_enable ()
 		msxml3-FreeThreadedXMLHTTP60)
 			enable_msxml3_FreeThreadedXMLHTTP60="$2"
 			;;
-		netutils-dll)
-			enable_netutils_dll="$2"
-			;;
 		ntdll-APC_Performance)
 			enable_ntdll_APC_Performance="$2"
 			;;
@@ -797,9 +792,6 @@ patch_enable ()
 			;;
 		shlwapi-UrlCombine)
 			enable_shlwapi_UrlCombine="$2"
-			;;
-		srvcli-dll)
-			enable_srvcli_dll="$2"
 			;;
 		stdole32.idl-Typelib)
 			enable_stdole32_idl_Typelib="$2"
@@ -2837,10 +2829,6 @@ fi
 # | 	include/mfidl.idl, tools/make_makefiles, tools/makedep.c
 # |
 if test "$enable_mfplat_streaming_support" -eq 1; then
-	patch_apply mfplat-streaming-support/0001-mfmediaengine-Provide-the-partial-topology-to-the-me.patch
-	patch_apply mfplat-streaming-support/0002-mfmediaengine-Issue-MF_MEDIA_ENGINE_EVENT_CANPLAY-up.patch
-	patch_apply mfplat-streaming-support/0003-mfmediaengine-Issue-MF_MEDIA_ENGINE_EVENT_PLAYING-up.patch
-	patch_apply mfplat-streaming-support/0004-mfmediaengine-Issue-MF_MEDIA_ENGINE_EVENT_ENDED-upon.patch
 	patch_apply mfplat-streaming-support/0005-mf-Unconditionally-deliver-NULL-EOS-samples.patch
 	patch_apply mfplat-streaming-support/0011-winegstreamer-Insert-parser-into-pipeline-to-rectify.patch
 	patch_apply mfplat-streaming-support/0012-winegstreamer-Translate-H.264-caps-to-attributes.patch
@@ -2997,18 +2985,6 @@ if test "$enable_msxml3_FreeThreadedXMLHTTP60" -eq 1; then
 	patch_apply msxml3-FreeThreadedXMLHTTP60/0001-include-Remove-interfaces-already-define-in-msxml6.i.patch
 	patch_apply msxml3-FreeThreadedXMLHTTP60/0002-include-Add-IXMLHTTPRequest2-3-interfaces.patch
 	patch_apply msxml3-FreeThreadedXMLHTTP60/0003-msxml3-Implement-FreeThreadedXMLHTTP60.patch
-fi
-
-# Patchset netutils-dll
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#49739] Add netutils dll
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/netutils/Makefile.in, dlls/netutils/main.c, dlls/netutils/netutils.spec
-# |
-if test "$enable_netutils_dll" -eq 1; then
-	patch_apply netutils-dll/0001-netutils-New-DLL.patch
 fi
 
 # Patchset ntdll-APC_Performance
@@ -3933,18 +3909,6 @@ fi
 if test "$enable_shlwapi_UrlCombine" -eq 1; then
 	patch_apply shlwapi-UrlCombine/0001-shlwapi-tests-Add-additional-tests-for-UrlCombine-and-.patch
 	patch_apply shlwapi-UrlCombine/0002-shlwapi-UrlCombineW-workaround-for-relative-paths.patch
-fi
-
-# Patchset srvcli-dll
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#49739] Add srvcli dll
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/srvcli/Makefile.in, dlls/srvcli/main.c, dlls/srvcli/srvcli.spec, tools/make_specfiles
-# |
-if test "$enable_srvcli_dll" -eq 1; then
-	patch_apply srvcli-dll/0001-srvcli-New-DLL.patch
 fi
 
 # Patchset stdole32.idl-Typelib
