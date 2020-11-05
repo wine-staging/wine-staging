@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "908c837b17ac1c285ef32e98f53df730c3770295"
+	echo "b793799d3d5facb765d97041669da4bc159b860b"
 }
 
 # Show version information
@@ -2820,13 +2820,12 @@ fi
 # |
 # | Modified files:
 # |   *	dlls/mf/Makefile.in, dlls/mf/handler.c, dlls/mf/handler.h, dlls/mf/main.c, dlls/mf/session.c, dlls/mf/tests/mf.c,
-# | 	dlls/mf/topology.c, dlls/mfmediaengine/main.c, dlls/mfplat/tests/mfplat.c, dlls/mfplat/tests/test.mp4,
-# | 	dlls/mfreadwrite/reader.c, dlls/mfreadwrite/tests/mfplat.c, dlls/mfreadwrite/tests/resource.rc,
-# | 	dlls/mfreadwrite/tests/test.mp4, dlls/winegstreamer/Makefile.in, dlls/winegstreamer/audioconvert.c,
-# | 	dlls/winegstreamer/colorconvert.c, dlls/winegstreamer/gst_cbs.c, dlls/winegstreamer/gst_cbs.h,
-# | 	dlls/winegstreamer/gst_private.h, dlls/winegstreamer/main.c, dlls/winegstreamer/media_source.c,
-# | 	dlls/winegstreamer/mf_decode.c, dlls/winegstreamer/mfplat.c, dlls/winegstreamer/winegstreamer_classes.idl,
-# | 	include/mfidl.idl, tools/make_makefiles, tools/makedep.c
+# | 	dlls/mf/topology.c, dlls/mfplat/tests/mfplat.c, dlls/mfplat/tests/test.mp4, dlls/mfreadwrite/reader.c,
+# | 	dlls/mfreadwrite/tests/mfplat.c, dlls/mfreadwrite/tests/resource.rc, dlls/mfreadwrite/tests/test.mp4,
+# | 	dlls/winegstreamer/Makefile.in, dlls/winegstreamer/audioconvert.c, dlls/winegstreamer/colorconvert.c,
+# | 	dlls/winegstreamer/gst_cbs.c, dlls/winegstreamer/gst_cbs.h, dlls/winegstreamer/gst_private.h, dlls/winegstreamer/main.c,
+# | 	dlls/winegstreamer/media_source.c, dlls/winegstreamer/mf_decode.c, dlls/winegstreamer/mfplat.c,
+# | 	dlls/winegstreamer/winegstreamer_classes.idl, include/mfidl.idl, tools/make_makefiles, tools/makedep.c
 # |
 if test "$enable_mfplat_streaming_support" -eq 1; then
 	patch_apply mfplat-streaming-support/0005-mf-Unconditionally-deliver-NULL-EOS-samples.patch
@@ -2873,7 +2872,6 @@ if test "$enable_mfplat_streaming_support" -eq 1; then
 	patch_apply mfplat-streaming-support/0052-winegstreamer-Implement-audio-conversion-MFT.patch
 	patch_apply mfplat-streaming-support/0053-HACK-Shutdown-media-sinks-on-session-shutdown.patch
 	patch_apply mfplat-streaming-support/0054-HACK-Flush-decoder-when-changing-times.patch
-	patch_apply mfplat-streaming-support/0055-mfmediaengine-Implement-GetNativeVideoSize.patch
 	patch_apply mfplat-streaming-support/0060-winegstreamer-Support-eAVEncH264VProfile_Constrained.patch
 fi
 
