@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "4919b9b99fe20cfb8599b7b827811fdd7937ea9d"
+	echo "70d77a439ab58dcf56664d1545aa0c4cd3edb31e"
 }
 
 # Show version information
@@ -2850,7 +2850,6 @@ if test "$enable_mfplat_streaming_support" -eq 1; then
 	patch_apply mfplat-streaming-support/0029-Miscellaneous.patch
 	patch_apply mfplat-streaming-support/0030-WMV.patch
 	patch_apply mfplat-streaming-support/0031-mf-Ask-for-more-samples-from-upstream-node-when-upon.patch
-	patch_apply mfplat-streaming-support/0032-winegstreamer-Implement-IMFMedisStream-GetMediaSourc.patch
 	patch_apply mfplat-streaming-support/0033-Expose-PCM-output-type-on-AAC-decoder.patch
 	patch_apply mfplat-streaming-support/0035-winegstreamer-Implement-Color-Converter-MFT.patch
 	patch_apply mfplat-streaming-support/0036-HACK-Set-BPS-to-16-for-output-template.patch
