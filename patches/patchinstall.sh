@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "b940c5e7c91bff963336dd7d2c4defc3a82c75a1"
+	echo "1f15ddce9c7d0ee71521d7b98c698488b76d3f01"
 }
 
 # Show version information
@@ -90,7 +90,6 @@ patch_enable_all ()
 	enable_atl_AtlAxDialogBox="$1"
 	enable_bcrypt_ECDHSecretAgreement="$1"
 	enable_cmd_launch_association="$1"
-	enable_color_sRGB_profile="$1"
 	enable_comctl32_Listview_DrawItem="$1"
 	enable_comctl32_rebar_capture="$1"
 	enable_comctl32_version_6="$1"
@@ -354,9 +353,6 @@ patch_enable ()
 			;;
 		cmd-launch-association)
 			enable_cmd_launch_association="$2"
-			;;
-		color-sRGB-profile)
-			enable_color_sRGB_profile="$2"
 			;;
 		comctl32-Listview_DrawItem)
 			enable_comctl32_Listview_DrawItem="$2"
@@ -1802,19 +1798,6 @@ fi
 if test "$enable_cmd_launch_association" -eq 1; then
 	patch_apply cmd-launch-association/0001-cmd-Support-for-launching-programs-based-on-file-ass.patch
 	patch_apply cmd-launch-association/0002-cmd-ftype-failed-to-clear-file-associations.patch
-fi
-
-# Patchset color-sRGB-profile
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#37396] Add sRGB color profile.
-# |
-# | Modified files:
-# |   *	dlls/winspool.drv/sRGB_Color_Space_Profile.icm, dlls/winspool.drv/winspool.rc, dlls/winspool.drv/wspool.c,
-# | 	dlls/winspool.drv/wspool.h
-# |
-if test "$enable_color_sRGB_profile" -eq 1; then
-	patch_apply color-sRGB-profile/0001-winspool-Add-sRGB-color-profile.patch
 fi
 
 # Patchset comctl32-Listview_DrawItem
