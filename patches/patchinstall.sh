@@ -121,7 +121,6 @@ patch_enable_all ()
 	enable_dinput_remap_joystick="$1"
 	enable_dsound_EAX="$1"
 	enable_dsound_Fast_Mixer="$1"
-	enable_dwmapi_DwmGetTransportAttributes="$1"
 	enable_dwrite_FontFallback="$1"
 	enable_dxdiagn_Enumerate_DirectSound="$1"
 	enable_dxdiagn_GetChildContainer_Leaf_Nodes="$1"
@@ -445,9 +444,6 @@ patch_enable ()
 			;;
 		dsound-Fast_Mixer)
 			enable_dsound_Fast_Mixer="$2"
-			;;
-		dwmapi-DwmGetTransportAttributes)
-			enable_dwmapi_DwmGetTransportAttributes="$2"
 			;;
 		dwrite-FontFallback)
 			enable_dwrite_FontFallback="$2"
@@ -2303,15 +2299,6 @@ if test "$enable_dsound_EAX" -eq 1; then
 	patch_apply dsound-EAX/0019-dsound-Allow-disabling-of-EAX-support-in-the-registr.patch
 	patch_apply dsound-EAX/0020-dsound-Add-stub-support-for-DSPROPSETID_EAX20_Listen.patch
 	patch_apply dsound-EAX/0021-dsound-Add-stub-support-for-DSPROPSETID_EAX20_Buffer.patch
-fi
-
-# Patchset dwmapi-DwmGetTransportAttributes
-# |
-# | Modified files:
-# |   *	dlls/dwmapi/tests/dwmapi.c
-# |
-if test "$enable_dwmapi_DwmGetTransportAttributes" -eq 1; then
-	patch_apply dwmapi-DwmGetTransportAttributes/0002-dwmapi-add-initial-tests.patch
 fi
 
 # Patchset dwrite-FontFallback
