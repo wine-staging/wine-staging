@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "cf49617c1a378dd4a37ab7226187708c501b046f"
+	echo "86e6c0bc28177a3794950fe2a13b8208400b6194"
 }
 
 # Show version information
@@ -122,8 +122,6 @@ patch_enable_all ()
 	enable_dsound_EAX="$1"
 	enable_dsound_Fast_Mixer="$1"
 	enable_dwrite_FontFallback="$1"
-	enable_dxdiagn_Enumerate_DirectSound="$1"
-	enable_dxdiagn_GetChildContainer_Leaf_Nodes="$1"
 	enable_eventfd_synchronization="$1"
 	enable_explorer_Video_Registry_Key="$1"
 	enable_fonts_Missing_Fonts="$1"
@@ -261,11 +259,6 @@ patch_enable_all ()
 	enable_uxtheme_CloseThemeClass="$1"
 	enable_version_VerQueryValue="$1"
 	enable_widl_SLTG_Typelib_Support="$1"
-	enable_widl_winrt_support="$1"
-	enable_windows_gaming_input_dll="$1"
-	enable_windows_globalization_dll="$1"
-	enable_windows_media_speech_dll="$1"
-	enable_windows_networking_connectivity_dll="$1"
 	enable_windowscodecs_GIF_Encoder="$1"
 	enable_windowscodecs_TIFF_Support="$1"
 	enable_wine_inf_Directory_ContextMenuHandlers="$1"
@@ -448,12 +441,6 @@ patch_enable ()
 			;;
 		dwrite-FontFallback)
 			enable_dwrite_FontFallback="$2"
-			;;
-		dxdiagn-Enumerate_DirectSound)
-			enable_dxdiagn_Enumerate_DirectSound="$2"
-			;;
-		dxdiagn-GetChildContainer_Leaf_Nodes)
-			enable_dxdiagn_GetChildContainer_Leaf_Nodes="$2"
 			;;
 		eventfd_synchronization)
 			enable_eventfd_synchronization="$2"
@@ -865,21 +852,6 @@ patch_enable ()
 			;;
 		widl-SLTG_Typelib_Support)
 			enable_widl_SLTG_Typelib_Support="$2"
-			;;
-		widl-winrt-support)
-			enable_widl_winrt_support="$2"
-			;;
-		windows.gaming.input-dll)
-			enable_windows_gaming_input_dll="$2"
-			;;
-		windows.globalization-dll)
-			enable_windows_globalization_dll="$2"
-			;;
-		windows.media.speech.dll)
-			enable_windows_media_speech_dll="$2"
-			;;
-		windows.networking.connectivity.dll)
-			enable_windows_networking_connectivity_dll="$2"
 			;;
 		windowscodecs-GIF_Encoder)
 			enable_windowscodecs_GIF_Encoder="$2"
@@ -1431,34 +1403,6 @@ if test "$enable_wineboot_ProxySettings" -eq 1; then
 	enable_wineboot_drivers_etc_Stubs=1
 fi
 
-if test "$enable_windows_networking_connectivity_dll" -eq 1; then
-	if test "$enable_windows_globalization_dll" -gt 1; then
-		abort "Patchset windows.globalization-dll disabled, but windows.networking.connectivity.dll depends on that."
-	fi
-	enable_windows_globalization_dll=1
-fi
-
-if test "$enable_windows_globalization_dll" -eq 1; then
-	if test "$enable_windows_gaming_input_dll" -gt 1; then
-		abort "Patchset windows.gaming.input-dll disabled, but windows.globalization-dll depends on that."
-	fi
-	enable_windows_gaming_input_dll=1
-fi
-
-if test "$enable_windows_gaming_input_dll" -eq 1; then
-	if test "$enable_windows_media_speech_dll" -gt 1; then
-		abort "Patchset windows.media.speech.dll disabled, but windows.gaming.input-dll depends on that."
-	fi
-	enable_windows_media_speech_dll=1
-fi
-
-if test "$enable_windows_media_speech_dll" -eq 1; then
-	if test "$enable_widl_winrt_support" -gt 1; then
-		abort "Patchset widl-winrt-support disabled, but windows.media.speech.dll depends on that."
-	fi
-	enable_widl_winrt_support=1
-fi
-
 if test "$enable_user32_window_activation" -eq 1; then
 	if test "$enable_user32_recursive_activation" -gt 1; then
 		abort "Patchset user32-recursive-activation disabled, but user32-window-activation depends on that."
@@ -1628,13 +1572,6 @@ if test "$enable_ntdll_Junction_Points" -eq 1; then
 	fi
 	enable_ntdll_DOS_Attributes=1
 	enable_ntdll_NtQueryEaFile=1
-fi
-
-if test "$enable_dxdiagn_GetChildContainer_Leaf_Nodes" -eq 1; then
-	if test "$enable_dxdiagn_Enumerate_DirectSound" -gt 1; then
-		abort "Patchset dxdiagn-Enumerate_DirectSound disabled, but dxdiagn-GetChildContainer_Leaf_Nodes depends on that."
-	fi
-	enable_dxdiagn_Enumerate_DirectSound=1
 fi
 
 if test "$enable_dsound_EAX" -eq 1; then
@@ -2340,33 +2277,6 @@ if test "$enable_dwrite_FontFallback" -eq 1; then
 	patch_apply dwrite-FontFallback/0006-dwrite-Use-MapCharacters-for-dummy-line-metrics.patch
 fi
 
-# Patchset dxdiagn-Enumerate_DirectSound
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#32613] Implement enumeration of sound devices and basic properties to dxdiagn
-# |
-# | Modified files:
-# |   *	dlls/dxdiagn/Makefile.in, dlls/dxdiagn/provider.c, dlls/dxdiagn/tests/container.c
-# |
-if test "$enable_dxdiagn_Enumerate_DirectSound" -eq 1; then
-	patch_apply dxdiagn-Enumerate_DirectSound/0001-dxdiagn-Enumerate-DirectSound-devices-and-add-some-b.patch
-fi
-
-# Patchset dxdiagn-GetChildContainer_Leaf_Nodes
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	dxdiagn-Enumerate_DirectSound
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#38014] Implement special handling for calling GetChildContainer with an empty string
-# |
-# | Modified files:
-# |   *	dlls/dxdiagn/container.c, dlls/dxdiagn/tests/container.c
-# |
-if test "$enable_dxdiagn_GetChildContainer_Leaf_Nodes" -eq 1; then
-	patch_apply dxdiagn-GetChildContainer_Leaf_Nodes/0001-dxdiagn-Calling-GetChildContainer-with-an-empty-stri.patch
-fi
-
 # Patchset ntdll-DOS_Attributes
 # |
 # | This patchset fixes the following Wine bugs:
@@ -2486,7 +2396,7 @@ fi
 # | 	server/main.c, server/mapping.c, server/mutex.c, server/named_pipe.c, server/object.h, server/process.c,
 # | 	server/process.h, server/protocol.def, server/queue.c, server/registry.c, server/request.c, server/semaphore.c,
 # | 	server/serial.c, server/signal.c, server/sock.c, server/symlink.c, server/thread.c, server/thread.h, server/timer.c,
-# | 	server/token.c, server/trace.c, server/winstation.c
+# | 	server/token.c, server/winstation.c
 # |
 if test "$enable_eventfd_synchronization" -eq 1; then
 	patch_apply eventfd_synchronization/0001-configure-Check-for-sys-eventfd.h-ppoll-and-shm_open.patch
@@ -4271,134 +4181,6 @@ fi
 # |
 if test "$enable_version_VerQueryValue" -eq 1; then
 	patch_apply version-VerQueryValue/0001-version-Test-for-VerQueryValueA-try-2.patch
-fi
-
-# Patchset widl-winrt-support
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#49998] widl - Support WinRT idls
-# |
-# | Modified files:
-# |   *	include/Makefile.in, include/windows.foundation.idl, include/windows.media.speechsynthesis.idl,
-# | 	include/windowscontracts.idl, tools/widl/expr.c, tools/widl/hash.c, tools/widl/hash.h, tools/widl/header.c,
-# | 	tools/widl/parser.l, tools/widl/parser.y, tools/widl/typegen.c, tools/widl/typelib.c, tools/widl/typetree.c,
-# | 	tools/widl/typetree.h, tools/widl/widltypes.h
-# |
-if test "$enable_widl_winrt_support" -eq 1; then
-	patch_apply widl-winrt-support/0001-include-Add-windows.media.speechsynthesis.idl-draft.patch
-	patch_apply widl-winrt-support/0002-widl-Restrict-some-keywords-to-WinRT-mode-only.patch
-	patch_apply widl-winrt-support/0003-widl-Introduce-format_namespace_buffer-helper.patch
-	patch_apply widl-winrt-support/0004-widl-Support-WinRT-contractversion-attribute-parsing.patch
-	patch_apply widl-winrt-support/0005-widl-Support-WinRT-apicontract-type.patch
-	patch_apply widl-winrt-support/0006-widl-Prefer-mangled-name-over-typedef-in-WinRT-mode.patch
-	patch_apply widl-winrt-support/0007-widl-Don-t-output-typedef-statement-in-WinRT-mode.patch
-	patch_apply widl-winrt-support/0008-widl-Support-WinRT-contract-attribute.patch
-	patch_apply widl-winrt-support/0009-widl-Support-WinRT-marshaling_behavior-attribute-par.patch
-	patch_apply widl-winrt-support/0010-widl-Support-WinRT-mta-threading-attribute-parsing.patch
-	patch_apply widl-winrt-support/0011-widl-Support-WinRT-exclusiveto-attribute-parsing.patch
-	patch_apply widl-winrt-support/0012-widl-Support-WinRT-runtimeclass-type.patch
-	patch_apply widl-winrt-support/0013-widl-Support-WinRT-eventadd-eventremove-attributes.patch
-	patch_apply widl-winrt-support/0014-widl-Support-WinRT-flags-attribute-parsing.patch
-	patch_apply widl-winrt-support/0015-widl-Support-using-qualified-names-for-interfaces.patch
-	patch_apply widl-winrt-support/0016-widl-Support-repeated-attributes-for-WinRT-static.patch
-	patch_apply widl-winrt-support/0017-widl-Support-WinRT-static-attribute-parsing.patch
-	patch_apply widl-winrt-support/0018-widl-Support-WinRT-requires-keyword.patch
-	patch_apply widl-winrt-support/0019-widl-Support-WinRT-activatable-attribute.patch
-	patch_apply widl-winrt-support/0020-widl-Support-WinRT-parameterized-type-parsing.patch
-	patch_apply widl-winrt-support/0021-widl-Support-partially-specialized-parameterized-typ.patch
-	patch_apply widl-winrt-support/0022-widl-Support-WinRT-parameterized-interface-type.patch
-	patch_apply widl-winrt-support/0023-widl-Support-WinRT-delegate-type.patch
-	patch_apply widl-winrt-support/0024-widl-Support-WinRT-parameterized-delegate-type.patch
-	patch_apply widl-winrt-support/0025-widl-Compute-signatures-for-parameterized-types.patch
-	patch_apply widl-winrt-support/0026-widl-Compute-uuids-for-parameterized-types.patch
-	patch_apply widl-winrt-support/0027-widl-Generate-helper-macros-for-WinRT-implementation.patch
-	patch_apply widl-winrt-support/0028-include-Add-IVectorView-HSTRING-declaration-to-windo.patch
-fi
-
-# Patchset windows.media.speech.dll
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	widl-winrt-support
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#49740] windows.media.speech: New DLL
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/windows.media.speech.dll/Makefile.in, dlls/windows.media.speech.dll/windows.media.speech.spec,
-# | 	dlls/windows.media.speech.dll/windows.media.speech_main.c, loader/wine.inf.in
-# |
-if test "$enable_windows_media_speech_dll" -eq 1; then
-	patch_apply windows.media.speech.dll/0001-windows.media.speech-Add-stub-dll.patch
-	patch_apply windows.media.speech.dll/0002-windows.media.speech-Implement-IInstalledVoicesStati.patch
-	patch_apply windows.media.speech.dll/0003-windows.media.speech-Implement-IInstalledVoicesStati.patch
-	patch_apply windows.media.speech.dll/0004-windows.media.speech-Fake-empty-IInstalledVoicesStat.patch
-fi
-
-# Patchset windows.gaming.input-dll
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	widl-winrt-support, windows.media.speech.dll
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#49756] windows.gaming.input: New DLL
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/windows.gaming.input.dll/Makefile.in, dlls/windows.gaming.input.dll/windows.gaming.input.spec,
-# | 	dlls/windows.gaming.input.dll/windows.gaming.input_main.c, include/Makefile.in, include/asyncinfo.idl,
-# | 	include/windows.foundation.idl, include/windows.gaming.input.forcefeedback.idl, include/windows.gaming.input.idl,
-# | 	include/windows.system.idl, loader/wine.inf.in
-# |
-if test "$enable_windows_gaming_input_dll" -eq 1; then
-	patch_apply windows.gaming.input-dll/0001-windows.gaming.input-Add-stub-dll.patch
-	patch_apply windows.gaming.input-dll/0002-windows.gaming.input-Implement-IGamepadStatics-stubs.patch
-	patch_apply windows.gaming.input-dll/0003-windows.gaming.input-Implement-IGamepadStatics-Gamep.patch
-	patch_apply windows.gaming.input-dll/0004-windows.gaming.input-Fake-empty-IGamepadStatics-Game.patch
-	patch_apply windows.gaming.input-dll/0005-windows.gaming.input-Fake-IEventHandler_Gamepad-supp.patch
-	patch_apply windows.gaming.input-dll/0006-windows.gaming.input-Implement-IRawGameControllerSta.patch
-	patch_apply windows.gaming.input-dll/0007-windows.gaming.input-Implement-IRawGameControllerSta.patch
-	patch_apply windows.gaming.input-dll/0008-windows.gaming.input-Fake-empty-IRawGameControllerSt.patch
-	patch_apply windows.gaming.input-dll/0009-windows.gaming.input-Fake-IEventHandler_RawGameContr.patch
-fi
-
-# Patchset windows.globalization-dll
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	widl-winrt-support, windows.media.speech.dll, windows.gaming.input-dll
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#49740] windows.globalization: New DLL
-# |   *	[#49998] windows.globalization: New DLL
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/windows.globalization.dll/Makefile.in, dlls/windows.globalization.dll/windows.globalization.spec,
-# | 	dlls/windows.globalization.dll/windows.globalization_main.c, include/Makefile.in, include/windows.globalization.idl,
-# | 	include/windows.system.userprofile.idl, loader/wine.inf.in
-# |
-if test "$enable_windows_globalization_dll" -eq 1; then
-	patch_apply windows.globalization-dll/0001-windows.globalization-Add-stub-dll.patch
-	patch_apply windows.globalization-dll/0002-windows.globalization-Implement-IGlobalizationPrefer.patch
-	patch_apply windows.globalization-dll/0003-windows.globalization-Implement-IGlobalizationPrefer.patch
-	patch_apply windows.globalization-dll/0004-windows.globalization-Implement-IGlobalizationPrefer.patch
-	patch_apply windows.globalization-dll/0005-windows.globalization-Fake-empty-IGlobalizationPrefe.patch
-fi
-
-# Patchset windows.networking.connectivity.dll
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	widl-winrt-support, windows.media.speech.dll, windows.gaming.input-dll, windows.globalization-dll
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#46534] windows.networking.connectivity: New DLL
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/windows.networking.connectivity.dll/Makefile.in,
-# | 	dlls/windows.networking.connectivity.dll/windows.networking.connectivity.spec,
-# | 	dlls/windows.networking.connectivity.dll/windows.networking.connectivity_main.c, loader/wine.inf.in
-# |
-if test "$enable_windows_networking_connectivity_dll" -eq 1; then
-	patch_apply windows.networking.connectivity.dll/0001-windows.networking.connectivity-Add-stub-dll.patch
-	patch_apply windows.networking.connectivity.dll/0002-windows.networking.connectivity-Implement-IActivatio.patch
-	patch_apply windows.networking.connectivity.dll/0003-windows.networking.connectivity-Implement-INetworkIn.patch
 fi
 
 # Patchset windowscodecs-GIF_Encoder
