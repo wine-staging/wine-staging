@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "86e6c0bc28177a3794950fe2a13b8208400b6194"
+	echo "764a93f121c6b0f88c3444454ebb85eb7cb63295"
 }
 
 # Show version information
@@ -2700,13 +2700,12 @@ fi
 # |
 # | Modified files:
 # |   *	dlls/mf/Makefile.in, dlls/mf/handler.c, dlls/mf/handler.h, dlls/mf/main.c, dlls/mf/session.c, dlls/mf/tests/mf.c,
-# | 	dlls/mf/topology.c, dlls/mfplat/mediatype.c, dlls/mfplat/tests/mfplat.c, dlls/mfplat/tests/test.mp4,
-# | 	dlls/mfreadwrite/reader.c, dlls/mfreadwrite/tests/mfplat.c, dlls/mfreadwrite/tests/resource.rc,
-# | 	dlls/mfreadwrite/tests/test.mp4, dlls/winegstreamer/Makefile.in, dlls/winegstreamer/audioconvert.c,
-# | 	dlls/winegstreamer/colorconvert.c, dlls/winegstreamer/gst_cbs.c, dlls/winegstreamer/gst_cbs.h,
-# | 	dlls/winegstreamer/gst_private.h, dlls/winegstreamer/main.c, dlls/winegstreamer/media_source.c,
-# | 	dlls/winegstreamer/mf_decode.c, dlls/winegstreamer/mfplat.c, dlls/winegstreamer/winegstreamer_classes.idl,
-# | 	include/mfidl.idl, tools/make_makefiles, tools/makedep.c
+# | 	dlls/mf/topology.c, dlls/mfplat/tests/mfplat.c, dlls/mfplat/tests/test.mp4, dlls/mfreadwrite/reader.c,
+# | 	dlls/mfreadwrite/tests/mfplat.c, dlls/mfreadwrite/tests/resource.rc, dlls/mfreadwrite/tests/test.mp4,
+# | 	dlls/winegstreamer/Makefile.in, dlls/winegstreamer/audioconvert.c, dlls/winegstreamer/colorconvert.c,
+# | 	dlls/winegstreamer/gst_cbs.c, dlls/winegstreamer/gst_cbs.h, dlls/winegstreamer/gst_private.h, dlls/winegstreamer/main.c,
+# | 	dlls/winegstreamer/media_source.c, dlls/winegstreamer/mf_decode.c, dlls/winegstreamer/mfplat.c,
+# | 	dlls/winegstreamer/winegstreamer_classes.idl, include/mfidl.idl, tools/make_makefiles, tools/makedep.c
 # |
 if test "$enable_mfplat_streaming_support" -eq 1; then
 	patch_apply mfplat-streaming-support/0001-winegstreamer-Add-IMFSeekInfo-GetNearestKeyFrames-st.patch
@@ -2733,7 +2732,6 @@ if test "$enable_mfplat_streaming_support" -eq 1; then
 	patch_apply mfplat-streaming-support/0022-WMV.patch
 	patch_apply mfplat-streaming-support/0023-mf-Ask-for-more-samples-from-upstream-node-when-upon.patch
 	patch_apply mfplat-streaming-support/0024-Expose-PCM-output-type-on-AAC-decoder.patch
-	patch_apply mfplat-streaming-support/0025-mfplat-Add-I420-format-information.patch
 	patch_apply mfplat-streaming-support/0026-winegstreamer-Implement-Color-Converter-MFT.patch
 	patch_apply mfplat-streaming-support/0027-HACK-Set-BPS-to-16-for-output-template.patch
 	patch_apply mfplat-streaming-support/0028-Improve-tests.patch
