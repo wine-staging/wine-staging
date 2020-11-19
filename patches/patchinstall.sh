@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "764a93f121c6b0f88c3444454ebb85eb7cb63295"
+	echo "65d917402f43d6c061668cff811f5fd6729d5750"
 }
 
 # Show version information
@@ -2843,7 +2843,7 @@ fi
 # |   *	[#37149] Calculate msvcrt exponential math operations with higher precision
 # |
 # | Modified files:
-# |   *	dlls/msvcrt/math.c
+# |   *	dlls/msvcrt/math.c, dlls/msvcrt/unixlib.c
 # |
 if test "$enable_msvcrt_Math_Precision" -eq 1; then
 	patch_apply msvcrt-Math_Precision/0001-msvcrt-Calculate-sinh-cosh-exp-pow-with-higher-preci.patch
