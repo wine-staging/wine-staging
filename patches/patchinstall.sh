@@ -2750,7 +2750,6 @@ if test "$enable_mfplat_streaming_support" -eq 1; then
 	patch_apply mfplat-streaming-support/0041-mf-Miscelaneous-fixes-to-topology-resolution.patch
 	patch_apply mfplat-streaming-support/0042-Rewrite-branch-resolver.patch
 	patch_apply mfplat-streaming-support/0043-winegstreamer-Implement-audio-conversion-MFT.patch
-	patch_apply mfplat-streaming-support/0044-HACK-Shutdown-media-sinks-on-session-shutdown.patch
 	patch_apply mfplat-streaming-support/0045-HACK-Flush-decoder-when-changing-times.patch
 	patch_apply mfplat-streaming-support/0060-winegstreamer-Support-eAVEncH264VProfile_Constrained.patch
 fi
