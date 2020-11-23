@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "bedfb9cae224a369efa4588332a5518dbee57035"
+	echo "4807a8f588c67e2296474399368a96c0046120fd"
 }
 
 # Show version information
@@ -146,7 +146,6 @@ patch_enable_all ()
 	enable_mmsystem_dll16_MIDIHDR_Refcount="$1"
 	enable_mountmgr_DosDevices="$1"
 	enable_mscoree_CorValidateImage="$1"
-	enable_msctf_ITfActiveLanguageProfileNotifySink="$1"
 	enable_mshtml_HTMLLocation_put_hash="$1"
 	enable_mshtml_TranslateAccelerator="$1"
 	enable_msi_msi_vcl_get_cost="$1"
@@ -514,9 +513,6 @@ patch_enable ()
 			;;
 		mscoree-CorValidateImage)
 			enable_mscoree_CorValidateImage="$2"
-			;;
-		msctf-ITfActiveLanguageProfileNotifySink)
-			enable_msctf_ITfActiveLanguageProfileNotifySink="$2"
 			;;
 		mshtml-HTMLLocation_put_hash)
 			enable_mshtml_HTMLLocation_put_hash="$2"
@@ -2755,7 +2751,6 @@ if test "$enable_mfplat_streaming_support" -eq 1; then
 	patch_apply mfplat-streaming-support/0030-Report-streams-backwards-and-only-select-one-of-each.patch
 	patch_apply mfplat-streaming-support/0031-winegstreamer-Implement-IMFMediaSource-Stop.patch
 	patch_apply mfplat-streaming-support/0032-winegstreamer-Introduce-MPEG-4-Section-2-video-decod.patch
-	patch_apply mfplat-streaming-support/0033-HACK-Switch-between-all-selection-streams-on-MF_SOUR.patch
 	patch_apply mfplat-streaming-support/0034-winegstreamer-Introduce-WMA-audio-decoder.patch
 	patch_apply mfplat-streaming-support/0035-Support-stereo-down-folding.patch
 	patch_apply mfplat-streaming-support/0036-winegstreamer-Implement-MF_SD_LANGUAGE.patch
@@ -2805,18 +2800,6 @@ fi
 # |
 if test "$enable_mscoree_CorValidateImage" -eq 1; then
 	patch_apply mscoree-CorValidateImage/0001-mscoree-Implement-_CorValidateImage.patch
-fi
-
-# Patchset msctf-ITfActiveLanguageProfileNotifySink
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#44502] msctf: Added ITfActiveLanguageProfileNotifySink support in ITfSource.
-# |
-# | Modified files:
-# |   *	dlls/msctf/msctf_internal.h, dlls/msctf/threadmgr.c
-# |
-if test "$enable_msctf_ITfActiveLanguageProfileNotifySink" -eq 1; then
-	patch_apply msctf-ITfActiveLanguageProfileNotifySink/0001-msctf-Added-ITfActiveLanguageProfileNotifySink-suppo.patch
 fi
 
 # Patchset mshtml-HTMLLocation_put_hash
