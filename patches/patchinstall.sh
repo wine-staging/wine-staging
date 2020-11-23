@@ -95,6 +95,7 @@ patch_enable_all ()
 	enable_comctl32_version_6="$1"
 	enable_comdlg32_lpstrFileTitle="$1"
 	enable_crypt32_CMS_Certificates="$1"
+	enable_crypt32_CRYPT_KEY_PROV_INFO="$1"
 	enable_cryptext_CryptExtOpenCER="$1"
 	enable_d3d11_Deferred_Context="$1"
 	enable_d3dx9_32bpp_Alpha_Channel="$1"
@@ -360,6 +361,9 @@ patch_enable ()
 			;;
 		crypt32-CMS_Certificates)
 			enable_crypt32_CMS_Certificates="$2"
+			;;
+		crypt32-CRYPT_KEY_PROV_INFO)
+			enable_crypt32_CRYPT_KEY_PROV_INFO="$2"
 			;;
 		cryptext-CryptExtOpenCER)
 			enable_cryptext_CryptExtOpenCER="$2"
@@ -1789,6 +1793,18 @@ fi
 # |
 if test "$enable_crypt32_CMS_Certificates" -eq 1; then
 	patch_apply crypt32-CMS_Certificates/0001-crypt32-Skip-unknown-item-when-decoding-a-CMS-certif.patch
+fi
+
+# Patchset crypt32-CRYPT_KEY_PROV_INFO
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#50024] signtool.exe from Windows 7 SDK fails to find certificates
+# |
+# | Modified files:
+# |   *	dlls/crypt32/cert.c, dlls/crypt32/crypt32_private.h, dlls/crypt32/serialize.c, dlls/crypt32/tests/cert.c
+# |
+if test "$enable_crypt32_CRYPT_KEY_PROV_INFO" -eq 1; then
+	patch_apply crypt32-CRYPT_KEY_PROV_INFO/0001-crypt32-Fix-reading-and-writing-CRYPT_KEY_PROV_INFO-.patch
 fi
 
 # Patchset cryptext-CryptExtOpenCER

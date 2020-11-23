@@ -1,0 +1,677 @@
+From bfa13a38c04bf3ef50cca78d0b9bf0e849fb9cc8 Mon Sep 17 00:00:00 2001
+From: Dmitry Timoshkov <dmitry@baikal.ru>
+Date: Tue, 10 Nov 2020 10:22:19 +0300
+Subject: [PATCH] crypt32: Fix reading and writing CRYPT_KEY_PROV_INFO
+ certificate property.
+
+v2: Updated for current git.
+
+Wine-Bug: https://bugs.winehq.org/show_bug.cgi?id=50024
+Signed-off-by: Dmitry Timoshkov <dmitry@baikal.ru>
+---
+ dlls/crypt32/cert.c            | 251 +++++++++++++--------------------
+ dlls/crypt32/crypt32_private.h |   8 --
+ dlls/crypt32/serialize.c       | 187 +++++++++++++++++++++++-
+ dlls/crypt32/tests/cert.c      |  96 +++++++++++++
+ 4 files changed, 375 insertions(+), 167 deletions(-)
+
+diff --git a/dlls/crypt32/cert.c b/dlls/crypt32/cert.c
+index c0bec721fd1..aad8fa047b7 100644
+--- a/dlls/crypt32/cert.c
++++ b/dlls/crypt32/cert.c
+@@ -434,6 +434,84 @@ void CRYPT_ConvertKeyContext(const struct store_CERT_KEY_CONTEXT *src, CERT_KEY_
+     dst->dwKeySpec = src->dwKeySpec;
+ }
+ 
++/*
++ * Fix offsets in a continuous block of memory of CRYPT_KEY_PROV_INFO with
++ * its associated data.
++ */
++static void fix_KeyProvInfoProperty(CRYPT_KEY_PROV_INFO *info)
++{
++    BYTE *data;
++    DWORD i;
++
++    data = (BYTE *)(info + 1) + sizeof(CRYPT_KEY_PROV_PARAM) * info->cProvParam;
++
++    if (info->pwszContainerName)
++    {
++        info->pwszContainerName = (LPWSTR)data;
++        data += (lstrlenW(info->pwszContainerName) + 1) * sizeof(WCHAR);
++    }
++
++    if (info->pwszProvName)
++    {
++        info->pwszProvName = (LPWSTR)data;
++        data += (lstrlenW(info->pwszProvName) + 1) * sizeof(WCHAR);
++    }
++
++    info->rgProvParam = info->cProvParam ? (CRYPT_KEY_PROV_PARAM *)(info + 1) : NULL;
++
++    for (i = 0; i < info->cProvParam; i++)
++    {
++        info->rgProvParam[i].pbData = info->rgProvParam[i].cbData ? data : NULL;
++        data += info->rgProvParam[i].cbData;
++    }
++}
++
++/*
++ * Copy to a continuous block of memory of CRYPT_KEY_PROV_INFO with
++ * its associated data.
++ */
++static void copy_KeyProvInfoProperty(const CRYPT_KEY_PROV_INFO *from, CRYPT_KEY_PROV_INFO *to)
++{
++    BYTE *data;
++    DWORD i;
++
++    data = (BYTE *)(to + 1) + sizeof(CRYPT_KEY_PROV_PARAM) * from->cProvParam;
++
++    if (from->pwszContainerName)
++    {
++        to->pwszContainerName = (LPWSTR)data;
++        lstrcpyW((LPWSTR)data, from->pwszContainerName);
++        data += (lstrlenW(from->pwszContainerName) + 1) * sizeof(WCHAR);
++    }
++    else
++        to->pwszContainerName = NULL;
++
++    if (from->pwszProvName)
++    {
++        to->pwszProvName = (LPWSTR)data;
++        lstrcpyW((LPWSTR)data, from->pwszProvName);
++        data += (lstrlenW(from->pwszProvName) + 1) * sizeof(WCHAR);
++    }
++    else
++        to->pwszProvName = NULL;
++
++    to->dwProvType = from->dwProvType;
++    to->dwFlags = from->dwFlags;
++    to->cProvParam = from->cProvParam;
++    to->rgProvParam = from->cProvParam ? (CRYPT_KEY_PROV_PARAM *)(to + 1) : NULL;
++    to->dwKeySpec = from->dwKeySpec;
++
++    for (i = 0; i < from->cProvParam; i++)
++    {
++        to->rgProvParam[i].dwParam = from->rgProvParam[i].dwParam;
++        to->rgProvParam[i].dwFlags = from->rgProvParam[i].dwFlags;
++        to->rgProvParam[i].cbData = from->rgProvParam[i].cbData;
++        to->rgProvParam[i].pbData = from->rgProvParam[i].cbData ? data : NULL;
++        memcpy(data, from->rgProvParam[i].pbData, from->rgProvParam[i].cbData);
++        data += from->rgProvParam[i].cbData;
++    }
++}
++
+ static BOOL CertContext_GetProperty(cert_t *cert, DWORD dwPropId,
+  void *pvData, DWORD *pcbData)
+ {
+@@ -535,87 +613,6 @@ static BOOL CertContext_GetProperty(cert_t *cert, DWORD dwPropId,
+     return ret;
+ }
+ 
+-/* 64-bit compatible layout, so that 64-bit crypt32 is able to read
+- * the structure saved by 32-bit crypt32.
+- */
+-typedef struct
+-{
+-    ULONG64 pwszContainerName;
+-    ULONG64 pwszProvName;
+-    DWORD dwProvType;
+-    DWORD dwFlags;
+-    DWORD cProvParam;
+-    ULONG64 rgProvParam;
+-    DWORD dwKeySpec;
+-} store_CRYPT_KEY_PROV_INFO;
+-
+-typedef struct
+-{
+-    DWORD dwParam;
+-    ULONG64 pbData;
+-    DWORD cbData;
+-    DWORD dwFlags;
+-} store_CRYPT_KEY_PROV_PARAM;
+-
+-void CRYPT_FixKeyProvInfoPointers(PCRYPT_KEY_PROV_INFO buf)
+-{
+-    CRYPT_KEY_PROV_INFO info;
+-    store_CRYPT_KEY_PROV_INFO *store = (store_CRYPT_KEY_PROV_INFO *)buf;
+-    BYTE *p = (BYTE *)(store + 1);
+-
+-    if (store->pwszContainerName)
+-    {
+-        info.pwszContainerName = (LPWSTR)((BYTE *)store + store->pwszContainerName);
+-        p += (lstrlenW(info.pwszContainerName) + 1) * sizeof(WCHAR);
+-    }
+-    else
+-        info.pwszContainerName = NULL;
+-
+-    if (store->pwszProvName)
+-    {
+-        info.pwszProvName = (LPWSTR)((BYTE *)store + store->pwszProvName);
+-        p += (lstrlenW(info.pwszProvName) + 1) * sizeof(WCHAR);
+-    }
+-    else
+-        info.pwszProvName = NULL;
+-
+-    info.dwProvType = store->dwProvType;
+-    info.dwFlags = store->dwFlags;
+-    info.dwKeySpec = store->dwKeySpec;
+-    info.cProvParam = store->cProvParam;
+-
+-    if (info.cProvParam)
+-    {
+-        DWORD i;
+-
+-        info.rgProvParam = (CRYPT_KEY_PROV_PARAM *)p;
+-
+-        for (i = 0; i < store->cProvParam; i++)
+-        {
+-            CRYPT_KEY_PROV_PARAM param;
+-            store_CRYPT_KEY_PROV_PARAM *store_param;
+-
+-            store_param = (store_CRYPT_KEY_PROV_PARAM *)p;
+-            p += sizeof(*store_param);
+-
+-            param.dwParam = store_param[i].dwParam;
+-            param.dwFlags = store_param[i].dwFlags;
+-            param.cbData = store_param[i].cbData;
+-            param.pbData = param.cbData ? p : NULL;
+-            p += store_param[i].cbData;
+-
+-            memcpy(&info.rgProvParam[i], &param, sizeof(param));
+-        }
+-    }
+-    else
+-        info.rgProvParam = NULL;
+-
+-    TRACE("%s,%s,%u,%08x,%u,%p,%u\n", debugstr_w(info.pwszContainerName), debugstr_w(info.pwszProvName),
+-          info.dwProvType, info.dwFlags, info.cProvParam, info.rgProvParam, info.dwKeySpec);
+-
+-    *buf = info;
+-}
+-
+ BOOL WINAPI CertGetCertificateContextProperty(PCCERT_CONTEXT pCertContext,
+  DWORD dwPropId, void *pvData, DWORD *pcbData)
+ {
+@@ -649,10 +646,9 @@ BOOL WINAPI CertGetCertificateContextProperty(PCCERT_CONTEXT pCertContext,
+         break;
+     }
+     case CERT_KEY_PROV_INFO_PROP_ID:
+-        ret = CertContext_GetProperty(cert, dwPropId, pvData,
+-         pcbData);
++        ret = CertContext_GetProperty(cert, dwPropId, pvData, pcbData);
+         if (ret && pvData)
+-            CRYPT_FixKeyProvInfoPointers(pvData);
++            fix_KeyProvInfoProperty(pvData);
+         break;
+     default:
+         ret = CertContext_GetProperty(cert, dwPropId, pvData,
+@@ -663,69 +659,14 @@ BOOL WINAPI CertGetCertificateContextProperty(PCCERT_CONTEXT pCertContext,
+     return ret;
+ }
+ 
+-/* Copies key provider info from from into to, where to is assumed to be a
+- * contiguous buffer of memory large enough for from and all its associated
+- * data, but whose pointers are uninitialized.
+- * Upon return, to contains a contiguous copy of from, packed in the following
+- * order:
+- * - store_CRYPT_KEY_PROV_INFO
+- * - pwszContainerName
+- * - pwszProvName
+- * - store_CRYPT_KEY_PROV_PARAM[0]
+- * - store_CRYPT_KEY_PROV_PARAM[0].data
+- * - ...
++/*
++ * Create a continuous block of memory for CRYPT_KEY_PROV_INFO with
++ * its associated data, and add it to the certificate properties.
+  */
+-static void CRYPT_CopyKeyProvInfo(store_CRYPT_KEY_PROV_INFO *to, const CRYPT_KEY_PROV_INFO *from)
++static BOOL CertContext_SetKeyProvInfoProperty(CONTEXT_PROPERTY_LIST *properties, const CRYPT_KEY_PROV_INFO *info)
+ {
+-    DWORD i;
+-    BYTE *p;
+-    store_CRYPT_KEY_PROV_PARAM *param;
+-
+-    p = (BYTE *)(to + 1);
+-
+-    if (from->pwszContainerName)
+-    {
+-        to->pwszContainerName = p - (BYTE *)to;
+-        lstrcpyW((LPWSTR)p, from->pwszContainerName);
+-        p += (lstrlenW(from->pwszContainerName) + 1) * sizeof(WCHAR);
+-    }
+-    else
+-        to->pwszContainerName = 0;
+-
+-    if (from->pwszProvName)
+-    {
+-        to->pwszProvName = p - (BYTE *)to;
+-        lstrcpyW((LPWSTR)p, from->pwszProvName);
+-        p += (lstrlenW(from->pwszProvName) + 1) * sizeof(WCHAR);
+-    }
+-    else
+-        to->pwszProvName = 0;
+-
+-    to->dwProvType = from->dwProvType;
+-    to->dwFlags = from->dwFlags;
+-    to->cProvParam = from->cProvParam;
+-    to->rgProvParam = 0;
+-    to->dwKeySpec = from->dwKeySpec;
+-
+-    for (i = 0; i < to->cProvParam; i++)
+-    {
+-        param = (store_CRYPT_KEY_PROV_PARAM *)p;
+-        p += sizeof(*param);
+-
+-        param->dwParam = from->rgProvParam[i].dwParam;
+-        param->pbData = 0;
+-        param->cbData = from->rgProvParam[i].cbData;
+-        param->dwFlags = from->rgProvParam[i].dwFlags;
+-        memcpy(p, from->rgProvParam[i].pbData, from->rgProvParam[i].cbData);
+-        p += from->rgProvParam[i].cbData;
+-    }
+-}
+-
+-static BOOL CertContext_SetKeyProvInfoProperty(CONTEXT_PROPERTY_LIST *properties,
+- const CRYPT_KEY_PROV_INFO *info)
+-{
+-    BYTE *buf;
+-    DWORD size = sizeof(store_CRYPT_KEY_PROV_INFO), i;
++    CRYPT_KEY_PROV_INFO *prop;
++    DWORD size = sizeof(CRYPT_KEY_PROV_INFO), i;
+     BOOL ret;
+ 
+     if (info->pwszContainerName)
+@@ -734,18 +675,20 @@ static BOOL CertContext_SetKeyProvInfoProperty(CONTEXT_PROPERTY_LIST *properties
+         size += (lstrlenW(info->pwszProvName) + 1) * sizeof(WCHAR);
+ 
+     for (i = 0; i < info->cProvParam; i++)
+-        size += sizeof(store_CRYPT_KEY_PROV_PARAM) + info->rgProvParam[i].cbData;
++        size += sizeof(CRYPT_KEY_PROV_PARAM) + info->rgProvParam[i].cbData;
+ 
+-    buf = CryptMemAlloc(size);
+-    if (buf)
++    prop = HeapAlloc(GetProcessHeap(), 0, size);
++    if (!prop)
+     {
+-        CRYPT_CopyKeyProvInfo((store_CRYPT_KEY_PROV_INFO *)buf, info);
+-        ret = ContextPropertyList_SetProperty(properties,
+-         CERT_KEY_PROV_INFO_PROP_ID, buf, size);
+-        CryptMemFree(buf);
++        SetLastError(ERROR_OUTOFMEMORY);
++        return FALSE;
+     }
+-    else
+-        ret = FALSE;
++
++    copy_KeyProvInfoProperty(info, prop);
++
++    ret = ContextPropertyList_SetProperty(properties, CERT_KEY_PROV_INFO_PROP_ID, (const BYTE *)prop, size);
++    HeapFree(GetProcessHeap(), 0, prop);
++
+     return ret;
+ }
+ 
+diff --git a/dlls/crypt32/crypt32_private.h b/dlls/crypt32/crypt32_private.h
+index a4664ed85a9..30cf4334de4 100644
+--- a/dlls/crypt32/crypt32_private.h
++++ b/dlls/crypt32/crypt32_private.h
+@@ -370,14 +370,6 @@ BOOL CRYPT_ReadSerializedStoreFromFile(HANDLE file, HCERTSTORE store) DECLSPEC_H
+ BOOL CRYPT_ReadSerializedStoreFromBlob(const CRYPT_DATA_BLOB *blob,
+  HCERTSTORE store) DECLSPEC_HIDDEN;
+ 
+-/* Fixes up the pointers in info, where info is assumed to be a
+- * CRYPT_KEY_PROV_INFO, followed by its container name, provider name, and any
+- * provider parameters, in a contiguous buffer, but where info's pointers are
+- * assumed to be invalid.  Upon return, info's pointers point to the
+- * appropriate memory locations.
+- */
+-void CRYPT_FixKeyProvInfoPointers(PCRYPT_KEY_PROV_INFO info) DECLSPEC_HIDDEN;
+-
+ struct store_CERT_KEY_CONTEXT
+ {
+     DWORD   cbSize;
+diff --git a/dlls/crypt32/serialize.c b/dlls/crypt32/serialize.c
+index d5153deb106..8fa24370b65 100644
+--- a/dlls/crypt32/serialize.c
++++ b/dlls/crypt32/serialize.c
+@@ -36,6 +36,86 @@ typedef struct _WINE_CERT_PROP_HEADER
+     DWORD cb;
+ } WINE_CERT_PROP_HEADER;
+ 
++struct store_CRYPT_KEY_PROV_INFO
++{
++    DWORD pwszContainerName;
++    DWORD pwszProvName;
++    DWORD dwProvType;
++    DWORD dwFlags;
++    DWORD cProvParam;
++    DWORD rgProvParam;
++    DWORD dwKeySpec;
++};
++
++struct store_CRYPT_KEY_PROV_PARAM
++{
++    DWORD dwParam;
++    DWORD pbData;
++    DWORD cbData;
++    DWORD dwFlags;
++};
++
++static DWORD serialize_KeyProvInfoProperty(const CRYPT_KEY_PROV_INFO *info, struct store_CRYPT_KEY_PROV_INFO **ret)
++{
++    struct store_CRYPT_KEY_PROV_INFO *store;
++    struct store_CRYPT_KEY_PROV_PARAM *param;
++    DWORD size = sizeof(struct store_CRYPT_KEY_PROV_INFO), i;
++    BYTE *data;
++
++    if (info->pwszContainerName)
++        size += (lstrlenW(info->pwszContainerName) + 1) * sizeof(WCHAR);
++    if (info->pwszProvName)
++        size += (lstrlenW(info->pwszProvName) + 1) * sizeof(WCHAR);
++
++    for (i = 0; i < info->cProvParam; i++)
++        size += sizeof(struct store_CRYPT_KEY_PROV_PARAM) + info->rgProvParam[i].cbData;
++
++    if (!ret) return size;
++
++    store = HeapAlloc(GetProcessHeap(), 0, size);
++    if (!store) return 0;
++
++    param = (struct store_CRYPT_KEY_PROV_PARAM *)(store + 1);
++    data = (BYTE *)param + sizeof(struct store_CRYPT_KEY_PROV_PARAM) * info->cProvParam;
++
++    if (info->pwszContainerName)
++    {
++        store->pwszContainerName = data - (BYTE *)store;
++        lstrcpyW((LPWSTR)data, info->pwszContainerName);
++        data += (lstrlenW(info->pwszContainerName) + 1) * sizeof(WCHAR);
++    }
++    else
++        store->pwszContainerName = 0;
++
++    if (info->pwszProvName)
++    {
++        store->pwszProvName = data - (BYTE *)store;
++        lstrcpyW((LPWSTR)data, info->pwszProvName);
++        data += (lstrlenW(info->pwszProvName) + 1) * sizeof(WCHAR);
++    }
++    else
++        store->pwszProvName = 0;
++
++    store->dwProvType = info->dwProvType;
++    store->dwFlags = info->dwFlags;
++    store->cProvParam = info->cProvParam;
++    store->rgProvParam = info->cProvParam ? (BYTE *)param - (BYTE *)store : 0;
++    store->dwKeySpec = info->dwKeySpec;
++
++    for (i = 0; i < info->cProvParam; i++)
++    {
++        param[i].dwParam = info->rgProvParam[i].dwParam;
++        param[i].dwFlags = info->rgProvParam[i].dwFlags;
++        param[i].cbData = info->rgProvParam[i].cbData;
++        param[i].pbData = param[i].cbData ? data - (BYTE *)store : 0;
++        memcpy(data, info->rgProvParam[i].pbData, info->rgProvParam[i].cbData);
++        data += info->rgProvParam[i].cbData;
++    }
++
++    *ret = store;
++    return size;
++}
++
+ static BOOL CRYPT_SerializeStoreElement(const void *context,
+  const BYTE *encodedContext, DWORD cbEncodedContext, DWORD contextPropID,
+  const WINE_CONTEXT_INTERFACE *contextInterface, DWORD dwFlags, BOOL omitHashes,
+@@ -60,7 +140,16 @@ static BOOL CRYPT_SerializeStoreElement(const void *context,
+ 
+                 ret = contextInterface->getProp(context, prop, NULL, &propSize);
+                 if (ret)
++                {
++                    if (prop == CERT_KEY_PROV_INFO_PROP_ID)
++                    {
++                        BYTE *info = CryptMemAlloc(propSize);
++                        contextInterface->getProp(context, prop, info, &propSize);
++                        propSize = serialize_KeyProvInfoProperty((const CRYPT_KEY_PROV_INFO *)info, NULL);
++                        CryptMemFree(info);
++                    }
+                     bytesNeeded += sizeof(WINE_CERT_PROP_HEADER) + propSize;
++                }
+             }
+         } while (ret && prop != 0);
+ 
+@@ -106,6 +195,14 @@ static BOOL CRYPT_SerializeStoreElement(const void *context,
+                              &propSize);
+                             if (ret)
+                             {
++                                if (prop == CERT_KEY_PROV_INFO_PROP_ID)
++                                {
++                                    struct store_CRYPT_KEY_PROV_INFO *store;
++                                    propSize = serialize_KeyProvInfoProperty((const CRYPT_KEY_PROV_INFO *)buf, &store);
++                                    CryptMemFree(buf);
++                                    buf = (BYTE *)store;
++                                }
++
+                                 hdr = (WINE_CERT_PROP_HEADER*)pbElement;
+                                 hdr->propID = prop;
+                                 hdr->unknown = 1;
+@@ -215,6 +312,83 @@ static const WINE_CERT_PROP_HEADER *CRYPT_findPropID(const BYTE *buf,
+     return ret;
+ }
+ 
++static DWORD read_serialized_KeyProvInfoProperty(const struct store_CRYPT_KEY_PROV_INFO *store, CRYPT_KEY_PROV_INFO **ret)
++{
++    const struct store_CRYPT_KEY_PROV_PARAM *param;
++    CRYPT_KEY_PROV_INFO *info;
++    DWORD size = sizeof(CRYPT_KEY_PROV_INFO), i;
++    const BYTE *base;
++    BYTE *data;
++
++    base = (const BYTE *)store;
++    param = (const struct store_CRYPT_KEY_PROV_PARAM *)(base + store->rgProvParam);
++
++    if (store->pwszContainerName)
++        size += (lstrlenW((LPCWSTR)(base + store->pwszContainerName)) + 1) * sizeof(WCHAR);
++    if (store->pwszProvName)
++        size += (lstrlenW((LPCWSTR)(base + store->pwszProvName)) + 1) * sizeof(WCHAR);
++
++    for (i = 0; i < store->cProvParam; i++)
++        size += sizeof(CRYPT_KEY_PROV_PARAM) + param[i].cbData;
++
++    info = HeapAlloc(GetProcessHeap(), 0, size);
++    if (!info)
++    {
++        SetLastError(ERROR_OUTOFMEMORY);
++        return 0;
++    }
++
++    data = (BYTE *)(info + 1) + sizeof(CRYPT_KEY_PROV_PARAM) * store->cProvParam;
++
++    if (store->pwszContainerName)
++    {
++        info->pwszContainerName = (LPWSTR)data;
++        lstrcpyW(info->pwszContainerName, (LPCWSTR)((const BYTE *)store + store->pwszContainerName));
++        data += (lstrlenW(info->pwszContainerName) + 1) * sizeof(WCHAR);
++    }
++    else
++        info->pwszContainerName = NULL;
++
++    if (store->pwszProvName)
++    {
++        info->pwszProvName = (LPWSTR)data;
++        lstrcpyW(info->pwszProvName, (LPCWSTR)((const BYTE *)store + store->pwszProvName));
++        data += (lstrlenW(info->pwszProvName) + 1) * sizeof(WCHAR);
++    }
++    else
++        info->pwszProvName = NULL;
++
++    info->dwProvType = store->dwProvType;
++    info->dwFlags = store->dwFlags;
++    info->dwKeySpec = store->dwKeySpec;
++    info->cProvParam = store->cProvParam;
++
++    if (info->cProvParam)
++    {
++        DWORD i;
++
++        info->rgProvParam = (CRYPT_KEY_PROV_PARAM *)(info + 1);
++
++        for (i = 0; i < info->cProvParam; i++)
++        {
++            info->rgProvParam[i].dwParam = param[i].dwParam;
++            info->rgProvParam[i].dwFlags = param[i].dwFlags;
++            info->rgProvParam[i].cbData = param[i].cbData;
++            info->rgProvParam[i].pbData = param[i].cbData ? data : NULL;
++            memcpy(info->rgProvParam[i].pbData, base + param[i].pbData, param[i].cbData);
++            data += param[i].cbData;
++        }
++    }
++    else
++        info->rgProvParam = NULL;
++
++    TRACE("%s,%s,%u,%08x,%u,%p,%u\n", debugstr_w(info->pwszContainerName), debugstr_w(info->pwszProvName),
++          info->dwProvType, info->dwFlags, info->cProvParam, info->rgProvParam, info->dwKeySpec);
++
++    *ret = info;
++    return size;
++}
++
+ static BOOL CRYPT_ReadContextProp(
+  const WINE_CONTEXT_INTERFACE *contextInterface, const void *context,
+  const WINE_CERT_PROP_HEADER *hdr, const BYTE *pbElement, DWORD cbElement)
+@@ -269,12 +443,15 @@ static BOOL CRYPT_ReadContextProp(
+             break;
+         case CERT_KEY_PROV_INFO_PROP_ID:
+         {
+-            PCRYPT_KEY_PROV_INFO info =
+-             (PCRYPT_KEY_PROV_INFO)pbElement;
++            CRYPT_KEY_PROV_INFO *info;
+ 
+-            CRYPT_FixKeyProvInfoPointers(info);
+-            ret = contextInterface->setProp(context,
+-             hdr->propID, 0, pbElement);
++            if (read_serialized_KeyProvInfoProperty((const struct store_CRYPT_KEY_PROV_INFO *)pbElement, &info))
++            {
++                ret = contextInterface->setProp(context, hdr->propID, 0, info);
++                CryptMemFree(info);
++            }
++            else
++                ret = FALSE;
+             break;
+         }
+         case CERT_KEY_CONTEXT_PROP_ID:
+diff --git a/dlls/crypt32/tests/cert.c b/dlls/crypt32/tests/cert.c
+index d9f839c72d2..745770f0095 100644
+--- a/dlls/crypt32/tests/cert.c
++++ b/dlls/crypt32/tests/cert.c
+@@ -4142,6 +4142,101 @@ static void testGetPublicKeyLength(void)
+        "Expected length 56, got %d\n", ret);
+ }
+ 
++static void testKeyProvInfo(void)
++{
++    static WCHAR containerW[] = L"Wine Test Container";
++    static WCHAR providerW[] = L"Hello World CSP";
++    static CRYPT_KEY_PROV_PARAM param[2] = { { 0x4444, (BYTE *)"param", 6, 0x5555 }, { 0x7777, (BYTE *)"param2", 7, 0x8888 } };
++    HCERTSTORE store;
++    const CERT_CONTEXT *cert;
++    CERT_NAME_BLOB name;
++    CRYPT_KEY_PROV_INFO *info, info2;
++    BOOL ret;
++    DWORD size;
++
++    store = CertOpenStore(CERT_STORE_PROV_SYSTEM_A, 0, 0,
++                          CERT_SYSTEM_STORE_CURRENT_USER, "My");
++    ok(store != NULL, "CertOpenStore error %u\n", GetLastError());
++
++    cert = CertCreateCertificateContext(X509_ASN_ENCODING, selfSignedCert, sizeof(selfSignedCert));
++    ok(cert != NULL, "CertCreateCertificateContext error %#x\n", GetLastError());
++
++    info2.pwszContainerName = containerW;
++    info2.pwszProvName = providerW;
++    info2.dwProvType = 0x12345678;
++    info2.dwFlags = 0x87654321;
++    info2.cProvParam = ARRAY_SIZE(param);
++    info2.rgProvParam = param;
++    info2.dwKeySpec = 0x11223344;
++    ret = CertSetCertificateContextProperty(cert, CERT_KEY_PROV_INFO_PROP_ID, 0, &info2);
++    ok(ret, "CertSetCertificateContextProperty error %#x\n", GetLastError());
++
++    ret = CertGetCertificateContextProperty(cert, CERT_KEY_PROV_INFO_PROP_ID, NULL, &size);
++    ok(ret, "CertGetCertificateContextProperty error %#x\n", GetLastError());
++    info = HeapAlloc(GetProcessHeap(), 0, size);
++    ret = CertGetCertificateContextProperty(cert, CERT_KEY_PROV_INFO_PROP_ID, info, &size);
++    ok(ret, "CertGetCertificateContextProperty error %#x\n", GetLastError());
++    ok(!lstrcmpW(info->pwszContainerName, containerW), "got %s\n", wine_dbgstr_w(info->pwszContainerName));
++    ok(!lstrcmpW(info->pwszProvName, providerW), "got %s\n", wine_dbgstr_w(info->pwszProvName));
++    ok(info->dwProvType == 0x12345678, "got %#x\n", info->dwProvType);
++    ok(info->dwFlags == 0x87654321, "got %#x\n", info->dwFlags);
++    ok(info->dwKeySpec == 0x11223344, "got %#x\n", info->dwKeySpec);
++    ok(info->cProvParam == 2, "got %#x\n", info->cProvParam);
++    ok(info->rgProvParam != NULL, "got %p\n", info->rgProvParam);
++    ok(info->rgProvParam[0].dwParam == param[0].dwParam, "got %#x\n", info->rgProvParam[0].dwParam);
++    ok(info->rgProvParam[0].cbData == param[0].cbData, "got %#x\n", info->rgProvParam[0].cbData);
++    ok(!memcmp(info->rgProvParam[0].pbData, param[0].pbData, param[0].cbData), "param1 mismatch\n");
++    ok(info->rgProvParam[0].dwFlags == param[0].dwFlags, "got %#x\n", info->rgProvParam[1].dwFlags);
++    ok(info->rgProvParam[1].dwParam == param[1].dwParam, "got %#x\n", info->rgProvParam[1].dwParam);
++    ok(info->rgProvParam[1].cbData == param[1].cbData, "got %#x\n", info->rgProvParam[1].cbData);
++    ok(!memcmp(info->rgProvParam[1].pbData, param[1].pbData, param[1].cbData), "param2 mismatch\n");
++    ok(info->rgProvParam[1].dwFlags == param[1].dwFlags, "got %#x\n", info->rgProvParam[1].dwFlags);
++    HeapFree(GetProcessHeap(), 0, info);
++
++    ret = CertAddCertificateContextToStore(store, cert, CERT_STORE_ADD_NEW, NULL);
++    ok(ret, "CertAddCertificateContextToStore error %#x\n", GetLastError());
++
++    CertFreeCertificateContext(cert);
++    CertCloseStore(store, 0);
++
++    store = CertOpenStore(CERT_STORE_PROV_SYSTEM_A, 0, 0,
++                          CERT_SYSTEM_STORE_CURRENT_USER | CERT_STORE_OPEN_EXISTING_FLAG, "My");
++    ok(store != NULL, "CertOpenStore error %u\n", GetLastError());
++
++    name.pbData = subjectName;
++    name.cbData = sizeof(subjectName);
++    cert = CertFindCertificateInStore(store, X509_ASN_ENCODING, 0, CERT_FIND_SUBJECT_NAME, &name, NULL);
++    ok(cert != NULL, "certificate should exist in My store\n");
++
++    ret = CertGetCertificateContextProperty(cert, CERT_KEY_PROV_INFO_PROP_ID, NULL, &size);
++    ok(ret, "CertGetCertificateContextProperty error %#x\n", GetLastError());
++    info = HeapAlloc(GetProcessHeap(), 0, size);
++    ret = CertGetCertificateContextProperty(cert, CERT_KEY_PROV_INFO_PROP_ID, info, &size);
++    ok(ret, "CertGetCertificateContextProperty error %#x\n", GetLastError());
++    ok(!lstrcmpW(info->pwszContainerName, containerW), "got %s\n", wine_dbgstr_w(info->pwszContainerName));
++    ok(!lstrcmpW(info->pwszProvName, providerW), "got %s\n", wine_dbgstr_w(info->pwszProvName));
++    ok(info->dwProvType == 0x12345678, "got %#x\n", info->dwProvType);
++    ok(info->dwFlags == 0x87654321, "got %#x\n", info->dwFlags);
++    ok(info->dwKeySpec == 0x11223344, "got %#x\n", info->dwKeySpec);
++    ok(info->cProvParam == 2, "got %#x\n", info->cProvParam);
++    ok(info->rgProvParam != NULL, "got %p\n", info->rgProvParam);
++    ok(info->rgProvParam[0].dwParam == param[0].dwParam, "got %#x\n", info->rgProvParam[0].dwParam);
++    ok(info->rgProvParam[0].cbData == param[0].cbData, "got %#x\n", info->rgProvParam[0].cbData);
++    ok(!memcmp(info->rgProvParam[0].pbData, param[0].pbData, param[0].cbData), "param1 mismatch\n");
++    ok(info->rgProvParam[0].dwFlags == param[0].dwFlags, "got %#x\n", info->rgProvParam[1].dwFlags);
++    ok(info->rgProvParam[1].dwParam == param[1].dwParam, "got %#x\n", info->rgProvParam[1].dwParam);
++    ok(info->rgProvParam[1].cbData == param[1].cbData, "got %#x\n", info->rgProvParam[1].cbData);
++    ok(!memcmp(info->rgProvParam[1].pbData, param[1].pbData, param[1].cbData), "param2 mismatch\n");
++    ok(info->rgProvParam[1].dwFlags == param[1].dwFlags, "got %#x\n", info->rgProvParam[1].dwFlags);
++    HeapFree(GetProcessHeap(), 0, info);
++
++    ret = CertDeleteCertificateFromStore(cert);
++    ok(ret, "CertDeleteCertificateFromStore error %#x\n", GetLastError());
++
++    CertFreeCertificateContext(cert);
++    CertCloseStore(store, 0);
++}
++
+ START_TEST(cert)
+ {
+     init_function_pointers();
+@@ -4154,6 +4249,7 @@ START_TEST(cert)
+     testGetSubjectCert();
+     testGetIssuerCert();
+     testLinkCert();
++    testKeyProvInfo();
+ 
+     testCryptHashCert();
+     testCryptHashCert2();
+-- 
+2.29.2
+
