@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "92fb63d7754ba56b2604d253b600284c52ab82c6"
+	echo "40d4fbe45997a1820296e7909ba2212518bcfacc"
 }
 
 # Show version information
@@ -274,7 +274,6 @@ patch_enable_all ()
 	enable_wineboot_HKEY_DYN_DATA="$1"
 	enable_wineboot_ProxySettings="$1"
 	enable_wineboot_drivers_etc_Stubs="$1"
-	enable_winebuild_pe_syscall_thunks="$1"
 	enable_winecfg_Libraries="$1"
 	enable_winecfg_Staging="$1"
 	enable_wined3d_Accounting="$1"
@@ -903,9 +902,6 @@ patch_enable ()
 			;;
 		wineboot-drivers_etc_Stubs)
 			enable_wineboot_drivers_etc_Stubs="$2"
-			;;
-		winebuild-pe_syscall_thunks)
-			enable_winebuild_pe_syscall_thunks="$2"
 			;;
 		winecfg-Libraries)
 			enable_winecfg_Libraries="$2"
@@ -1552,13 +1548,6 @@ if test "$enable_nvcuvid_CUDA_Video_Support" -eq 1; then
 		abort "Patchset nvapi-Stub_DLL disabled, but nvcuvid-CUDA_Video_Support depends on that."
 	fi
 	enable_nvapi_Stub_DLL=1
-fi
-
-if test "$enable_ntdll_Syscall_Emulation" -eq 1; then
-	if test "$enable_winebuild_pe_syscall_thunks" -gt 1; then
-		abort "Patchset winebuild-pe_syscall_thunks disabled, but ntdll-Syscall_Emulation depends on that."
-	fi
-	enable_winebuild_pe_syscall_thunks=1
 fi
 
 if test "$enable_ntdll_NtDevicePath" -eq 1; then
@@ -3213,28 +3202,7 @@ if test "$enable_ntdll_Status_Mapping" -eq 1; then
 	patch_apply ntdll-Status_Mapping/0001-ntdll-Return-STATUS_INVALID_DEVICE_REQUEST-when-tryi.patch
 fi
 
-# Patchset winebuild-pe_syscall_thunks
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#21232] Chromium-based browser engines (Chrome, Opera, Comodo Dragon, SRWare Iron) crash on startup unless '--no-
-# | 	sandbox' is used (native API sandboxing/hooking scheme incompatible with Wine)
-# |   *	[#42741] StarCraft I: 1.18 PTR fails to initialize ClientSdk.dll
-# |   *	[#45349] Multiple applications and games crash due to missing support for 64-bit syscall thunks (StreetFighter V, World
-# | 	of Warcraft)
-# |   *	[#45573] League of Legends 8.12+ fails to start a game (anticheat engine, hooking of syscall return instructions)
-# |   *	[#45650] chromium 32-bit sandbox expects different syscall thunks depending on Windows version
-# |
-# | Modified files:
-# |   *	dlls/ntdll/unix/virtual.c, tools/winebuild/import.c
-# |
-if test "$enable_winebuild_pe_syscall_thunks" -eq 1; then
-	patch_apply winebuild-pe_syscall_thunks/0002-winebuild-Call-__wine_syscall_dispatcher-through-the.patch
-fi
-
 # Patchset ntdll-Syscall_Emulation
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	winebuild-pe_syscall_thunks
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#48291] Detroit: Become Human crashes on launch
