@@ -250,6 +250,7 @@ patch_enable_all ()
 	enable_user32_QueryDisplayConfig="$1"
 	enable_user32_Refresh_MDI_Menus="$1"
 	enable_user32_ScrollWindowEx="$1"
+	enable_user32_message_order="$1"
 	enable_user32_msgbox_Support_WM_COPY_mesg="$1"
 	enable_user32_rawinput_hid="$1"
 	enable_user32_rawinput_mouse="$1"
@@ -830,6 +831,9 @@ patch_enable ()
 			;;
 		user32-ScrollWindowEx)
 			enable_user32_ScrollWindowEx="$2"
+			;;
+		user32-message-order)
+			enable_user32_message_order="$2"
 			;;
 		user32-msgbox-Support-WM_COPY-mesg)
 			enable_user32_msgbox_Support_WM_COPY_mesg="$2"
@@ -4092,6 +4096,18 @@ fi
 # |
 if test "$enable_user32_ScrollWindowEx" -eq 1; then
 	patch_apply user32-ScrollWindowEx/0001-user32-Fix-return-value-of-ScrollWindowEx-for-invisi.patch
+fi
+
+# Patchset user32-message-order
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#40262] Correct order of windows messages.
+# |
+# | Modified files:
+# |   *	dlls/user32/tests/msg.c, dlls/user32/winpos.c
+# |
+if test "$enable_user32_message_order" -eq 1; then
+	patch_apply user32-message-order/0001-user32-Fix-messages-sent-on-a-window-without-WS_CHIL.patch
 fi
 
 # Patchset user32-msgbox-Support-WM_COPY-mesg
