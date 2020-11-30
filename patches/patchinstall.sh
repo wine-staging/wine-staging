@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "cbca9f847f60773b4e7e5408f6a079f4896c5c1e"
+	echo "2ad09b01673381261815bfc804a2f69ce4d85f86"
 }
 
 # Show version information
@@ -2752,9 +2752,8 @@ fi
 # |   *	[#49692] Multiple applications need a Media Foundation media source implementation
 # |
 # | Modified files:
-# |   *	dlls/mf/Makefile.in, dlls/mf/handler.c, dlls/mf/handler.h, dlls/mf/main.c, dlls/mf/session.c, dlls/mf/tests/Makefile.in,
-# | 	dlls/mf/tests/mf.c, dlls/mf/tests/resource.rc, dlls/mf/topology.c, dlls/mfplat/tests/mfplat.c,
-# | 	dlls/mfplat/tests/test.mp4, dlls/mfreadwrite/reader.c, dlls/mfreadwrite/tests/mfplat.c,
+# |   *	dlls/mf/Makefile.in, dlls/mf/handler.c, dlls/mf/handler.h, dlls/mf/main.c, dlls/mf/session.c,
+# | 	dlls/mfplat/tests/mfplat.c, dlls/mfplat/tests/test.mp4, dlls/mfreadwrite/reader.c, dlls/mfreadwrite/tests/mfplat.c,
 # | 	dlls/mfreadwrite/tests/resource.rc, dlls/mfreadwrite/tests/test.mp4, dlls/winegstreamer/Makefile.in,
 # | 	dlls/winegstreamer/audioconvert.c, dlls/winegstreamer/colorconvert.c, dlls/winegstreamer/gst_cbs.c,
 # | 	dlls/winegstreamer/gst_cbs.h, dlls/winegstreamer/gst_private.h, dlls/winegstreamer/main.c,
@@ -2762,10 +2761,6 @@ fi
 # | 	dlls/winegstreamer/winegstreamer_classes.idl, include/mfidl.idl, tools/make_makefiles, tools/makedep.c
 # |
 if test "$enable_mfplat_streaming_support" -eq 1; then
-	patch_apply mfplat-streaming-support/0001-mf-topoloader-Add-partial-topology-resolution-tests.patch
-	patch_apply mfplat-streaming-support/0002-mf-topoloader-Move-node-connection-responsibility-to.patch
-	patch_apply mfplat-streaming-support/0003-mf-topoloader-Implement-source-node-to-sink-node-bra.patch
-	patch_apply mfplat-streaming-support/0004-mf-topoloader-Unstub-IMFTopologyLoader-Load.patch
 	patch_apply mfplat-streaming-support/0005-winegstreamer-Introduce-audio-conversion-transform.patch
 	patch_apply mfplat-streaming-support/0006-winegstreamer-Implement-Set-Input-Output-Type-for-au.patch
 	patch_apply mfplat-streaming-support/0007-winegstreamer-Implement-Process-Input-Output-for-aud.patch
@@ -4118,8 +4113,8 @@ fi
 # | Modified files:
 # |   *	dlls/user32/input.c, dlls/user32/user32.spec, dlls/wineandroid.drv/keyboard.c, dlls/wineandroid.drv/window.c,
 # | 	dlls/winemac.drv/ime.c, dlls/winemac.drv/keyboard.c, dlls/winemac.drv/mouse.c, dlls/winex11.drv/event.c,
-# | 	dlls/winex11.drv/keyboard.c, dlls/winex11.drv/mouse.c, dlls/winex11.drv/x11drv.h, dlls/winex11.drv/x11drv_main.c,
-# | 	include/winuser.h, server/protocol.def, server/queue.c
+# | 	dlls/winex11.drv/keyboard.c, dlls/winex11.drv/mouse.c, dlls/winex11.drv/window.c, dlls/winex11.drv/x11drv.h,
+# | 	dlls/winex11.drv/x11drv_main.c, include/winuser.h, server/protocol.def, server/queue.c
 # |
 if test "$enable_user32_rawinput_mouse" -eq 1; then
 	patch_apply user32-rawinput-mouse/0006-server-Add-send_hardware_message-flags-for-rawinput-.patch
@@ -4127,6 +4122,7 @@ if test "$enable_user32_rawinput_mouse" -eq 1; then
 	patch_apply user32-rawinput-mouse/0008-winex11.drv-Advertise-XInput2-version-2.1-support.patch
 	patch_apply user32-rawinput-mouse/0009-winex11.drv-Keep-track-of-pointer-and-device-button-.patch
 	patch_apply user32-rawinput-mouse/0010-winex11.drv-Listen-to-RawMotion-and-RawButton-events.patch
+	patch_apply user32-rawinput-mouse/0011-winex11.drv-Move-header-order.patch
 fi
 
 # Patchset user32-rawinput-hid
