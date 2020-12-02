@@ -215,6 +215,7 @@ patch_enable_all ()
 	enable_server_Registry_Notifications="$1"
 	enable_server_Signal_Thread="$1"
 	enable_server_Stored_ACLs="$1"
+	enable_server_unix_name="$1"
 	enable_setupapi_DiskSpaceList="$1"
 	enable_setupapi_SPFILENOTIFY_FILEINCABINET="$1"
 	enable_shdocvw_ParseURLFromOutsideSource_Tests="$1"
@@ -725,6 +726,9 @@ patch_enable ()
 			;;
 		server-Stored_ACLs)
 			enable_server_Stored_ACLs="$2"
+			;;
+		server-unix_name)
+			enable_server_unix_name="$2"
 			;;
 		setupapi-DiskSpaceList)
 			enable_setupapi_DiskSpaceList="$2"
@@ -3589,6 +3593,18 @@ fi
 if test "$enable_server_Registry_Notifications" -eq 1; then
 	patch_apply server-Registry_Notifications/0001-server-Allow-multiple-registry-notifications-for-the.patch
 	patch_apply server-Registry_Notifications/0002-server-Introduce-refcounting-for-registry-notificati.patch
+fi
+
+# Patchset server-unix_name
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#46070] Basemark Web 3.0 Desktop Launcher crashes
+# |
+# | Modified files:
+# |   *	server/fd.c, server/file.c, server/file.h
+# |
+if test "$enable_server_unix_name" -eq 1; then
+	patch_apply server-unix_name/0001-server-Try-to-retrieve-the-unix-name-on-handles-crea.patch
 fi
 
 # Patchset setupapi-DiskSpaceList
