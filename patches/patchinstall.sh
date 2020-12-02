@@ -2372,7 +2372,7 @@ fi
 # | Modified files:
 # |   *	configure.ac, dlls/kernel32/path.c, dlls/kernel32/tests/path.c, dlls/kernelbase/file.c, dlls/msvcp120/tests/msvcp120.c,
 # | 	dlls/msvcp140/tests/msvcp140.c, dlls/ntdll/tests/file.c, dlls/ntdll/unix/file.c, include/Makefile.in, include/ntifs.h,
-# | 	include/winternl.h, programs/cmd/builtins.c, programs/cmd/directory.c, server/fd.c, server/protocol.def
+# | 	include/winternl.h, programs/cmd/builtins.c, programs/cmd/directory.c, server/fd.c, server/file.c, server/protocol.def
 # |
 if test "$enable_ntdll_Junction_Points" -eq 1; then
 	patch_apply ntdll-Junction_Points/0001-ntdll-Add-support-for-junction-point-creation.patch
@@ -2398,6 +2398,12 @@ if test "$enable_ntdll_Junction_Points" -eq 1; then
 	patch_apply ntdll-Junction_Points/0022-wcmd-Show-reparse-point-target-in-directory-listing.patch
 	patch_apply ntdll-Junction_Points/0023-wcmd-Add-junction-point-support-to-mklink.patch
 	patch_apply ntdll-Junction_Points/0024-server-Fix-obtaining-information-about-a-symlink.patch
+	patch_apply ntdll-Junction_Points/0025-ntdll-Allow-set_file_times_precise-to-work-on-repars.patch
+	patch_apply ntdll-Junction_Points/0026-kernelbase-Convert-FILE_FLAG_OPEN_REPARSE_POINT-for-.patch
+	patch_apply ntdll-Junction_Points/0027-server-Implement-FILE_OPEN_REPARSE_POINT-option.patch
+	patch_apply ntdll-Junction_Points/0028-ntdll-Succeed-with-no-data-for-NtReadFile-on-reparse.patch
+	patch_apply ntdll-Junction_Points/0029-ntdll-Support-reparse-point-properties-in-fd_get_fil.patch
+	patch_apply ntdll-Junction_Points/0030-ntdll-Add-support-for-FileAttributeTagInformation.patch
 fi
 
 # Patchset server-PeekMessage
