@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "727168a9e116a43f851df2673a9169ad280a9ec8"
+	echo "842b38e29166a429d59331be40761335807c85d2"
 }
 
 # Show version information
@@ -95,7 +95,6 @@ patch_enable_all ()
 	enable_comctl32_version_6="$1"
 	enable_comdlg32_lpstrFileTitle="$1"
 	enable_crypt32_CMS_Certificates="$1"
-	enable_crypt32_CRYPT_KEY_PROV_INFO="$1"
 	enable_cryptext_CryptExtOpenCER="$1"
 	enable_d3d11_Deferred_Context="$1"
 	enable_d3dx9_32bpp_Alpha_Channel="$1"
@@ -366,9 +365,6 @@ patch_enable ()
 			;;
 		crypt32-CMS_Certificates)
 			enable_crypt32_CMS_Certificates="$2"
-			;;
-		crypt32-CRYPT_KEY_PROV_INFO)
-			enable_crypt32_CRYPT_KEY_PROV_INFO="$2"
 			;;
 		cryptext-CryptExtOpenCER)
 			enable_cryptext_CryptExtOpenCER="$2"
@@ -1836,18 +1832,6 @@ if test "$enable_crypt32_CMS_Certificates" -eq 1; then
 	patch_apply crypt32-CMS_Certificates/0001-crypt32-Skip-unknown-item-when-decoding-a-CMS-certif.patch
 fi
 
-# Patchset crypt32-CRYPT_KEY_PROV_INFO
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#50024] signtool.exe from Windows 7 SDK fails to find certificates
-# |
-# | Modified files:
-# |   *	dlls/crypt32/cert.c, dlls/crypt32/crypt32_private.h, dlls/crypt32/serialize.c, dlls/crypt32/tests/cert.c
-# |
-if test "$enable_crypt32_CRYPT_KEY_PROV_INFO" -eq 1; then
-	patch_apply crypt32-CRYPT_KEY_PROV_INFO/0001-crypt32-Fix-reading-and-writing-CRYPT_KEY_PROV_INFO-.patch
-fi
-
 # Patchset cryptext-CryptExtOpenCER
 # |
 # | Modified files:
@@ -2771,12 +2755,9 @@ fi
 # | 	include/mfidl.idl, tools/make_makefiles, tools/makedep.c
 # |
 if test "$enable_mfplat_streaming_support" -eq 1; then
-	patch_apply mfplat-streaming-support/0001-winegstreamer-Implement-SetInputType-for-audio-conve.patch
-	patch_apply mfplat-streaming-support/0002-winegstreamer-Implement-SetOutputType-for-audio-conv.patch
 	patch_apply mfplat-streaming-support/0003-winegstreamer-Implement-Process-Input-Output-for-aud.patch
 	patch_apply mfplat-streaming-support/0004-winegstreamer-Implement-Get-Input-Output-StreamInfo-.patch
 	patch_apply mfplat-streaming-support/0005-winegstreamer-Implement-Get-Attributes-functions-for.patch
-	patch_apply mfplat-streaming-support/0006-winegstreamer-Implement-Get-Input-Output-CurrentType.patch
 	patch_apply mfplat-streaming-support/0007-winegstreamer-Introduce-color-conversion-transform.patch
 	patch_apply mfplat-streaming-support/0008-winegstreamer-Register-the-color-conversion-transfor.patch
 	patch_apply mfplat-streaming-support/0009-winegstreamer-Implement-GetInputAvailableType-for-co.patch
