@@ -1,0 +1,122 @@
+From b7ada1cd9d02d1d91309a57c9337d9df78c6f412 Mon Sep 17 00:00:00 2001
+From: Derek Lesho <dlesho@codeweavers.com>
+Date: Fri, 6 Nov 2020 10:06:23 -0600
+Subject: [PATCH] winegstreamer: Fixup raw audio caps to be compatible with
+ IMFMediaType.
+
+Signed-off-by: Derek Lesho <dlesho@codeweavers.com>
+---
+ dlls/winegstreamer/gst_private.h  |  1 +
+ dlls/winegstreamer/media_source.c |  7 +++-
+ dlls/winegstreamer/mfplat.c       | 57 +++++++++++++++++++++++++++++++
+ 3 files changed, 64 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/winegstreamer/gst_private.h b/dlls/winegstreamer/gst_private.h
+index 075e0ce1f0f..dcf76554b6d 100644
+--- a/dlls/winegstreamer/gst_private.h
++++ b/dlls/winegstreamer/gst_private.h
+@@ -79,6 +79,7 @@ extern HRESULT mfplat_get_class_object(REFCLSID rclsid, REFIID riid, void **obj)
+ extern HRESULT mfplat_DllRegisterServer(void) DECLSPEC_HIDDEN;
+ 
+ HRESULT winegstreamer_stream_handler_create(REFIID riid, void **obj) DECLSPEC_HIDDEN;
++GstCaps *make_mf_compatible_caps(GstCaps *caps) DECLSPEC_HIDDEN;
+ IMFMediaType *mf_media_type_from_caps(const GstCaps *caps) DECLSPEC_HIDDEN;
+ GstCaps *caps_from_mf_media_type(IMFMediaType *type) DECLSPEC_HIDDEN;
+ IMFSample *mf_sample_from_gst_buffer(GstBuffer *in) DECLSPEC_HIDDEN;
+diff --git a/dlls/winegstreamer/media_source.c b/dlls/winegstreamer/media_source.c
+index 90c8da42b74..6280c65e920 100644
+--- a/dlls/winegstreamer/media_source.c
++++ b/dlls/winegstreamer/media_source.c
+@@ -891,15 +891,20 @@ fail:
+ 
+ static HRESULT media_stream_init_desc(struct media_stream *stream)
+ {
+-    GstCaps *current_caps = gst_pad_get_current_caps(stream->their_src);
++    GstCaps *base_caps = gst_pad_get_current_caps(stream->their_src);
+     IMFMediaTypeHandler *type_handler = NULL;
+     IMFMediaType **stream_types = NULL;
+     IMFMediaType *stream_type = NULL;
++    GstCaps *current_caps = make_mf_compatible_caps(base_caps);
+     DWORD type_count = 0;
+     const gchar *major_type;
+     unsigned int i;
+     HRESULT hr;
+ 
++    gst_caps_unref(base_caps);
++    if (!current_caps)
++        return E_FAIL;
++
+     major_type = gst_structure_get_name(gst_caps_get_structure(current_caps, 0));
+ 
+     if (!strcmp(major_type, "video/x-raw"))
+diff --git a/dlls/winegstreamer/mfplat.c b/dlls/winegstreamer/mfplat.c
+index 2ef734f3a22..8ed2c2b3904 100644
+--- a/dlls/winegstreamer/mfplat.c
++++ b/dlls/winegstreamer/mfplat.c
+@@ -709,6 +709,63 @@ IMFMediaType *mf_media_type_from_caps(const GstCaps *caps)
+     return media_type;
+ }
+ 
++GstCaps *make_mf_compatible_caps(GstCaps *caps)
++{
++    GstCaps *ret;
++    IMFMediaType *media_type;
++    GstStructure *structure;
++    const char *mime_type;
++
++    if (gst_caps_get_size(caps) != 1)
++        return NULL;
++
++    /* Optimization: Don't copy caps if no transformation is needed */
++    if ((media_type = mf_media_type_from_caps(caps)))
++    {
++        IMFMediaType_Release(media_type);
++        return gst_caps_ref(caps);
++    }
++
++    ret = gst_caps_copy(caps);
++    structure = gst_caps_get_structure(ret, 0);
++    mime_type = gst_structure_get_name(structure);
++
++    if (!strcmp(mime_type, "audio/x-raw"))
++    {
++        const char *format;
++        if ((format = gst_structure_get_string(structure, "format")))
++        {
++            char type;
++            unsigned int bits_per_sample;
++            char endian[2];
++            char new_format[6];
++
++            if (strlen(format) <= 5 && (sscanf(format, "%c%u%2c", &type, &bits_per_sample, endian) >= 2))
++            {
++                if (type == 'U' || type == 'S')
++                    type = bits_per_sample == 8 ? 'U' : 'S';
++
++                if (endian[0] == 'B')
++                    endian[0] = 'L';
++
++                sprintf(new_format, "%c%u%.2s", type, bits_per_sample, bits_per_sample > 8 ? endian : 0);
++                gst_caps_set_simple(caps, "format", G_TYPE_STRING, new_format, NULL);
++            }
++        }
++    }
++
++    if ((media_type = mf_media_type_from_caps(ret)))
++        IMFMediaType_Release(media_type);
++
++    if (!media_type)
++    {
++        gst_caps_unref(ret);
++        return NULL;
++    }
++
++    return ret;
++}
++
+ GstCaps *caps_from_mf_media_type(IMFMediaType *type)
+ {
+     GUID major_type;
+-- 
+2.29.2
+
