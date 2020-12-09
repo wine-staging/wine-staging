@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "842b38e29166a429d59331be40761335807c85d2"
+	echo "310019789f7bde12ae3f25f723957c975fb2f804"
 }
 
 # Show version information
@@ -140,6 +140,7 @@ patch_enable_all ()
 	enable_kernel32_SetProcessDEPPolicy="$1"
 	enable_krnl386_exe16_GDT_LDT_Emulation="$1"
 	enable_krnl386_exe16_Invalid_Console_Handles="$1"
+	enable_libs_Unicode_Collation="$1"
 	enable_loader_KeyboardLayouts="$1"
 	enable_mfplat_streaming_support="$1"
 	enable_mmsystem_dll16_MIDIHDR_Refcount="$1"
@@ -500,6 +501,9 @@ patch_enable ()
 			;;
 		krnl386.exe16-Invalid_Console_Handles)
 			enable_krnl386_exe16_Invalid_Console_Handles="$2"
+			;;
+		libs-Unicode_Collation)
+			enable_libs_Unicode_Collation="$2"
 			;;
 		loader-KeyboardLayouts)
 			enable_loader_KeyboardLayouts="$2"
@@ -2725,6 +2729,24 @@ fi
 # |
 if test "$enable_krnl386_exe16_Invalid_Console_Handles" -eq 1; then
 	patch_apply krnl386.exe16-Invalid_Console_Handles/0001-krnl386.exe16-Really-translate-all-invalid-console-h.patch
+fi
+
+# Patchset libs-Unicode_Collation
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#10767] Fix comparison of punctuation characters in lstrcmp
+# |   *	[#32490] Graphical issues in Inquisitor
+# |
+# | Modified files:
+# |   *	dlls/kernel32/tests/locale.c, dlls/kernelbase/locale.c
+# |
+if test "$enable_libs_Unicode_Collation" -eq 1; then
+	patch_apply libs-Unicode_Collation/0001-kernelbase-Implement-sortkey-generation-on-official-.patch
+	patch_apply libs-Unicode_Collation/0002-kernelbase-Implement-sortkey-punctuation.patch
+	patch_apply libs-Unicode_Collation/0003-kernelbase-Implement-sortkey-for-Japanese-characters.patch
+	patch_apply libs-Unicode_Collation/0004-kernelbase-Implement-sortkey-expansion.patch
+	patch_apply libs-Unicode_Collation/0005-kernelbase-Implement-sortkey-language-support.patch
+	patch_apply libs-Unicode_Collation/0006-kernelbase-Implement-CompareString-functions.patch
 fi
 
 # Patchset loader-KeyboardLayouts
