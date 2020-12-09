@@ -1,0 +1,397 @@
+From e27be2eef2738f6c7f213d70ee5554b052d07ec1 Mon Sep 17 00:00:00 2001
+From: Zebediah Figura <z.figura12@gmail.com>
+Date: Mon, 2 Nov 2020 20:24:07 -0600
+Subject: [PATCH 09/13] ntdll: Reimplement Win32 futexes on top of thread-ID
+ alerts.
+
+Signed-off-by: Zebediah Figura <z.figura12@gmail.com>
+---
+ dlls/ntdll/loader.c      |   4 +-
+ dlls/ntdll/ntdll_misc.h  |   2 +
+ dlls/ntdll/sync.c        |  77 ++++++++++++++++++-
+ dlls/ntdll/unix/loader.c |   3 -
+ dlls/ntdll/unix/sync.c   | 162 ---------------------------------------
+ dlls/ntdll/unixlib.h     |   6 +-
+ 6 files changed, 79 insertions(+), 175 deletions(-)
+
+diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
+index 26443a8c4f4..440a77d4063 100644
+--- a/dlls/ntdll/loader.c
++++ b/dlls/ntdll/loader.c
+@@ -205,7 +205,7 @@ static inline void small_pause(void)
+ #endif
+ }
+ 
+-static void teb_list_rdlock(void)
++void teb_list_rdlock(void)
+ {
+     for (;;)
+     {
+@@ -216,7 +216,7 @@ static void teb_list_rdlock(void)
+     }
+ }
+ 
+-static void teb_list_rdunlock(void)
++void teb_list_rdunlock(void)
+ {
+     InterlockedDecrement( &teb_spinlock );
+ }
+diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
+index 41e8666a25c..6a46946b218 100644
+--- a/dlls/ntdll/ntdll_misc.h
++++ b/dlls/ntdll/ntdll_misc.h
+@@ -71,6 +71,8 @@ extern BOOL is_wow64 DECLSPEC_HIDDEN;
+ 
+ /* module handling */
+ extern LIST_ENTRY tls_links DECLSPEC_HIDDEN;
++extern void teb_list_rdlock(void) DECLSPEC_HIDDEN;
++extern void teb_list_rdunlock(void) DECLSPEC_HIDDEN;
+ extern FARPROC RELAY_GetProcAddress( HMODULE module, const IMAGE_EXPORT_DIRECTORY *exports,
+                                      DWORD exp_size, FARPROC proc, DWORD ordinal, const WCHAR *user ) DECLSPEC_HIDDEN;
+ extern FARPROC SNOOP_GetProcAddress( HMODULE hmod, const IMAGE_EXPORT_DIRECTORY *exports, DWORD exp_size,
+diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
+index 8df7015df9f..05bccf698b6 100644
+--- a/dlls/ntdll/sync.c
++++ b/dlls/ntdll/sync.c
+@@ -37,6 +37,13 @@
+ #include "wine/debug.h"
+ #include "ntdll_misc.h"
+ 
++WINE_DEFAULT_DEBUG_CHANNEL(sync);
++
++static const char *debugstr_timeout( const LARGE_INTEGER *timeout )
++{
++    if (!timeout) return "(infinite)";
++    return wine_dbgstr_longlong( timeout->QuadPart );
++}
+ 
+ /******************************************************************
+  *              RtlRunOnceInitialize (NTDLL.@)
+@@ -531,13 +538,48 @@ NTSTATUS WINAPI RtlSleepConditionVariableSRW( RTL_CONDITION_VARIABLE *variable,
+     return status;
+ }
+ 
++static BOOL compare_addr( const void *addr, const void *cmp, SIZE_T size )
++{
++    switch (size)
++    {
++        case 1:
++            return (*(const UCHAR *)addr == *(const UCHAR *)cmp);
++        case 2:
++            return (*(const USHORT *)addr == *(const USHORT *)cmp);
++        case 4:
++            return (*(const ULONG *)addr == *(const ULONG *)cmp);
++        case 8:
++            return (*(const ULONG64 *)addr == *(const ULONG64 *)cmp);
++    }
++
++    return FALSE;
++}
++
+ /***********************************************************************
+  *           RtlWaitOnAddress   (NTDLL.@)
+  */
+ NTSTATUS WINAPI RtlWaitOnAddress( const void *addr, const void *cmp, SIZE_T size,
+                                   const LARGE_INTEGER *timeout )
+ {
+-    return unix_funcs->RtlWaitOnAddress( addr, cmp, size, timeout );
++    NTSTATUS ret;
++
++    TRACE("addr %p cmp %p size %#Ix timeout %s\n", addr, cmp, size, debugstr_timeout( timeout ));
++
++    if (size != 1 && size != 2 && size != 4 && size != 8)
++        return STATUS_INVALID_PARAMETER;
++
++    InterlockedExchangePointer( &NtCurrentTeb()->ReservedForPerf, (void *)addr );
++
++    if (!compare_addr( addr, cmp, size ))
++    {
++        InterlockedExchangePointer( &NtCurrentTeb()->ReservedForPerf, NULL );
++        return STATUS_SUCCESS;
++    }
++
++    ret = NtWaitForAlertByThreadId( addr, timeout );
++    InterlockedExchangePointer( &NtCurrentTeb()->ReservedForPerf, NULL );
++    if (ret == STATUS_ALERTED) ret = STATUS_SUCCESS;
++    return ret;
+ }
+ 
+ /***********************************************************************
+@@ -545,7 +587,20 @@ NTSTATUS WINAPI RtlWaitOnAddress( const void *addr, const void *cmp, SIZE_T size
+  */
+ void WINAPI RtlWakeAddressAll( const void *addr )
+ {
+-    return unix_funcs->RtlWakeAddressAll( addr );
++    LIST_ENTRY *entry;
++
++    TRACE("%p\n", addr);
++
++    if (!addr) return;
++
++    teb_list_rdlock();
++    for (entry = tls_links.Flink; entry != &tls_links; entry = entry->Flink)
++    {
++        const TEB *teb = CONTAINING_RECORD( entry, TEB, TlsLinks );
++        if (teb->ReservedForPerf == addr)
++            NtAlertThreadByThreadId( teb->ClientId.UniqueThread );
++    }
++    teb_list_rdunlock();
+ }
+ 
+ /***********************************************************************
+@@ -553,5 +608,21 @@ void WINAPI RtlWakeAddressAll( const void *addr )
+  */
+ void WINAPI RtlWakeAddressSingle( const void *addr )
+ {
+-    return unix_funcs->RtlWakeAddressSingle( addr );
++    LIST_ENTRY *entry;
++
++    TRACE("%p\n", addr);
++
++    if (!addr) return;
++
++    teb_list_rdlock();
++    for (entry = tls_links.Flink; entry != &tls_links; entry = entry->Flink)
++    {
++        const TEB *teb = CONTAINING_RECORD( entry, TEB, TlsLinks );
++        if (teb->ReservedForPerf == addr)
++        {
++            NtAlertThreadByThreadId( teb->ClientId.UniqueThread );
++            break;
++        }
++    }
++    teb_list_rdunlock();
+ }
+diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
+index 31cfb43d11f..5ab3121dd2c 100644
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -1511,9 +1511,6 @@ static struct unix_funcs unix_funcs =
+     NtCurrentTeb,
+     DbgUiIssueRemoteBreakin,
+     RtlGetSystemTimePrecise,
+-    RtlWaitOnAddress,
+-    RtlWakeAddressAll,
+-    RtlWakeAddressSingle,
+     fast_RtlpWaitForCriticalSection,
+     fast_RtlpUnWaitCriticalSection,
+     fast_RtlDeleteCriticalSection,
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index e4aa03f94da..2bdd3a196bc 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -77,10 +77,6 @@ WINE_DEFAULT_DEBUG_CHANNEL(sync);
+ 
+ HANDLE keyed_event = 0;
+ 
+-static const LARGE_INTEGER zero_timeout;
+-
+-static pthread_mutex_t addr_mutex = PTHREAD_MUTEX_INITIALIZER;
+-
+ static const char *debugstr_timeout( const LARGE_INTEGER *timeout )
+ {
+     if (!timeout) return "(infinite)";
+@@ -190,24 +186,6 @@ static void timespec_from_timeout( struct timespec *timespec, const LARGE_INTEGE
+ #endif
+ 
+ 
+-static BOOL compare_addr( const void *addr, const void *cmp, SIZE_T size )
+-{
+-    switch (size)
+-    {
+-        case 1:
+-            return (*(const UCHAR *)addr == *(const UCHAR *)cmp);
+-        case 2:
+-            return (*(const USHORT *)addr == *(const USHORT *)cmp);
+-        case 4:
+-            return (*(const ULONG *)addr == *(const ULONG *)cmp);
+-        case 8:
+-            return (*(const ULONG64 *)addr == *(const ULONG64 *)cmp);
+-    }
+-
+-    return FALSE;
+-}
+-
+-
+ /* create a struct security_descriptor and contained information in one contiguous piece of memory */
+ NTSTATUS alloc_object_attributes( const OBJECT_ATTRIBUTES *attr, struct object_attributes **ret,
+                                   data_size_t *ret_len )
+@@ -2678,71 +2656,6 @@ NTSTATUS CDECL fast_RtlWakeConditionVariable( RTL_CONDITION_VARIABLE *variable,
+     return STATUS_SUCCESS;
+ }
+ 
+-
+-/* We can't map addresses to futex directly, because an application can wait on
+- * 8 bytes, and we can't pass all 8 as the compare value to futex(). Instead we
+- * map all addresses to a small fixed table of futexes. This may result in
+- * spurious wakes, but the application is already expected to handle those. */
+-
+-static int addr_futex_table[256];
+-
+-static inline int *hash_addr( const void *addr )
+-{
+-    ULONG_PTR val = (ULONG_PTR)addr;
+-
+-    return &addr_futex_table[(val >> 2) & 255];
+-}
+-
+-static inline NTSTATUS fast_wait_addr( const void *addr, const void *cmp, SIZE_T size,
+-                                       const LARGE_INTEGER *timeout )
+-{
+-    int *futex;
+-    int val;
+-    struct timespec timespec;
+-    int ret;
+-
+-    if (!use_futexes())
+-        return STATUS_NOT_IMPLEMENTED;
+-
+-    futex = hash_addr( addr );
+-
+-    /* We must read the previous value of the futex before checking the value
+-     * of the address being waited on. That way, if we receive a wake between
+-     * now and waiting on the futex, we know that val will have changed.
+-     * Use an atomic load so that memory accesses are ordered between this read
+-     * and the increment below. */
+-    val = InterlockedCompareExchange( futex, 0, 0 );
+-    if (!compare_addr( addr, cmp, size ))
+-        return STATUS_SUCCESS;
+-
+-    if (timeout)
+-    {
+-        timespec_from_timeout( &timespec, timeout );
+-        ret = futex_wait( futex, val, &timespec );
+-    }
+-    else
+-        ret = futex_wait( futex, val, NULL );
+-
+-    if (ret == -1 && errno == ETIMEDOUT)
+-        return STATUS_TIMEOUT;
+-    return STATUS_SUCCESS;
+-}
+-
+-static inline NTSTATUS fast_wake_addr( const void *addr )
+-{
+-    int *futex;
+-
+-    if (!use_futexes())
+-        return STATUS_NOT_IMPLEMENTED;
+-
+-    futex = hash_addr( addr );
+-
+-    InterlockedIncrement( futex );
+-
+-    futex_wake( futex, INT_MAX );
+-    return STATUS_SUCCESS;
+-}
+-
+ #else
+ 
+ NTSTATUS CDECL fast_RtlTryAcquireSRWLockExclusive( RTL_SRWLOCK *lock )
+@@ -2785,79 +2698,4 @@ NTSTATUS CDECL fast_wait_cv( RTL_CONDITION_VARIABLE *variable, const void *value
+     return STATUS_NOT_IMPLEMENTED;
+ }
+ 
+-static inline NTSTATUS fast_wait_addr( const void *addr, const void *cmp, SIZE_T size,
+-                                       const LARGE_INTEGER *timeout )
+-{
+-    return STATUS_NOT_IMPLEMENTED;
+-}
+-
+-static inline NTSTATUS fast_wake_addr( const void *addr )
+-{
+-    return STATUS_NOT_IMPLEMENTED;
+-}
+-
+ #endif
+-
+-
+-/***********************************************************************
+- *           RtlWaitOnAddress   (NTDLL.@)
+- */
+-NTSTATUS WINAPI RtlWaitOnAddress( const void *addr, const void *cmp, SIZE_T size,
+-                                  const LARGE_INTEGER *timeout )
+-{
+-    select_op_t select_op;
+-    NTSTATUS ret;
+-    timeout_t abs_timeout = timeout ? timeout->QuadPart : TIMEOUT_INFINITE;
+-
+-    if (size != 1 && size != 2 && size != 4 && size != 8)
+-        return STATUS_INVALID_PARAMETER;
+-
+-    if ((ret = fast_wait_addr( addr, cmp, size, timeout )) != STATUS_NOT_IMPLEMENTED)
+-        return ret;
+-
+-    mutex_lock( &addr_mutex );
+-    if (!compare_addr( addr, cmp, size ))
+-    {
+-        mutex_unlock( &addr_mutex );
+-        return STATUS_SUCCESS;
+-    }
+-
+-    if (abs_timeout < 0)
+-    {
+-        LARGE_INTEGER now;
+-
+-        NtQueryPerformanceCounter( &now, NULL );
+-        abs_timeout -= now.QuadPart;
+-    }
+-
+-    select_op.keyed_event.op     = SELECT_KEYED_EVENT_WAIT;
+-    select_op.keyed_event.handle = wine_server_obj_handle( keyed_event );
+-    select_op.keyed_event.key    = wine_server_client_ptr( addr );
+-
+-    return server_select( &select_op, sizeof(select_op.keyed_event), SELECT_INTERRUPTIBLE,
+-                          abs_timeout, NULL, &addr_mutex, NULL );
+-}
+-
+-/***********************************************************************
+- *           RtlWakeAddressAll    (NTDLL.@)
+- */
+-void WINAPI RtlWakeAddressAll( const void *addr )
+-{
+-    if (fast_wake_addr( addr ) != STATUS_NOT_IMPLEMENTED) return;
+-
+-    mutex_lock( &addr_mutex );
+-    while (NtReleaseKeyedEvent( 0, addr, 0, &zero_timeout ) == STATUS_SUCCESS) {}
+-    mutex_unlock( &addr_mutex );
+-}
+-
+-/***********************************************************************
+- *           RtlWakeAddressSingle (NTDLL.@)
+- */
+-void WINAPI RtlWakeAddressSingle( const void *addr )
+-{
+-    if (fast_wake_addr( addr ) != STATUS_NOT_IMPLEMENTED) return;
+-
+-    mutex_lock( &addr_mutex );
+-    NtReleaseKeyedEvent( 0, addr, 0, &zero_timeout );
+-    mutex_unlock( &addr_mutex );
+-}
+diff --git a/dlls/ntdll/unixlib.h b/dlls/ntdll/unixlib.h
+index 7ed3148e4c4..a9c05cbd09b 100644
+--- a/dlls/ntdll/unixlib.h
++++ b/dlls/ntdll/unixlib.h
+@@ -27,7 +27,7 @@
+ struct _DISPATCHER_CONTEXT;
+ 
+ /* increment this when you change the function table */
+-#define NTDLL_UNIXLIB_VERSION 106
++#define NTDLL_UNIXLIB_VERSION 107
+ 
+ struct unix_funcs
+ {
+@@ -37,10 +37,6 @@ struct unix_funcs
+     /* other Win32 API functions */
+     NTSTATUS      (WINAPI *DbgUiIssueRemoteBreakin)( HANDLE process );
+     LONGLONG      (WINAPI *RtlGetSystemTimePrecise)(void);
+-    NTSTATUS      (WINAPI *RtlWaitOnAddress)( const void *addr, const void *cmp, SIZE_T size,
+-                                              const LARGE_INTEGER *timeout );
+-    void          (WINAPI *RtlWakeAddressAll)( const void *addr );
+-    void          (WINAPI *RtlWakeAddressSingle)( const void *addr );
+ 
+     /* fast locks */
+     NTSTATUS      (CDECL *fast_RtlpWaitForCriticalSection)( RTL_CRITICAL_SECTION *crit, int timeout );
+-- 
+2.29.2
+

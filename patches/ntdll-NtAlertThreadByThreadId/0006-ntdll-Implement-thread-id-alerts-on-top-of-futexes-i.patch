@@ -1,0 +1,119 @@
+From c6423d645d002113fce7b3194023ec507549c39a Mon Sep 17 00:00:00 2001
+From: Zebediah Figura <z.figura12@gmail.com>
+Date: Mon, 31 Aug 2020 23:02:56 -0500
+Subject: [PATCH 06/13] ntdll: Implement thread-id alerts on top of futexes if
+ possible.
+
+Signed-off-by: Zebediah Figura <z.figura12@gmail.com>
+---
+ dlls/ntdll/unix/sync.c         | 65 ++++++++++++++++++++++++++++++++++
+ dlls/ntdll/unix/unix_private.h |  3 ++
+ 2 files changed, 68 insertions(+)
+
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index 2ed164368b9..3fd3545bbbb 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -2143,6 +2143,15 @@ NTSTATUS WINAPI NtAlertThreadByThreadId( HANDLE tid )
+         if (teb->ClientId.UniqueThread == tid)
+         {
+             pthread_rwlock_unlock( &teb_list_lock );
++#ifdef __linux__
++            if (use_futexes())
++            {
++                int *futex = &thread_data->tid_alert_futex;
++                if (!InterlockedExchange( futex, 1 ))
++                    futex_wake( futex, 1 );
++                return STATUS_SUCCESS;
++            }
++#endif
+             NtSetEvent( thread_data->tid_alert_event, NULL );
+             return STATUS_SUCCESS;
+         }
+@@ -2153,6 +2162,28 @@ NTSTATUS WINAPI NtAlertThreadByThreadId( HANDLE tid )
+ }
+ 
+ 
++static LONGLONG get_absolute_timeout( const LARGE_INTEGER *timeout )
++{
++    LARGE_INTEGER now;
++
++    if (timeout->QuadPart >= 0) return timeout->QuadPart;
++    NtQuerySystemTime( &now );
++    return now.QuadPart - timeout->QuadPart;
++}
++
++
++static LONGLONG update_timeout( ULONGLONG end )
++{
++    LARGE_INTEGER now;
++    LONGLONG timeleft;
++
++    NtQuerySystemTime( &now );
++    timeleft = end - now.QuadPart;
++    if (timeleft < 0) timeleft = 0;
++    return timeleft;
++}
++
++
+ /***********************************************************************
+  *             NtWaitForAlertByThreadId (NTDLL.@)
+  */
+@@ -2160,6 +2191,40 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
+ {
+     TRACE( "%p %s\n", address, debugstr_timeout( timeout ) );
+ 
++#ifdef __linux__
++    if (use_futexes())
++    {
++        int *futex = &ntdll_get_thread_data()->tid_alert_futex;
++        ULONGLONG end;
++        int ret;
++
++        if (timeout)
++        {
++            if (timeout->QuadPart == TIMEOUT_INFINITE)
++                timeout = NULL;
++            else
++                end = get_absolute_timeout( timeout );
++        }
++
++        while (!InterlockedExchange( futex, 0 ))
++        {
++            if (timeout)
++            {
++                LONGLONG timeleft = update_timeout( end );
++                struct timespec timespec;
++
++                timespec.tv_sec = timeleft / (ULONGLONG)TICKSPERSEC;
++                timespec.tv_nsec = (timeleft % TICKSPERSEC) * 100;
++                ret = futex_wait( futex, 0, &timespec );
++            }
++            else
++                ret = futex_wait( futex, 0, NULL );
++
++            if (ret == -1 && errno == ETIMEDOUT) return STATUS_TIMEOUT;
++        }
++        return STATUS_ALERTED;
++    }
++#endif
+     return NtWaitForSingleObject( ntdll_get_thread_data()->tid_alert_event, FALSE, timeout );
+ }
+ 
+diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
+index 9ae7cba34a7..327e12519a0 100644
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -57,6 +57,9 @@ struct ntdll_thread_data
+     struct list        entry;         /* entry in TEB list */
+     PRTL_THREAD_START_ROUTINE start;  /* thread entry point */
+     void              *param;         /* thread entry point parameter */
++#ifdef __linux__
++    int                tid_alert_futex; /* futex for thread-id alerts */
++#endif
+     HANDLE             tid_alert_event; /* event for thread-id alerts */
+ };
+ 
+-- 
+2.29.2
+

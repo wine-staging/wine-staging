@@ -1,0 +1,127 @@
+From b281eaa388b6dc0c0c539cc76236a0529668fcff Mon Sep 17 00:00:00 2001
+From: Zebediah Figura <z.figura12@gmail.com>
+Date: Mon, 31 Aug 2020 23:03:34 -0500
+Subject: [PATCH 07/13] ntdll: Implement thread-id alerts on top of Mach
+ semaphores on Mac.
+
+Signed-off-by: Zebediah Figura <z.figura12@gmail.com>
+---
+ dlls/ntdll/unix/sync.c         | 44 ++++++++++++++++++++++++++++++++++
+ dlls/ntdll/unix/thread.c       |  4 ++++
+ dlls/ntdll/unix/unix_private.h |  4 ++++
+ 3 files changed, 52 insertions(+)
+
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index 3fd3545bbbb..e4aa03f94da 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -2143,6 +2143,10 @@ NTSTATUS WINAPI NtAlertThreadByThreadId( HANDLE tid )
+         if (teb->ClientId.UniqueThread == tid)
+         {
+             pthread_rwlock_unlock( &teb_list_lock );
++#ifdef __APPLE__
++            semaphore_signal( &thread_data->tid_alert_sem );
++            return STATUS_SUCCESS;
++#else
+ #ifdef __linux__
+             if (use_futexes())
+             {
+@@ -2154,6 +2158,7 @@ NTSTATUS WINAPI NtAlertThreadByThreadId( HANDLE tid )
+ #endif
+             NtSetEvent( thread_data->tid_alert_event, NULL );
+             return STATUS_SUCCESS;
++#endif
+         }
+     }
+ 
+@@ -2191,6 +2196,44 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
+ {
+     TRACE( "%p %s\n", address, debugstr_timeout( timeout ) );
+ 
++#ifdef __APPLE__
++    {
++        semaphore_t sem = ntdll_get_thread_data()->tid_alert_sem;
++        ULONGLONG end;
++        kern_return_t ret;
++
++        if (timeout)
++        {
++            if (timeout->QuadPart == TIMEOUT_INFINITE)
++                timeout = NULL;
++            else
++                end = get_absolute_timeout( timeout );
++        }
++
++        for (;;)
++        {
++            if (timeout)
++            {
++                LONGLONG timeleft = update_timeout( end );
++                mach_timespec_t timespec;
++
++                timespec.tv_sec = timeleft / (ULONGLONG)TICKSPERSEC;
++                timespec.tv_nsec = (timeleft % TICKSPERSEC) * 100;
++                ret = semaphore_timedwait( sem, &timespec );
++            }
++            else
++                ret = semaphore_wait( sem );
++
++            switch (ret)
++            {
++            case KERN_SUCCESS: return STATUS_ALERTED;
++            case KERN_ABORTED: continue;
++            case KERN_OPERATION_TIMED_OUT: return STATUS_TIMEOUT;
++            default: return STATUS_INVALID_HANDLE;
++            }
++        }
++    }
++#else
+ #ifdef __linux__
+     if (use_futexes())
+     {
+@@ -2226,6 +2269,7 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
+     }
+ #endif
+     return NtWaitForSingleObject( ntdll_get_thread_data()->tid_alert_event, FALSE, timeout );
++#endif
+ }
+ 
+ 
+diff --git a/dlls/ntdll/unix/thread.c b/dlls/ntdll/unix/thread.c
+index bb55b3d29ed..05157e24ace 100644
+--- a/dlls/ntdll/unix/thread.c
++++ b/dlls/ntdll/unix/thread.c
+@@ -252,7 +252,11 @@ NTSTATUS WINAPI NtCreateThreadEx( HANDLE *handle, ACCESS_MASK access, OBJECT_ATT
+     thread_data->start = start;
+     thread_data->param = param;
+ 
++#ifdef __APPLE__
++    semaphore_create( mach_task_self(), &thread_data->tid_alert_sem, SYNC_POLICY_FIFO, 0 );
++#else
+     NtCreateEvent( &thread_data->tid_alert_event, EVENT_ALL_ACCESS, NULL, SynchronizationEvent, FALSE );
++#endif
+ 
+     pthread_attr_init( &pthread_attr );
+     pthread_attr_setstack( &pthread_attr, teb->DeallocationStack,
+diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
+index 327e12519a0..9e94c0ec13c 100644
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -57,10 +57,14 @@ struct ntdll_thread_data
+     struct list        entry;         /* entry in TEB list */
+     PRTL_THREAD_START_ROUTINE start;  /* thread entry point */
+     void              *param;         /* thread entry point parameter */
++#ifdef __APPLE__
++    semaphore_t        tid_alert_sem; /* Mach semaphore for thread-id alerts */
++#else
+ #ifdef __linux__
+     int                tid_alert_futex; /* futex for thread-id alerts */
+ #endif
+     HANDLE             tid_alert_event; /* event for thread-id alerts */
++#endif
+ };
+ 
+ C_ASSERT( sizeof(struct ntdll_thread_data) <= sizeof(((TEB *)0)->GdiTebBatch) );
+-- 
+2.29.2
+

@@ -1,0 +1,258 @@
+From 8b1502d1fc5a6ccb748a8ada38784e79f5612811 Mon Sep 17 00:00:00 2001
+From: Zebediah Figura <z.figura12@gmail.com>
+Date: Mon, 31 Aug 2020 23:38:09 -0500
+Subject: [PATCH 11/13] ntdll: Reimplement the critical section fast path on
+ top of Win32 futexes.
+
+Signed-off-by: Zebediah Figura <z.figura12@gmail.com>
+---
+ dlls/ntdll/sync.c              |  35 +++++++----
+ dlls/ntdll/unix/loader.c       |   3 -
+ dlls/ntdll/unix/sync.c         | 109 ---------------------------------
+ dlls/ntdll/unix/unix_private.h |   3 -
+ dlls/ntdll/unixlib.h           |   5 +-
+ 5 files changed, 24 insertions(+), 131 deletions(-)
+
+diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
+index ea327172b86..d7976a742c6 100644
+--- a/dlls/ntdll/sync.c
++++ b/dlls/ntdll/sync.c
+@@ -658,19 +658,26 @@ static inline HANDLE get_semaphore( RTL_CRITICAL_SECTION *crit )
+ 
+ static inline NTSTATUS wait_semaphore( RTL_CRITICAL_SECTION *crit, int timeout )
+ {
+-    NTSTATUS ret;
++    LARGE_INTEGER time = {.QuadPart = timeout * (LONGLONG)-10000000};
+ 
+     /* debug info is cleared by MakeCriticalSectionGlobal */
+-    if (!crit_section_has_debuginfo( crit ) ||
+-        ((ret = unix_funcs->fast_RtlpWaitForCriticalSection( crit, timeout )) == STATUS_NOT_IMPLEMENTED))
++    if (!crit_section_has_debuginfo( crit ))
+     {
+         HANDLE sem = get_semaphore( crit );
+-        LARGE_INTEGER time;
+-
+-        time.QuadPart = timeout * (LONGLONG)-10000000;
+-        ret = NtWaitForSingleObject( sem, FALSE, &time );
++        return NtWaitForSingleObject( sem, FALSE, &time );
++    }
++    else
++    {
++        int *lock = (int *)&crit->LockSemaphore;
++        while (!InterlockedCompareExchange( lock, 0, 1 ))
++        {
++            static const int zero;
++            /* this may wait longer than specified in case of multiple wake-ups */
++            if (RtlWaitOnAddress( (int *)&crit->LockSemaphore, &zero, sizeof(int), &time ) == STATUS_TIMEOUT)
++                return STATUS_TIMEOUT;
++        }
++        return STATUS_WAIT_0;
+     }
+-    return ret;
+ }
+ 
+ /******************************************************************************
+@@ -760,8 +767,6 @@ NTSTATUS WINAPI RtlDeleteCriticalSection( RTL_CRITICAL_SECTION *crit )
+             RtlFreeHeap( GetProcessHeap(), 0, crit->DebugInfo );
+             crit->DebugInfo = NULL;
+         }
+-        if (unix_funcs->fast_RtlDeleteCriticalSection( crit ) == STATUS_NOT_IMPLEMENTED)
+-            NtClose( crit->LockSemaphore );
+     }
+     else NtClose( crit->LockSemaphore );
+     crit->LockSemaphore = 0;
+@@ -837,12 +842,18 @@ NTSTATUS WINAPI RtlpUnWaitCriticalSection( RTL_CRITICAL_SECTION *crit )
+     NTSTATUS ret;
+ 
+     /* debug info is cleared by MakeCriticalSectionGlobal */
+-    if (!crit_section_has_debuginfo( crit ) ||
+-        ((ret = unix_funcs->fast_RtlpUnWaitCriticalSection( crit )) == STATUS_NOT_IMPLEMENTED))
++    if (!crit_section_has_debuginfo( crit ))
+     {
+         HANDLE sem = get_semaphore( crit );
+         ret = NtReleaseSemaphore( sem, 1, NULL );
+     }
++    else
++    {
++        int *lock = (int *)&crit->LockSemaphore;
++        *lock = 1;
++        RtlWakeAddressSingle( lock );
++        ret = STATUS_SUCCESS;
++    }
+     if (ret) RtlRaiseStatus( ret );
+     return ret;
+ }
+diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
+index 5ab3121dd2c..ac4efc74e5e 100644
+--- a/dlls/ntdll/unix/loader.c
++++ b/dlls/ntdll/unix/loader.c
+@@ -1511,9 +1511,6 @@ static struct unix_funcs unix_funcs =
+     NtCurrentTeb,
+     DbgUiIssueRemoteBreakin,
+     RtlGetSystemTimePrecise,
+-    fast_RtlpWaitForCriticalSection,
+-    fast_RtlpUnWaitCriticalSection,
+-    fast_RtlDeleteCriticalSection,
+     fast_RtlTryAcquireSRWLockExclusive,
+     fast_RtlAcquireSRWLockExclusive,
+     fast_RtlTryAcquireSRWLockShared,
+diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
+index 2bdd3a196bc..0f45fdecdca 100644
+--- a/dlls/ntdll/unix/sync.c
++++ b/dlls/ntdll/unix/sync.c
+@@ -2251,115 +2251,6 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
+ }
+ 
+ 
+-#ifdef __linux__
+-
+-NTSTATUS CDECL fast_RtlpWaitForCriticalSection( RTL_CRITICAL_SECTION *crit, int timeout )
+-{
+-    int val;
+-    struct timespec timespec;
+-
+-    if (!use_futexes()) return STATUS_NOT_IMPLEMENTED;
+-
+-    timespec.tv_sec  = timeout;
+-    timespec.tv_nsec = 0;
+-    while ((val = InterlockedCompareExchange( (int *)&crit->LockSemaphore, 0, 1 )) != 1)
+-    {
+-        /* note: this may wait longer than specified in case of signals or */
+-        /*       multiple wake-ups, but that shouldn't be a problem */
+-        if (futex_wait( (int *)&crit->LockSemaphore, val, &timespec ) == -1 && errno == ETIMEDOUT)
+-            return STATUS_TIMEOUT;
+-    }
+-    return STATUS_WAIT_0;
+-}
+-
+-NTSTATUS CDECL fast_RtlpUnWaitCriticalSection( RTL_CRITICAL_SECTION *crit )
+-{
+-    if (!use_futexes()) return STATUS_NOT_IMPLEMENTED;
+-
+-    *(int *)&crit->LockSemaphore = 1;
+-    futex_wake( (int *)&crit->LockSemaphore, 1 );
+-    return STATUS_SUCCESS;
+-}
+-
+-NTSTATUS CDECL fast_RtlDeleteCriticalSection( RTL_CRITICAL_SECTION *crit )
+-{
+-    if (!use_futexes()) return STATUS_NOT_IMPLEMENTED;
+-    return STATUS_SUCCESS;
+-}
+-
+-#elif defined(__APPLE__)
+-
+-static inline semaphore_t get_mach_semaphore( RTL_CRITICAL_SECTION *crit )
+-{
+-    semaphore_t ret = *(int *)&crit->LockSemaphore;
+-    if (!ret)
+-    {
+-        semaphore_t sem;
+-        if (semaphore_create( mach_task_self(), &sem, SYNC_POLICY_FIFO, 0 )) return 0;
+-        if (!(ret = InterlockedCompareExchange( (int *)&crit->LockSemaphore, sem, 0 )))
+-            ret = sem;
+-        else
+-            semaphore_destroy( mach_task_self(), sem );  /* somebody beat us to it */
+-    }
+-    return ret;
+-}
+-
+-NTSTATUS CDECL fast_RtlpWaitForCriticalSection( RTL_CRITICAL_SECTION *crit, int timeout )
+-{
+-    mach_timespec_t timespec;
+-    semaphore_t sem = get_mach_semaphore( crit );
+-
+-    timespec.tv_sec = timeout;
+-    timespec.tv_nsec = 0;
+-    for (;;)
+-    {
+-        switch( semaphore_timedwait( sem, timespec ))
+-        {
+-        case KERN_SUCCESS:
+-            return STATUS_WAIT_0;
+-        case KERN_ABORTED:
+-            continue;  /* got a signal, restart */
+-        case KERN_OPERATION_TIMED_OUT:
+-            return STATUS_TIMEOUT;
+-        default:
+-            return STATUS_INVALID_HANDLE;
+-        }
+-    }
+-}
+-
+-NTSTATUS CDECL fast_RtlpUnWaitCriticalSection( RTL_CRITICAL_SECTION *crit )
+-{
+-    semaphore_t sem = get_mach_semaphore( crit );
+-    semaphore_signal( sem );
+-    return STATUS_SUCCESS;
+-}
+-
+-NTSTATUS CDECL fast_RtlDeleteCriticalSection( RTL_CRITICAL_SECTION *crit )
+-{
+-    semaphore_destroy( mach_task_self(), *(int *)&crit->LockSemaphore );
+-    return STATUS_SUCCESS;
+-}
+-
+-#else  /* __APPLE__ */
+-
+-NTSTATUS CDECL fast_RtlpWaitForCriticalSection( RTL_CRITICAL_SECTION *crit, int timeout )
+-{
+-    return STATUS_NOT_IMPLEMENTED;
+-}
+-
+-NTSTATUS CDECL fast_RtlpUnWaitCriticalSection( RTL_CRITICAL_SECTION *crit )
+-{
+-    return STATUS_NOT_IMPLEMENTED;
+-}
+-
+-NTSTATUS CDECL fast_RtlDeleteCriticalSection( RTL_CRITICAL_SECTION *crit )
+-{
+-    return STATUS_NOT_IMPLEMENTED;
+-}
+-
+-#endif
+-
+-
+ #ifdef __linux__
+ 
+ /* Futex-based SRW lock implementation:
+diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
+index 9e94c0ec13c..0f833b5a51b 100644
+--- a/dlls/ntdll/unix/unix_private.h
++++ b/dlls/ntdll/unix/unix_private.h
+@@ -93,9 +93,6 @@ extern void     (WINAPI *pKiUserApcDispatcher)(CONTEXT*,ULONG_PTR,ULONG_PTR,ULON
+ extern NTSTATUS (WINAPI *pKiUserExceptionDispatcher)(EXCEPTION_RECORD*,CONTEXT*) DECLSPEC_HIDDEN;
+ extern void     (WINAPI *pLdrInitializeThunk)(CONTEXT*,void**,ULONG_PTR,ULONG_PTR) DECLSPEC_HIDDEN;
+ extern void     (WINAPI *pRtlUserThreadStart)( PRTL_THREAD_START_ROUTINE entry, void *arg ) DECLSPEC_HIDDEN;
+-extern NTSTATUS CDECL fast_RtlpWaitForCriticalSection( RTL_CRITICAL_SECTION *crit, int timeout ) DECLSPEC_HIDDEN;
+-extern NTSTATUS CDECL fast_RtlpUnWaitCriticalSection( RTL_CRITICAL_SECTION *crit ) DECLSPEC_HIDDEN;
+-extern NTSTATUS CDECL fast_RtlDeleteCriticalSection( RTL_CRITICAL_SECTION *crit ) DECLSPEC_HIDDEN;
+ extern NTSTATUS CDECL fast_RtlTryAcquireSRWLockExclusive( RTL_SRWLOCK *lock ) DECLSPEC_HIDDEN;
+ extern NTSTATUS CDECL fast_RtlAcquireSRWLockExclusive( RTL_SRWLOCK *lock ) DECLSPEC_HIDDEN;
+ extern NTSTATUS CDECL fast_RtlTryAcquireSRWLockShared( RTL_SRWLOCK *lock ) DECLSPEC_HIDDEN;
+diff --git a/dlls/ntdll/unixlib.h b/dlls/ntdll/unixlib.h
+index a9c05cbd09b..a8dad0d0fcf 100644
+--- a/dlls/ntdll/unixlib.h
++++ b/dlls/ntdll/unixlib.h
+@@ -27,7 +27,7 @@
+ struct _DISPATCHER_CONTEXT;
+ 
+ /* increment this when you change the function table */
+-#define NTDLL_UNIXLIB_VERSION 107
++#define NTDLL_UNIXLIB_VERSION 108
+ 
+ struct unix_funcs
+ {
+@@ -39,9 +39,6 @@ struct unix_funcs
+     LONGLONG      (WINAPI *RtlGetSystemTimePrecise)(void);
+ 
+     /* fast locks */
+-    NTSTATUS      (CDECL *fast_RtlpWaitForCriticalSection)( RTL_CRITICAL_SECTION *crit, int timeout );
+-    NTSTATUS      (CDECL *fast_RtlpUnWaitCriticalSection)( RTL_CRITICAL_SECTION *crit );
+-    NTSTATUS      (CDECL *fast_RtlDeleteCriticalSection)( RTL_CRITICAL_SECTION *crit );
+     NTSTATUS      (CDECL *fast_RtlTryAcquireSRWLockExclusive)( RTL_SRWLOCK *lock );
+     NTSTATUS      (CDECL *fast_RtlAcquireSRWLockExclusive)( RTL_SRWLOCK *lock );
+     NTSTATUS      (CDECL *fast_RtlTryAcquireSRWLockShared)( RTL_SRWLOCK *lock );
+-- 
+2.29.2
+
