@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "310019789f7bde12ae3f25f723957c975fb2f804"
+	echo "76c9dbd4fb99f1257734908906c846a3c25ca77b"
 }
 
 # Show version information
@@ -2905,6 +2905,7 @@ if test "$enable_mfplat_streaming_support" -eq 1; then
 	patch_apply mfplat-streaming-support/0049-winegstreamer-Introduce-MPEG-4-Section-2-video-decod.patch
 	patch_apply mfplat-streaming-support/0050-winegstreamer-Introduce-WMA-audio-decoder.patch
 	patch_apply mfplat-streaming-support/0051-winegstreamer-Implement-MF_SD_LANGUAGE.patch
+	patch_apply mfplat-streaming-support/0052-winegstreamer-fix-oopsie-on-audio-and-color-converte.patch
 	patch_apply mfplat-streaming-support/0060-winegstreamer-Support-eAVEncH264VProfile_Constrained.patch
 fi
 
