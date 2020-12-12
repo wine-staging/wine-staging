@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "76c9dbd4fb99f1257734908906c846a3c25ca77b"
+	echo "3acb0b3326c4120ea0c4c6076bd03c9cfe82c744"
 }
 
 # Show version information
@@ -2848,65 +2848,32 @@ fi
 # |   *	[#49692] Multiple applications need a Media Foundation media source implementation
 # |
 # | Modified files:
-# |   *	dlls/mf/Makefile.in, dlls/mf/handler.c, dlls/mf/handler.h, dlls/mf/main.c, dlls/mf/session.c, dlls/mf/tests/mf.c,
-# | 	dlls/mfplat/tests/mfplat.c, dlls/mfplat/tests/test.mp4, dlls/mfreadwrite/reader.c, dlls/mfreadwrite/tests/mfplat.c,
-# | 	dlls/mfreadwrite/tests/resource.rc, dlls/mfreadwrite/tests/test.mp4, dlls/winegstreamer/Makefile.in,
-# | 	dlls/winegstreamer/audioconvert.c, dlls/winegstreamer/colorconvert.c, dlls/winegstreamer/gst_cbs.c,
-# | 	dlls/winegstreamer/gst_cbs.h, dlls/winegstreamer/gst_private.h, dlls/winegstreamer/media_source.c,
-# | 	dlls/winegstreamer/mf_decode.c, dlls/winegstreamer/mfplat.c, dlls/winegstreamer/winegstreamer_classes.idl,
-# | 	include/mfidl.idl, tools/make_makefiles, tools/makedep.c
+# |   *	dlls/winegstreamer/Makefile.in, dlls/winegstreamer/audioconvert.c, dlls/winegstreamer/colorconvert.c,
+# | 	dlls/winegstreamer/gst_private.h, dlls/winegstreamer/media_source.c, dlls/winegstreamer/mfplat.c,
+# | 	dlls/winegstreamer/winegstreamer_classes.idl, include/wmcodecdsp.idl
 # |
 if test "$enable_mfplat_streaming_support" -eq 1; then
+	patch_apply mfplat-streaming-support/0001-winegstreamer-Correct-mistaken-enum-value-in-Process.patch
+	patch_apply mfplat-streaming-support/0002-winegstreamer-Reformat-type-setting-functions-to-pre.patch
 	patch_apply mfplat-streaming-support/0003-winegstreamer-Implement-Process-Input-Output-for-aud.patch
 	patch_apply mfplat-streaming-support/0004-winegstreamer-Implement-Get-Input-Output-StreamInfo-.patch
-	patch_apply mfplat-streaming-support/0005-winegstreamer-Implement-Get-Attributes-functions-for.patch
-	patch_apply mfplat-streaming-support/0007-winegstreamer-Introduce-color-conversion-transform.patch
-	patch_apply mfplat-streaming-support/0008-winegstreamer-Register-the-color-conversion-transfor.patch
-	patch_apply mfplat-streaming-support/0009-winegstreamer-Implement-GetInputAvailableType-for-co.patch
-	patch_apply mfplat-streaming-support/0010-winegstreamer-Implement-SetInputType-for-color-conve.patch
-	patch_apply mfplat-streaming-support/0011-winegstreamer-Implement-GetOutputAvailableType-for-c.patch
-	patch_apply mfplat-streaming-support/0012-winegstreamer-Implement-SetOutputType-for-color-conv.patch
-	patch_apply mfplat-streaming-support/0013-winegstreamer-Implement-Process-Input-Output-for-col.patch
-	patch_apply mfplat-streaming-support/0014-winegstreamer-Implement-ProcessMessage-for-color-con.patch
-	patch_apply mfplat-streaming-support/0015-winegstreamer-Implement-Get-Input-Output-StreamInfo-.patch
-	patch_apply mfplat-streaming-support/0016-winegstreamer-Implement-Get-Attributes-functions-for.patch
-	patch_apply mfplat-streaming-support/0017-winegstreamer-Implement-Get-Input-Output-CurrentType.patch
-	patch_apply mfplat-streaming-support/0018-winegstreamer-Implement-IMFMediaSource-Stop.patch
-	patch_apply mfplat-streaming-support/0019-winegstreamer-Set-MF_MT_ALL_SAMPLES_INDEPENDENT-attr.patch
-	patch_apply mfplat-streaming-support/0020-mf-Add-invalid-connect-method-test.patch
-	patch_apply mfplat-streaming-support/0021-Allow-for-compressed-types.patch
-	patch_apply mfplat-streaming-support/0022-mf-session-Unconditionally-deliver-NULL-EOS-samples.patch
-	patch_apply mfplat-streaming-support/0023-mf-session-Request-more-samples-when-a-transform-nee.patch
-	patch_apply mfplat-streaming-support/0024-HACK-Flush-decoder-when-changing-times.patch
-	patch_apply mfplat-streaming-support/0025-winegstreamer-Add-IMFSeekInfo-GetNearestKeyFrames-st.patch
-	patch_apply mfplat-streaming-support/0026-winegstreamer-Fixup-raw-audio-caps-to-be-compatible-.patch
-	patch_apply mfplat-streaming-support/0027-winegstreamer-Set-MF_PD_MIME_TYPE-on-source-s-presen.patch
-	patch_apply mfplat-streaming-support/0028-winegstreamer-Insert-parser-into-pipeline-to-rectify.patch
-	patch_apply mfplat-streaming-support/0029-winegstreamer-Translate-H.264-caps-to-attributes.patch
-	patch_apply mfplat-streaming-support/0030-winegstreamer-Translate-WMV-caps-to-attributes.patch
-	patch_apply mfplat-streaming-support/0031-winegstreamer-Translate-AAC-caps-to-attributes.patch
-	patch_apply mfplat-streaming-support/0032-winegstreamer-Translate-MPEG-4-Section-2-caps-to-att.patch
-	patch_apply mfplat-streaming-support/0033-winegstreamer-Translate-WMA-caps-to-attributes.patch
-	patch_apply mfplat-streaming-support/0034-winegstreamer-Translate-H.264-attributes-to-caps.patch
-	patch_apply mfplat-streaming-support/0035-winegstreamer-Translate-WMV-attributes-to-caps.patch
-	patch_apply mfplat-streaming-support/0036-winegstreamer-Translate-AAC-attributes-to-caps.patch
-	patch_apply mfplat-streaming-support/0037-winegstreamer-Translate-MPEG-4-Section-2-attributes-.patch
-	patch_apply mfplat-streaming-support/0038-winegstreamer-Translate-WMA-attributes-to-caps.patch
-	patch_apply mfplat-streaming-support/0039-tools-Add-support-for-multiple-parent-directories.patch
-	patch_apply mfplat-streaming-support/0040-mf-Introduce-handler-helper.patch
-	patch_apply mfplat-streaming-support/0041-winegstreamer-Implement-decoder-MFT-on-gstreamer.patch
-	patch_apply mfplat-streaming-support/0042-mfreadwrite-Select-all-streams-when-creating-a-sourc.patch
-	patch_apply mfplat-streaming-support/0043-Miscellaneous.patch
-	patch_apply mfplat-streaming-support/0044-WMV.patch
-	patch_apply mfplat-streaming-support/0045-Expose-PCM-output-type-on-AAC-decoder.patch
-	patch_apply mfplat-streaming-support/0046-Improve-tests.patch
-	patch_apply mfplat-streaming-support/0047-Revert-Improve-tests.patch
-	patch_apply mfplat-streaming-support/0048-Report-streams-backwards-and-only-select-one-of-each.patch
-	patch_apply mfplat-streaming-support/0049-winegstreamer-Introduce-MPEG-4-Section-2-video-decod.patch
-	patch_apply mfplat-streaming-support/0050-winegstreamer-Introduce-WMA-audio-decoder.patch
-	patch_apply mfplat-streaming-support/0051-winegstreamer-Implement-MF_SD_LANGUAGE.patch
-	patch_apply mfplat-streaming-support/0052-winegstreamer-fix-oopsie-on-audio-and-color-converte.patch
-	patch_apply mfplat-streaming-support/0060-winegstreamer-Support-eAVEncH264VProfile_Constrained.patch
+	patch_apply mfplat-streaming-support/0005-winegstreamer-Semi-stub-Get-Attributes-functions-for.patch
+	patch_apply mfplat-streaming-support/0006-winegstreamer-Introduce-color-conversion-transform.patch
+	patch_apply mfplat-streaming-support/0007-winegstreamer-Register-the-color-conversion-transfor.patch
+	patch_apply mfplat-streaming-support/0008-winegstreamer-Implement-GetInputAvailableType-for-co.patch
+	patch_apply mfplat-streaming-support/0009-winegstreamer-Implement-SetInputType-for-color-conve.patch
+	patch_apply mfplat-streaming-support/0010-winegstreamer-Implement-GetOutputAvailableType-for-c.patch
+	patch_apply mfplat-streaming-support/0011-winegstreamer-Implement-SetOutputType-for-color-conv.patch
+	patch_apply mfplat-streaming-support/0012-winegstreamer-Implement-Process-Input-Output-for-col.patch
+	patch_apply mfplat-streaming-support/0013-winegstreamer-Implement-ProcessMessage-for-color-con.patch
+	patch_apply mfplat-streaming-support/0014-winegstreamer-Implement-Get-Input-Output-StreamInfo-.patch
+	patch_apply mfplat-streaming-support/0015-winegstreamer-Semi-stub-Get-Attributes-functions-for.patch
+	patch_apply mfplat-streaming-support/0016-winegstreamer-Implement-Get-Input-Output-CurrentType.patch
+	patch_apply mfplat-streaming-support/0017-winegstreamer-Implement-IMFMediaSource-Stop.patch
+	patch_apply mfplat-streaming-support/0018-winegstreamer-Set-MF_MT_ALL_SAMPLES_INDEPENDENT-attr.patch
+	patch_apply mfplat-streaming-support/0019-winegstreamer-Implement-MF_SD_LANGUAGE.patch
+	patch_apply mfplat-streaming-support/0020-winegstreamer-Report-streams-backwards.patch
+	patch_apply mfplat-streaming-support/0021-winegstreamer-In-the-default-configuration-select-on.patch
 fi
 
 # Patchset mmsystem.dll16-MIDIHDR_Refcount
