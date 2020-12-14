@@ -1,4 +1,4 @@
-From 4ad7e0d2a51606b323cbe2f33c64a99c3666a072 Mon Sep 17 00:00:00 2001
+From 1642fdcb7681919a78d3a776382f8fdc9f5f8b94 Mon Sep 17 00:00:00 2001
 From: Dmitry Timoshkov <dmitry@baikal.ru>
 Date: Sun, 28 May 2017 05:19:30 +0200
 Subject: [PATCH] ntdll: Implement NtQueryVirtualMemory(MemorySectionName).
@@ -6,19 +6,20 @@ Subject: [PATCH] ntdll: Implement NtQueryVirtualMemory(MemorySectionName).
 
 Contains several improvements by Sebastian Lackner <sebastian@fds-team.de>.
 ---
- dlls/ntdll/unix/file.c         |  2 +-
- dlls/ntdll/unix/unix_private.h |  1 +
- dlls/ntdll/unix/virtual.c      | 96 +++++++++++++++++++++++++++++++++-
- dlls/psapi/tests/psapi_main.c  |  8 +--
- server/mapping.c               | 29 ++++++++++
- server/protocol.def            |  9 ++++
- 6 files changed, 136 insertions(+), 9 deletions(-)
+ dlls/ntdll/unix/file.c         |   2 +-
+ dlls/ntdll/unix/process.c      |   2 +-
+ dlls/ntdll/unix/unix_private.h |   2 +
+ dlls/ntdll/unix/virtual.c      | 101 ++++++++++++++++++++++++++++++++-
+ dlls/psapi/tests/psapi_main.c  |   8 +--
+ server/mapping.c               |  29 ++++++++++
+ server/protocol.def            |   9 +++
+ 7 files changed, 143 insertions(+), 10 deletions(-)
 
 diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
-index a41deb0881d..06ab827836d 100644
+index 8adb771cde78..d1731f449f7d 100644
 --- a/dlls/ntdll/unix/file.c
 +++ b/dlls/ntdll/unix/file.c
-@@ -1835,7 +1835,7 @@ static NTSTATUS fill_file_info( const struct stat *st, ULONG attr, void *ptr,
+@@ -2014,7 +2014,7 @@ static NTSTATUS fill_file_info( const struct stat *st, ULONG attr, void *ptr,
  }
  
  
@@ -27,23 +28,44 @@ index a41deb0881d..06ab827836d 100644
  {
      data_size_t size = 1024;
      NTSTATUS ret;
+diff --git a/dlls/ntdll/unix/process.c b/dlls/ntdll/unix/process.c
+index 0401f8d998e7..200c252469c5 100644
+--- a/dlls/ntdll/unix/process.c
++++ b/dlls/ntdll/unix/process.c
+@@ -478,7 +478,7 @@ static ULONG get_env_size( const RTL_USER_PROCESS_PARAMETERS *params, char **win
+  *
+  * Simplified version of RtlDosPathNameToNtPathName_U.
+  */
+-static WCHAR *get_nt_pathname( const UNICODE_STRING *str )
++WCHAR *get_nt_pathname( const UNICODE_STRING *str )
+ {
+     static const WCHAR ntprefixW[] = {'\\','?','?','\\',0};
+     static const WCHAR uncprefixW[] = {'U','N','C','\\',0};
 diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
-index 3cf9ca66736..a9ce3be82b2 100644
+index 4ef58f73f3b7..2e64c6d334a5 100644
 --- a/dlls/ntdll/unix/unix_private.h
 +++ b/dlls/ntdll/unix/unix_private.h
-@@ -171,6 +171,7 @@ extern unsigned int server_queue_process_apc( HANDLE process, const apc_call_t *
+@@ -108,6 +108,7 @@ extern void CDECL get_initial_directory( UNICODE_STRING *dir ) DECLSPEC_HIDDEN;
+ extern void CDECL get_initial_console( RTL_USER_PROCESS_PARAMETERS *params ) DECLSPEC_HIDDEN;
+ extern USHORT * CDECL get_unix_codepage_data(void) DECLSPEC_HIDDEN;
+ extern void CDECL get_locales( WCHAR *sys, WCHAR *user ) DECLSPEC_HIDDEN;
++extern WCHAR *get_nt_pathname( const UNICODE_STRING *str ) DECLSPEC_HIDDEN;
+ extern void CDECL virtual_release_address_space(void) DECLSPEC_HIDDEN;
+ 
+ extern NTSTATUS CDECL unwind_builtin_dll( ULONG type, struct _DISPATCHER_CONTEXT *dispatch,
+@@ -159,6 +160,7 @@ extern unsigned int server_queue_process_apc( HANDLE process, const apc_call_t *
                                                apc_result_t *result ) DECLSPEC_HIDDEN;
  extern int server_get_unix_fd( HANDLE handle, unsigned int wanted_access, int *unix_fd,
                                 int *needs_close, enum server_fd_type *type, unsigned int *options ) DECLSPEC_HIDDEN;
 +extern NTSTATUS server_get_unix_name( HANDLE handle, char **unix_name, BOOL nofollow ) DECLSPEC_HIDDEN;
  extern void server_init_process(void) DECLSPEC_HIDDEN;
+ extern void server_init_process_done(void) DECLSPEC_HIDDEN;
  extern size_t server_init_thread( void *entry_point, BOOL *suspend ) DECLSPEC_HIDDEN;
- extern int server_pipe( int fd[2] ) DECLSPEC_HIDDEN;
 diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
-index 9d19a621666..9758b11de74 100644
+index cc1cfce6b093..f041b335a29e 100644
 --- a/dlls/ntdll/unix/virtual.c
 +++ b/dlls/ntdll/unix/virtual.c
-@@ -4060,6 +4060,98 @@ static NTSTATUS get_working_set_ex( HANDLE process, LPCVOID addr,
+@@ -4024,6 +4024,103 @@ static NTSTATUS get_working_set_ex( HANDLE process, LPCVOID addr,
      return STATUS_SUCCESS;
  }
  
@@ -52,7 +74,7 @@ index 9d19a621666..9758b11de74 100644
 +                                  MEMORY_SECTION_NAME *info,
 +                                  SIZE_T len, SIZE_T *res_len )
 +{
-+    UNICODE_STRING nt_name;
++    UNICODE_STRING nt_name, dos_path_name;
 +    WCHAR *nt_nameW;
 +    char *unix_name;
 +    data_size_t size = 1024;
@@ -71,6 +93,8 @@ index 9d19a621666..9758b11de74 100644
 +    }
 +    SERVER_END_REQ;
 +
++    memset( &nt_name, 0, sizeof(nt_name) );
++
 +    if (!status && mapping)
 +    {
 +        status = server_get_unix_name( mapping, &unix_name, FALSE );
@@ -82,7 +106,7 @@ index 9d19a621666..9758b11de74 100644
 +        }
 +        if (!status)
 +        {
-+            RtlInitUnicodeString( &nt_name, nt_nameW );
++            nt_name.Buffer = nt_nameW;
 +            goto found;
 +        }
 +        if (status == STATUS_OBJECT_TYPE_MISMATCH) status = STATUS_FILE_INVALID;
@@ -114,13 +138,16 @@ index 9d19a621666..9758b11de74 100644
 +        if (status != STATUS_BUFFER_TOO_SMALL) return status;
 +    }
 +
-+    if (!RtlDosPathNameToNtPathName_U( name, &nt_name, NULL, NULL ))
++    dos_path_name.Buffer = name;
++    dos_path_name.Length = size * sizeof(WCHAR);
++
++    if (!(nt_name.Buffer = get_nt_pathname( &dos_path_name )))
 +    {
 +        free( name );
 +        return STATUS_INVALID_PARAMETER;
 +    }
-+
 +found:
++    nt_name.Length = wcslen( nt_name.Buffer ) * sizeof(WCHAR);
 +    *res_len = sizeof(MEMORY_SECTION_NAME) + nt_name.Length + sizeof(WCHAR);
 +    if (len >= *res_len)
 +    {
@@ -134,7 +161,7 @@ index 9d19a621666..9758b11de74 100644
 +        status = (len < sizeof(MEMORY_SECTION_NAME)) ? STATUS_INFO_LENGTH_MISMATCH : STATUS_BUFFER_OVERFLOW;
 +
 +    free( name );
-+    RtlFreeUnicodeString( &nt_name );
++    free( nt_name.Buffer );
 +    return status;
 +}
 +
@@ -142,7 +169,7 @@ index 9d19a621666..9758b11de74 100644
  #define UNIMPLEMENTED_INFO_CLASS(c) \
      case c: \
          FIXME("(process=%p,addr=%p) Unimplemented information class: " #c "\n", process, addr); \
-@@ -4084,8 +4176,10 @@ NTSTATUS WINAPI NtQueryVirtualMemory( HANDLE process, LPCVOID addr,
+@@ -4048,8 +4145,10 @@ NTSTATUS WINAPI NtQueryVirtualMemory( HANDLE process, LPCVOID addr,
          case MemoryWorkingSetExInformation:
              return get_working_set_ex( process, addr, buffer, len, res_len );
  
@@ -155,10 +182,10 @@ index 9d19a621666..9758b11de74 100644
  
          default:
 diff --git a/dlls/psapi/tests/psapi_main.c b/dlls/psapi/tests/psapi_main.c
-index da7524dd60a..bfe14231a9b 100644
+index be12af583112..3e211a771f93 100644
 --- a/dlls/psapi/tests/psapi_main.c
 +++ b/dlls/psapi/tests/psapi_main.c
-@@ -372,14 +372,7 @@ static BOOL nt_get_mapped_file_name(HANDLE process, LPVOID addr, LPWSTR name, DW
+@@ -384,14 +384,7 @@ static BOOL nt_get_mapped_file_name(HANDLE process, LPVOID addr, LPWSTR name, DW
  
      ret_len = 0xdeadbeef;
      status = pNtQueryVirtualMemory(process, addr, MemorySectionName, buf, buf_len, &ret_len);
@@ -173,7 +200,7 @@ index da7524dd60a..bfe14231a9b 100644
  
      section_name = (MEMORY_SECTION_NAME *)buf;
      ok(ret_len == section_name->SectionFileName.MaximumLength + sizeof(*section_name), "got %lu, %u\n",
-@@ -501,6 +494,7 @@ todo_wine {
+@@ -513,6 +506,7 @@ todo_wine {
      {
          ok(memcmp(map_nameW, nt_map_name, lstrlenW(map_nameW)) == 0, "map name does not start with a device name: %s\n", map_name);
          WideCharToMultiByte(CP_ACP, 0, map_nameW, -1, map_name, MAX_PATH, NULL, NULL);
@@ -182,10 +209,10 @@ index da7524dd60a..bfe14231a9b 100644
      }
  
 diff --git a/server/mapping.c b/server/mapping.c
-index db0debe0af5..6e74f5b770f 100644
+index 7729d9582477..d5f889771e50 100644
 --- a/server/mapping.c
 +++ b/server/mapping.c
-@@ -1099,6 +1099,35 @@ DECL_HANDLER(unmap_view)
+@@ -1139,6 +1139,35 @@ DECL_HANDLER(unmap_view)
      if (view) free_memory_view( view );
  }
  
@@ -222,10 +249,10 @@ index db0debe0af5..6e74f5b770f 100644
  DECL_HANDLER(get_mapping_committed_range)
  {
 diff --git a/server/protocol.def b/server/protocol.def
-index faf4891a01e..0d98d9413e4 100644
+index f1092a00da87..723425c053fc 100644
 --- a/server/protocol.def
 +++ b/server/protocol.def
-@@ -1691,6 +1691,15 @@ enum char_info_mode
+@@ -1549,6 +1549,15 @@ enum server_fd_type
  @END
  
  
@@ -242,5 +269,5 @@ index faf4891a01e..0d98d9413e4 100644
  @REQ(get_mapping_committed_range)
      client_ptr_t base;          /* view base address */
 -- 
-2.27.0
+2.29.2
 

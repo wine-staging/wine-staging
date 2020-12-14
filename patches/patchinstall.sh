@@ -172,6 +172,7 @@ patch_enable_all ()
 	enable_ntdll_NtDevicePath="$1"
 	enable_ntdll_NtQueryEaFile="$1"
 	enable_ntdll_NtQuerySection="$1"
+	enable_ntdll_NtQueryVirtualMemory="$1"
 	enable_ntdll_NtSetLdtEntries="$1"
 	enable_ntdll_Pipe_SpecialCharacters="$1"
 	enable_ntdll_ProcessQuotaLimits="$1"
@@ -597,6 +598,9 @@ patch_enable ()
 			;;
 		ntdll-NtQuerySection)
 			enable_ntdll_NtQuerySection="$2"
+			;;
+		ntdll-NtQueryVirtualMemory)
+			enable_ntdll_NtQueryVirtualMemory="$2"
 			;;
 		ntdll-NtSetLdtEntries)
 			enable_ntdll_NtSetLdtEntries="$2"
@@ -1552,6 +1556,21 @@ if test "$enable_nvcuvid_CUDA_Video_Support" -eq 1; then
 		abort "Patchset nvapi-Stub_DLL disabled, but nvcuvid-CUDA_Video_Support depends on that."
 	fi
 	enable_nvapi_Stub_DLL=1
+fi
+
+if test "$enable_ntdll_NtQueryVirtualMemory" -eq 1; then
+	if test "$enable_ntdll_ForceBottomUpAlloc" -gt 1; then
+		abort "Patchset ntdll-ForceBottomUpAlloc disabled, but ntdll-NtQueryVirtualMemory depends on that."
+	fi
+	if test "$enable_ntdll_Junction_Points" -gt 1; then
+		abort "Patchset ntdll-Junction_Points disabled, but ntdll-NtQueryVirtualMemory depends on that."
+	fi
+	if test "$enable_ntdll_NtDevicePath" -gt 1; then
+		abort "Patchset ntdll-NtDevicePath disabled, but ntdll-NtQueryVirtualMemory depends on that."
+	fi
+	enable_ntdll_ForceBottomUpAlloc=1
+	enable_ntdll_Junction_Points=1
+	enable_ntdll_NtDevicePath=1
 fi
 
 if test "$enable_ntdll_NtDevicePath" -eq 1; then
@@ -3125,6 +3144,32 @@ fi
 # |
 if test "$enable_ntdll_NtQuerySection" -eq 1; then
 	patch_apply ntdll-NtQuerySection/0002-kernel32-tests-Add-tests-for-NtQuerySection.patch
+fi
+
+# Patchset ntdll-NtQueryVirtualMemory
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	ntdll-ForceBottomUpAlloc, ntdll-DOS_Attributes, ntdll-NtQueryEaFile, ntdll-Junction_Points, ntdll-
+# | 	Pipe_SpecialCharacters, ntdll-NtDevicePath
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#23999] Implement MemorySectionName class in NtQueryVirtualMemory
+# |   *	[#27248] Implement K32GetMappedFileName
+# |
+# | Modified files:
+# |   *	dlls/kernelbase/debug.c, dlls/ntdll/tests/info.c, dlls/ntdll/unix/file.c, dlls/ntdll/unix/process.c,
+# | 	dlls/ntdll/unix/unix_private.h, dlls/ntdll/unix/virtual.c, dlls/psapi/tests/psapi_main.c, server/mapping.c,
+# | 	server/protocol.def
+# |
+if test "$enable_ntdll_NtQueryVirtualMemory" -eq 1; then
+	patch_apply ntdll-NtQueryVirtualMemory/0003-ntdll-Implement-NtQueryVirtualMemory-MemorySectionNa.patch
+	patch_apply ntdll-NtQueryVirtualMemory/0004-ntdll-tests-Add-tests-for-NtQueryVirtualMemory-Memor.patch
+	patch_apply ntdll-NtQueryVirtualMemory/0005-ntdll-tests-Add-test-to-ensure-section-name-is-full-.patch
+	patch_apply ntdll-NtQueryVirtualMemory/0006-ntdll-Allow-to-query-section-names-from-other-proces.patch
+	patch_apply ntdll-NtQueryVirtualMemory/0007-kernel32-Implement-K32GetMappedFileName.-v2.patch
+	patch_apply ntdll-NtQueryVirtualMemory/0008-ntdll-Resolve-drive-symlinks-before-returning-sectio.patch
+	patch_apply ntdll-NtQueryVirtualMemory/0009-ntdll-Fixup-builtin-dll-names-in-get_section_name.patch
+	patch_apply ntdll-NtQueryVirtualMemory/0010-server-Fix-process-access-rights-in-get_mapping_file.patch
 fi
 
 # Patchset ntdll-NtSetLdtEntries
