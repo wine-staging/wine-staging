@@ -194,6 +194,7 @@ patch_enable_all ()
 	enable_nvcuda_CUDA_Support="$1"
 	enable_nvcuvid_CUDA_Video_Support="$1"
 	enable_nvencodeapi_Video_Encoder="$1"
+	enable_odbccp32_SQLWriteDSNToIni="$1"
 	enable_oleaut32_CreateTypeLib="$1"
 	enable_oleaut32_Load_Save_EMF="$1"
 	enable_oleaut32_OLEPictureImpl_SaveAsFile="$1"
@@ -665,6 +666,9 @@ patch_enable ()
 			;;
 		nvencodeapi-Video_Encoder)
 			enable_nvencodeapi_Video_Encoder="$2"
+			;;
+		odbccp32-SQLWriteDSNToIni)
+			enable_odbccp32_SQLWriteDSNToIni="$2"
 			;;
 		oleaut32-CreateTypeLib)
 			enable_oleaut32_CreateTypeLib="$2"
@@ -3403,6 +3407,18 @@ if test "$enable_nvencodeapi_Video_Encoder" -eq 1; then
 	patch_apply nvencodeapi-Video_Encoder/0001-nvencodeapi-First-implementation.patch
 	patch_apply nvencodeapi-Video_Encoder/0002-nvencodeapi-Add-debian-specific-paths-to-native-libr.patch
 	patch_apply nvencodeapi-Video_Encoder/0003-nvencodeapi-Add-support-for-version-6.0.patch
+fi
+
+# Patchset odbccp32-SQLWriteDSNToIni
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#50150] : odbccp32: Implement SQLWriteDSNToIni/W
+# |
+# | Modified files:
+# |   *	dlls/odbccp32/odbccp32.c, dlls/odbccp32/tests/misc.c
+# |
+if test "$enable_odbccp32_SQLWriteDSNToIni" -eq 1; then
+	patch_apply odbccp32-SQLWriteDSNToIni/0001-odbccp32-Implement-SQLWriteDSNToIni-W.patch
 fi
 
 # Patchset oleaut32-CreateTypeLib
