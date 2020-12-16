@@ -97,6 +97,7 @@ patch_enable_all ()
 	enable_crypt32_CMS_Certificates="$1"
 	enable_cryptext_CryptExtOpenCER="$1"
 	enable_d3d11_Deferred_Context="$1"
+	enable_d3drm_IDirect3D3_support="$1"
 	enable_d3dx9_32bpp_Alpha_Channel="$1"
 	enable_d3dx9_36_BumpLuminance="$1"
 	enable_d3dx9_36_CloneEffect="$1"
@@ -373,6 +374,9 @@ patch_enable ()
 			;;
 		d3d11-Deferred_Context)
 			enable_d3d11_Deferred_Context="$2"
+			;;
+		d3drm-IDirect3D3-support)
+			enable_d3drm_IDirect3D3_support="$2"
 			;;
 		d3dx9-32bpp_Alpha_Channel)
 			enable_d3dx9_32bpp_Alpha_Channel="$2"
@@ -1987,6 +1991,18 @@ if test "$enable_d3d11_Deferred_Context" -eq 1; then
 	patch_apply d3d11-Deferred_Context/0043-d3d11-tests-Add-a-basic-test-for-drawing-with-deferr.patch
 	patch_apply d3d11-Deferred_Context/0044-d3d11-Support-ID3D11DeviceContext1-for-deferred-cont.patch
 	patch_apply d3d11-Deferred_Context/0045-d3d11-Implement-ID3D11Device2-GetImmediateContext1.patch
+fi
+
+# Patchset d3drm-IDirect3D3-support
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#39346] Support IDirect3D3 when creating device.
+# |
+# | Modified files:
+# |   *	dlls/d3drm/device.c
+# |
+if test "$enable_d3drm_IDirect3D3_support" -eq 1; then
+	patch_apply d3drm-IDirect3D3-support/0001-d3drm-Support-IDirect3D3-when-creating-device.patch
 fi
 
 # Patchset d3dx9-32bpp_Alpha_Channel
