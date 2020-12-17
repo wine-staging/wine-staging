@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "ef876fc54e207344b5809f40a59e3d5d610a6fda"
+	echo "0aa6f8e2ea1e3f2e852bef1a07d0d1f983870150"
 }
 
 # Show version information
@@ -3775,6 +3775,9 @@ if test "$enable_server_unix_name" -eq 1; then
 fi
 
 # Patchset setupapi-DiskSpaceList
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#50337] Roland Zenology Pro (VST3 plugin) used with carla-bridge fails to save files
 # |
 # | Modified files:
 # |   *	dlls/setupapi/diskspace.c, dlls/setupapi/queue.c, dlls/setupapi/setupapi.spec, dlls/setupapi/setupapi_private.h,
