@@ -179,6 +179,7 @@ patch_enable_all ()
 	enable_ntdll_Pipe_SpecialCharacters="$1"
 	enable_ntdll_ProcessQuotaLimits="$1"
 	enable_ntdll_RtlQueryPackageIdentity="$1"
+	enable_ntdll_RtlQueryProcessPlaceholderCompatibilityMode="$1"
 	enable_ntdll_RtlQueryRegistryValuesEx="$1"
 	enable_ntdll_Serial_Port_Detection="$1"
 	enable_ntdll_Status_Mapping="$1"
@@ -622,6 +623,9 @@ patch_enable ()
 			;;
 		ntdll-RtlQueryPackageIdentity)
 			enable_ntdll_RtlQueryPackageIdentity="$2"
+			;;
+		ntdll-RtlQueryProcessPlaceholderCompatibilityMode)
+			enable_ntdll_RtlQueryProcessPlaceholderCompatibilityMode="$2"
 			;;
 		ntdll-RtlQueryRegistryValuesEx)
 			enable_ntdll_RtlQueryRegistryValuesEx="$2"
@@ -3339,6 +3343,18 @@ fi
 # |
 if test "$enable_ntdll_RtlQueryPackageIdentity" -eq 1; then
 	patch_apply ntdll-RtlQueryPackageIdentity/0003-ntdll-tests-Add-basic-tests-for-RtlQueryPackageIdent.patch
+fi
+
+# Patchset ntdll-RtlQueryProcessPlaceholderCompatibilityMode
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#50026] : ntdll: Add stub for RtlQueryProcessPlaceholderCompatibilityMode
+# |
+# | Modified files:
+# |   *	dlls/ntdll/ntdll.spec, dlls/ntdll/rtl.c, dlls/ntoskrnl.exe/ntoskrnl.exe.spec, include/ddk/ntifs.h
+# |
+if test "$enable_ntdll_RtlQueryProcessPlaceholderCompatibilityMode" -eq 1; then
+	patch_apply ntdll-RtlQueryProcessPlaceholderCompatibilityMode/0001-ntdll-Add-stub-for-RtlQueryProcessPlaceholderCompati.patch
 fi
 
 # Patchset ntdll-RtlQueryRegistryValuesEx
