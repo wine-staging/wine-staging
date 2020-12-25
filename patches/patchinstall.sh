@@ -2855,6 +2855,8 @@ fi
 # Patchset libs-Unicode_Collation
 # |
 # | This patchset fixes the following Wine bugs:
+# |   *	[#5163] Microsoft Office XP 2002 installer reports error 25003 (installation source corrupted), custom action 'CADpc'
+# | 	returns 1603
 # |   *	[#10767] Fix comparison of punctuation characters in lstrcmp
 # |   *	[#32490] Graphical issues in Inquisitor
 # |
