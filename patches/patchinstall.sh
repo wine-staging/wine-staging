@@ -2441,6 +2441,7 @@ if test "$enable_dxdiag_new_dlls" -eq 1; then
 	patch_apply dxdiag-new-dlls/0013-gcdef-add-stub-dll.patch
 	patch_apply dxdiag-new-dlls/0014-qdv-add-stub-dll.patch
 	patch_apply dxdiag-new-dlls/0015-qedwipes-add-stub-dll.patch
+	patch_apply dxdiag-new-dlls/0016-dpmodemx-Add-stub-SPInit.patch
 fi
 
 # Patchset ntdll-DOS_Attributes
