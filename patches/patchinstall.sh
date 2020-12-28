@@ -3292,10 +3292,10 @@ fi
 # |   *	[#50292] Process-local synchronization objects use private interfaces into the Unix library
 # |
 # | Modified files:
-# |   *	dlls/ntdll/Makefile.in, dlls/ntdll/critsection.c, dlls/ntdll/ntdll.spec, dlls/ntdll/sync.c,
-# | 	dlls/ntdll/tests/Makefile.in, dlls/ntdll/tests/om.c, dlls/ntdll/tests/sync.c, dlls/ntdll/unix/loader.c,
-# | 	dlls/ntdll/unix/sync.c, dlls/ntdll/unix/thread.c, dlls/ntdll/unix/unix_private.h, dlls/ntdll/unix/virtual.c,
-# | 	dlls/ntdll/unixlib.h, include/winbase.h, include/winternl.h
+# |   *	dlls/ntdll/Makefile.in, dlls/ntdll/critsection.c, dlls/ntdll/ntdll.spec, dlls/ntdll/ntdll_misc.h, dlls/ntdll/sync.c,
+# | 	dlls/ntdll/tests/Makefile.in, dlls/ntdll/tests/om.c, dlls/ntdll/tests/sync.c, dlls/ntdll/thread.c,
+# | 	dlls/ntdll/unix/loader.c, dlls/ntdll/unix/sync.c, dlls/ntdll/unix/thread.c, dlls/ntdll/unix/unix_private.h,
+# | 	dlls/ntdll/unix/virtual.c, dlls/ntdll/unixlib.h, include/winbase.h, include/winternl.h
 # |
 if test "$enable_ntdll_NtAlertThreadByThreadId" -eq 1; then
 	patch_apply ntdll-NtAlertThreadByThreadId/0001-ntdll-tests-Move-some-tests-to-a-new-sync.c-file.patch
