@@ -1,56 +1,18 @@
-From e27be2eef2738f6c7f213d70ee5554b052d07ec1 Mon Sep 17 00:00:00 2001
+From c5833a431cf9ba59f1f04081a2be058833b4cbb8 Mon Sep 17 00:00:00 2001
 From: Zebediah Figura <z.figura12@gmail.com>
 Date: Mon, 2 Nov 2020 20:24:07 -0600
-Subject: [PATCH 09/13] ntdll: Reimplement Win32 futexes on top of thread-ID
- alerts.
+Subject: [PATCH] ntdll: Reimplement Win32 futexes on top of thread-ID alerts.
 
 Signed-off-by: Zebediah Figura <z.figura12@gmail.com>
 ---
- dlls/ntdll/loader.c      |   4 +-
- dlls/ntdll/ntdll_misc.h  |   2 +
- dlls/ntdll/sync.c        |  77 ++++++++++++++++++-
+ dlls/ntdll/sync.c        | 147 ++++++++++++++++++++++++++++++++++-
  dlls/ntdll/unix/loader.c |   3 -
  dlls/ntdll/unix/sync.c   | 162 ---------------------------------------
  dlls/ntdll/unixlib.h     |   6 +-
- 6 files changed, 79 insertions(+), 175 deletions(-)
+ 4 files changed, 145 insertions(+), 173 deletions(-)
 
-diff --git a/dlls/ntdll/loader.c b/dlls/ntdll/loader.c
-index 26443a8c4f4..440a77d4063 100644
---- a/dlls/ntdll/loader.c
-+++ b/dlls/ntdll/loader.c
-@@ -205,7 +205,7 @@ static inline void small_pause(void)
- #endif
- }
- 
--static void teb_list_rdlock(void)
-+void teb_list_rdlock(void)
- {
-     for (;;)
-     {
-@@ -216,7 +216,7 @@ static void teb_list_rdlock(void)
-     }
- }
- 
--static void teb_list_rdunlock(void)
-+void teb_list_rdunlock(void)
- {
-     InterlockedDecrement( &teb_spinlock );
- }
-diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
-index 41e8666a25c..6a46946b218 100644
---- a/dlls/ntdll/ntdll_misc.h
-+++ b/dlls/ntdll/ntdll_misc.h
-@@ -71,6 +71,8 @@ extern BOOL is_wow64 DECLSPEC_HIDDEN;
- 
- /* module handling */
- extern LIST_ENTRY tls_links DECLSPEC_HIDDEN;
-+extern void teb_list_rdlock(void) DECLSPEC_HIDDEN;
-+extern void teb_list_rdunlock(void) DECLSPEC_HIDDEN;
- extern FARPROC RELAY_GetProcAddress( HMODULE module, const IMAGE_EXPORT_DIRECTORY *exports,
-                                      DWORD exp_size, FARPROC proc, DWORD ordinal, const WCHAR *user ) DECLSPEC_HIDDEN;
- extern FARPROC SNOOP_GetProcAddress( HMODULE hmod, const IMAGE_EXPORT_DIRECTORY *exports, DWORD exp_size,
 diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
-index 8df7015df9f..05bccf698b6 100644
+index 8df7015df9f..be462f27881 100644
 --- a/dlls/ntdll/sync.c
 +++ b/dlls/ntdll/sync.c
 @@ -37,6 +37,13 @@
@@ -67,10 +29,70 @@ index 8df7015df9f..05bccf698b6 100644
  
  /******************************************************************
   *              RtlRunOnceInitialize (NTDLL.@)
-@@ -531,13 +538,48 @@ NTSTATUS WINAPI RtlSleepConditionVariableSRW( RTL_CONDITION_VARIABLE *variable,
+@@ -531,13 +538,116 @@ NTSTATUS WINAPI RtlSleepConditionVariableSRW( RTL_CONDITION_VARIABLE *variable,
      return status;
  }
  
++/* The following functions define a lock-free array mapping thread IDs to
++ * values, which can be grown but not shrunk. We do this by allocating one slice
++ * of the array at a time, and storing a pointer to the next slice at the end.
++ *
++ * This is both for efficiency (we want this function to be as fast as possible)
++ * and because locking the TEB list is hard otherwise—we need to safely access
++ * the TEB list, but cannot do so using any of these synchronization primitives,
++ * and we may need to access the TEB list before being inserted into it (e.g.
++ * from heap locks, or the TEB list lock itself.)
++ */
++
++struct addr_wait_entry
++{
++    void *addr;
++    HANDLE tid;
++};
++
++struct addr_wait_array
++{
++    struct addr_wait_entry entries[(0x1000 - sizeof(struct addr_wait_entry *)) / sizeof(struct addr_wait_entry)];
++    struct addr_wait_array *next;
++};
++
++static struct addr_wait_array first_addr_wait_array;
++
++static struct addr_wait_entry *addr_wait_allocate_entry( HANDLE tid )
++{
++    struct addr_wait_array *array = &first_addr_wait_array;
++
++    for (;;)
++    {
++        struct addr_wait_array *new_array = NULL;
++        SIZE_T size = sizeof(*new_array);
++        unsigned int i;
++
++        for (;;)
++        {
++            for (i = 0; i < ARRAY_SIZE(array->entries); ++i)
++            {
++                if (!array->entries[i].tid && !InterlockedCompareExchangePointer( &array->entries[i].tid, tid, NULL ))
++                    return &array->entries[i];
++            }
++
++            if (!array->next) break;
++            array = array->next;
++        }
++
++        if (NtAllocateVirtualMemory( NtCurrentProcess(), (void **)&new_array, 0, &size, MEM_COMMIT, PAGE_READWRITE ))
++            return NULL;
++
++        if (InterlockedCompareExchangePointer( (void **)&array->next, new_array, NULL ))
++        {
++            /* another thread beat us to it */
++            NtFreeVirtualMemory( NtCurrentProcess(), (void **)&new_array, &size, MEM_RELEASE );
++        }
++        /* start searching again from the new array */
++        array = array->next;
++    }
++}
++
 +static BOOL compare_addr( const void *addr, const void *cmp, SIZE_T size )
 +{
 +    switch (size)
@@ -95,6 +117,7 @@ index 8df7015df9f..05bccf698b6 100644
                                    const LARGE_INTEGER *timeout )
  {
 -    return unix_funcs->RtlWaitOnAddress( addr, cmp, size, timeout );
++    struct addr_wait_entry *entry = NtCurrentTeb()->ReservedForPerf;
 +    NTSTATUS ret;
 +
 +    TRACE("addr %p cmp %p size %#Ix timeout %s\n", addr, cmp, size, debugstr_timeout( timeout ));
@@ -102,65 +125,74 @@ index 8df7015df9f..05bccf698b6 100644
 +    if (size != 1 && size != 2 && size != 4 && size != 8)
 +        return STATUS_INVALID_PARAMETER;
 +
-+    InterlockedExchangePointer( &NtCurrentTeb()->ReservedForPerf, (void *)addr );
++    if (!entry)
++    {
++        if (!(entry = addr_wait_allocate_entry( NtCurrentTeb()->ClientId.UniqueThread )))
++            return STATUS_NO_MEMORY;
++        NtCurrentTeb()->ReservedForPerf = entry;
++    }
++
++    InterlockedExchangePointer( &entry->addr, (void *)addr );
 +
 +    if (!compare_addr( addr, cmp, size ))
 +    {
-+        InterlockedExchangePointer( &NtCurrentTeb()->ReservedForPerf, NULL );
++        InterlockedExchangePointer( &entry->addr, NULL );
 +        return STATUS_SUCCESS;
 +    }
 +
-+    ret = NtWaitForAlertByThreadId( addr, timeout );
-+    InterlockedExchangePointer( &NtCurrentTeb()->ReservedForPerf, NULL );
++    ret = NtWaitForAlertByThreadId( NULL, timeout );
++    InterlockedExchangePointer( &entry->addr, NULL );
 +    if (ret == STATUS_ALERTED) ret = STATUS_SUCCESS;
 +    return ret;
  }
  
  /***********************************************************************
-@@ -545,7 +587,20 @@ NTSTATUS WINAPI RtlWaitOnAddress( const void *addr, const void *cmp, SIZE_T size
+@@ -545,7 +655,21 @@ NTSTATUS WINAPI RtlWaitOnAddress( const void *addr, const void *cmp, SIZE_T size
   */
  void WINAPI RtlWakeAddressAll( const void *addr )
  {
 -    return unix_funcs->RtlWakeAddressAll( addr );
-+    LIST_ENTRY *entry;
++    struct addr_wait_array *array;
++    unsigned int i;
 +
 +    TRACE("%p\n", addr);
 +
 +    if (!addr) return;
 +
-+    teb_list_rdlock();
-+    for (entry = tls_links.Flink; entry != &tls_links; entry = entry->Flink)
++    for (array = &first_addr_wait_array; array != NULL; array = array->next)
 +    {
-+        const TEB *teb = CONTAINING_RECORD( entry, TEB, TlsLinks );
-+        if (teb->ReservedForPerf == addr)
-+            NtAlertThreadByThreadId( teb->ClientId.UniqueThread );
++        for (i = 0; i < ARRAY_SIZE(array->entries); ++i)
++        {
++            if (array->entries[i].addr == addr)
++                NtAlertThreadByThreadId( array->entries[i].tid );
++        }
 +    }
-+    teb_list_rdunlock();
  }
  
  /***********************************************************************
-@@ -553,5 +608,21 @@ void WINAPI RtlWakeAddressAll( const void *addr )
+@@ -553,5 +677,22 @@ void WINAPI RtlWakeAddressAll( const void *addr )
   */
  void WINAPI RtlWakeAddressSingle( const void *addr )
  {
 -    return unix_funcs->RtlWakeAddressSingle( addr );
-+    LIST_ENTRY *entry;
++    struct addr_wait_array *array;
++    unsigned int i;
 +
 +    TRACE("%p\n", addr);
 +
 +    if (!addr) return;
 +
-+    teb_list_rdlock();
-+    for (entry = tls_links.Flink; entry != &tls_links; entry = entry->Flink)
++    for (array = &first_addr_wait_array; array != NULL; array = array->next)
 +    {
-+        const TEB *teb = CONTAINING_RECORD( entry, TEB, TlsLinks );
-+        if (teb->ReservedForPerf == addr)
++        for (i = 0; i < ARRAY_SIZE(array->entries); ++i)
 +        {
-+            NtAlertThreadByThreadId( teb->ClientId.UniqueThread );
-+            break;
++            if (array->entries[i].addr == addr)
++            {
++                NtAlertThreadByThreadId( array->entries[i].tid );
++                return;
++            }
 +        }
 +    }
-+    teb_list_rdunlock();
  }
 diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
 index 31cfb43d11f..5ab3121dd2c 100644

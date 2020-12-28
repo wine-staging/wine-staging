@@ -171,6 +171,7 @@ patch_enable_all ()
 	enable_ntdll_Junction_Points="$1"
 	enable_ntdll_Manifest_Range="$1"
 	enable_ntdll_NtAccessCheck="$1"
+	enable_ntdll_NtAlertThreadByThreadId="$1"
 	enable_ntdll_NtDevicePath="$1"
 	enable_ntdll_NtQueryEaFile="$1"
 	enable_ntdll_NtQuerySection="$1"
@@ -598,6 +599,9 @@ patch_enable ()
 			;;
 		ntdll-NtAccessCheck)
 			enable_ntdll_NtAccessCheck="$2"
+			;;
+		ntdll-NtAlertThreadByThreadId)
+			enable_ntdll_NtAlertThreadByThreadId="$2"
 			;;
 		ntdll-NtDevicePath)
 			enable_ntdll_NtDevicePath="$2"
@@ -1583,6 +1587,13 @@ if test "$enable_ntdll_NtDevicePath" -eq 1; then
 		abort "Patchset ntdll-Pipe_SpecialCharacters disabled, but ntdll-NtDevicePath depends on that."
 	fi
 	enable_ntdll_Pipe_SpecialCharacters=1
+fi
+
+if test "$enable_ntdll_NtAlertThreadByThreadId" -eq 1; then
+	if test "$enable_server_Object_Types" -gt 1; then
+		abort "Patchset server-Object_Types disabled, but ntdll-NtAlertThreadByThreadId depends on that."
+	fi
+	enable_server_Object_Types=1
 fi
 
 if test "$enable_ntdll_Builtin_Prot" -eq 1; then
@@ -3249,6 +3260,58 @@ if test "$enable_ntdll_NtAccessCheck" -eq 1; then
 	patch_apply ntdll-NtAccessCheck/0001-ntdll-Improve-invalid-paramater-handling-in-NtAccess.patch
 fi
 
+# Patchset server-Object_Types
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#44629] Process Hacker can't enumerate handles
+# |   *	[#45374] Yet Another Process Monitor (.NET 2.0 app) reports System.AccessViolationException
+# |
+# | Modified files:
+# |   *	dlls/ntdll/tests/info.c, dlls/ntdll/tests/om.c, dlls/ntdll/unix/file.c, dlls/ntdll/unix/system.c, include/winternl.h,
+# | 	server/completion.c, server/directory.c, server/event.c, server/file.c, server/handle.c, server/mailslot.c,
+# | 	server/main.c, server/mapping.c, server/mutex.c, server/named_pipe.c, server/object.c, server/object.h,
+# | 	server/process.c, server/protocol.def, server/registry.c, server/semaphore.c, server/symlink.c, server/thread.c,
+# | 	server/timer.c, server/token.c, server/winstation.c
+# |
+if test "$enable_server_Object_Types" -eq 1; then
+	patch_apply server-Object_Types/0001-ntdll-Implement-SystemExtendedHandleInformation-in-N.patch
+	patch_apply server-Object_Types/0002-ntdll-Implement-ObjectTypesInformation-in-NtQueryObj.patch
+	patch_apply server-Object_Types/0003-server-Register-types-during-startup.patch
+	patch_apply server-Object_Types/0004-server-Rename-ObjectType-to-Type.patch
+	patch_apply server-Object_Types/0008-ntdll-Set-TypeIndex-for-ObjectTypeInformation-in-NtQ.patch
+	patch_apply server-Object_Types/0009-ntdll-Set-object-type-for-System-Extended-HandleInfo.patch
+	patch_apply server-Object_Types/0010-ntdll-Mimic-object-type-behavior-for-different-windo.patch
+fi
+
+# Patchset ntdll-NtAlertThreadByThreadId
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	server-Object_Types
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#50292] Process-local synchronization objects use private interfaces into the Unix library
+# |
+# | Modified files:
+# |   *	dlls/ntdll/Makefile.in, dlls/ntdll/critsection.c, dlls/ntdll/ntdll.spec, dlls/ntdll/sync.c,
+# | 	dlls/ntdll/tests/Makefile.in, dlls/ntdll/tests/om.c, dlls/ntdll/tests/sync.c, dlls/ntdll/unix/loader.c,
+# | 	dlls/ntdll/unix/sync.c, dlls/ntdll/unix/thread.c, dlls/ntdll/unix/unix_private.h, dlls/ntdll/unix/virtual.c,
+# | 	dlls/ntdll/unixlib.h, include/winbase.h, include/winternl.h
+# |
+if test "$enable_ntdll_NtAlertThreadByThreadId" -eq 1; then
+	patch_apply ntdll-NtAlertThreadByThreadId/0001-ntdll-tests-Move-some-tests-to-a-new-sync.c-file.patch
+	patch_apply ntdll-NtAlertThreadByThreadId/0002-ntdll-tests-Add-some-tests-for-Rtl-resources.patch
+	patch_apply ntdll-NtAlertThreadByThreadId/0003-ntdll-Use-a-separate-mutex-to-lock-the-TEB-list.patch
+	patch_apply ntdll-NtAlertThreadByThreadId/0004-ntdll-Implement-NtAlertThreadByThreadId-and-NtWaitFo.patch
+	patch_apply ntdll-NtAlertThreadByThreadId/0005-ntdll-tests-Add-basic-tests-for-thread-id-alert-func.patch
+	patch_apply ntdll-NtAlertThreadByThreadId/0006-ntdll-Implement-thread-id-alerts-on-top-of-futexes-i.patch
+	patch_apply ntdll-NtAlertThreadByThreadId/0007-ntdll-Implement-thread-id-alerts-on-top-of-Mach-sema.patch
+	patch_apply ntdll-NtAlertThreadByThreadId/0009-ntdll-Reimplement-Win32-futexes-on-top-of-thread-ID-.patch
+	patch_apply ntdll-NtAlertThreadByThreadId/0010-ntdll-Merge-critsection.c-into-sync.c.patch
+	patch_apply ntdll-NtAlertThreadByThreadId/0011-ntdll-Reimplement-the-critical-section-fast-path-on-.patch
+	patch_apply ntdll-NtAlertThreadByThreadId/0012-ntdll-Get-rid-of-the-direct-futex-path-for-condition.patch
+	patch_apply ntdll-NtAlertThreadByThreadId/0013-ntdll-Reimplement-SRW-locks-on-top-of-Win32-futexes.patch
+fi
+
 # Patchset ntdll-Pipe_SpecialCharacters
 # |
 # | This patchset fixes the following Wine bugs:
@@ -3741,29 +3804,6 @@ fi
 if test "$enable_server_Key_State" -eq 1; then
 	patch_apply server-Key_State/0001-server-Introduce-a-helper-function-to-update-the-thr.patch
 	patch_apply server-Key_State/0002-server-Implement-locking-and-synchronization-of-keys.patch
-fi
-
-# Patchset server-Object_Types
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#44629] Process Hacker can't enumerate handles
-# |   *	[#45374] Yet Another Process Monitor (.NET 2.0 app) reports System.AccessViolationException
-# |
-# | Modified files:
-# |   *	dlls/ntdll/tests/info.c, dlls/ntdll/tests/om.c, dlls/ntdll/unix/file.c, dlls/ntdll/unix/system.c, include/winternl.h,
-# | 	server/completion.c, server/directory.c, server/event.c, server/file.c, server/handle.c, server/mailslot.c,
-# | 	server/main.c, server/mapping.c, server/mutex.c, server/named_pipe.c, server/object.c, server/object.h,
-# | 	server/process.c, server/protocol.def, server/registry.c, server/semaphore.c, server/symlink.c, server/thread.c,
-# | 	server/timer.c, server/token.c, server/winstation.c
-# |
-if test "$enable_server_Object_Types" -eq 1; then
-	patch_apply server-Object_Types/0001-ntdll-Implement-SystemExtendedHandleInformation-in-N.patch
-	patch_apply server-Object_Types/0002-ntdll-Implement-ObjectTypesInformation-in-NtQueryObj.patch
-	patch_apply server-Object_Types/0003-server-Register-types-during-startup.patch
-	patch_apply server-Object_Types/0004-server-Rename-ObjectType-to-Type.patch
-	patch_apply server-Object_Types/0008-ntdll-Set-TypeIndex-for-ObjectTypeInformation-in-NtQ.patch
-	patch_apply server-Object_Types/0009-ntdll-Set-object-type-for-System-Extended-HandleInfo.patch
-	patch_apply server-Object_Types/0010-ntdll-Mimic-object-type-behavior-for-different-windo.patch
 fi
 
 # Patchset server-Registry_Notifications
