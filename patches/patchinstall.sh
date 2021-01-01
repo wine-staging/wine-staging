@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "e377786a71c3b6eab5bc11c0b1c9c7c3dc309398"
+	echo "784cb2060ab63076adc349dcb1d15a6cb5eb2bc4"
 }
 
 # Show version information
@@ -2339,6 +2339,9 @@ fi
 # | This patchset has the following (direct or indirect) dependencies:
 # |   *	dsound-Fast_Mixer
 # |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#42886] Mushroom Wars - Has no sounds.
+# |
 # | Modified files:
 # |   *	dlls/dsound/Makefile.in, dlls/dsound/buffer.c, dlls/dsound/dsound.c, dlls/dsound/dsound_eax.h,
 # | 	dlls/dsound/dsound_main.c, dlls/dsound/dsound_private.h, dlls/dsound/eax.c, dlls/dsound/mixer.c
@@ -2365,6 +2368,7 @@ if test "$enable_dsound_EAX" -eq 1; then
 	patch_apply dsound-EAX/0019-dsound-Allow-disabling-of-EAX-support-in-the-registr.patch
 	patch_apply dsound-EAX/0020-dsound-Add-stub-support-for-DSPROPSETID_EAX20_Listen.patch
 	patch_apply dsound-EAX/0021-dsound-Add-stub-support-for-DSPROPSETID_EAX20_Buffer.patch
+	patch_apply dsound-EAX/0022-dsound-Enable-EAX-by-default.patch
 fi
 
 # Patchset dwrite-FontFallback
