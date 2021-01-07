@@ -122,6 +122,7 @@ patch_enable_all ()
 	enable_dinput_remap_joystick="$1"
 	enable_dsound_EAX="$1"
 	enable_dsound_Fast_Mixer="$1"
+	enable_dsound_localder="$1"
 	enable_dwrite_FontFallback="$1"
 	enable_dxdiag_new_dlls="$1"
 	enable_eventfd_synchronization="$1"
@@ -452,6 +453,9 @@ patch_enable ()
 			;;
 		dsound-Fast_Mixer)
 			enable_dsound_Fast_Mixer="$2"
+			;;
+		dsound-localder)
+			enable_dsound_localder="$2"
 			;;
 		dwrite-FontFallback)
 			enable_dwrite_FontFallback="$2"
@@ -2369,6 +2373,18 @@ if test "$enable_dsound_EAX" -eq 1; then
 	patch_apply dsound-EAX/0020-dsound-Add-stub-support-for-DSPROPSETID_EAX20_Listen.patch
 	patch_apply dsound-EAX/0021-dsound-Add-stub-support-for-DSPROPSETID_EAX20_Buffer.patch
 	patch_apply dsound-EAX/0022-dsound-Enable-EAX-by-default.patch
+fi
+
+# Patchset dsound-localder
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#21014] dsound: IDirectSoundBuffer8 GetStatus return DSBSTATUS_LOCSOFTWARE for deferred buffers
+# |
+# | Modified files:
+# |   *	dlls/dsound/buffer.c, dlls/dsound/tests/dsound8.c
+# |
+if test "$enable_dsound_localder" -eq 1; then
+	patch_apply dsound-localder/0001-dsound-IDirectSoundBuffer8-GetStatus-return-DSBSTATU.patch
 fi
 
 # Patchset dwrite-FontFallback
