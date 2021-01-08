@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "9bc3a9f78bf5e6a09d4e9811f645def4a477f3d0"
+	echo "7d3186e029fb4cf417fab59483a37d8aece95b5d"
 }
 
 # Show version information
@@ -2924,12 +2924,11 @@ fi
 # |
 # | Modified files:
 # |   *	dlls/mf/Makefile.in, dlls/mf/handler.c, dlls/mf/handler.h, dlls/mf/main.c, dlls/mf/session.c, dlls/mf/tests/mf.c,
-# | 	dlls/mfplat/tests/mfplat.c, dlls/mfplat/tests/test.mp4, dlls/mfreadwrite/reader.c, dlls/mfreadwrite/tests/mfplat.c,
-# | 	dlls/mfreadwrite/tests/resource.rc, dlls/mfreadwrite/tests/test.mp4, dlls/winegstreamer/Makefile.in,
-# | 	dlls/winegstreamer/audioconvert.c, dlls/winegstreamer/colorconvert.c, dlls/winegstreamer/gst_cbs.c,
-# | 	dlls/winegstreamer/gst_cbs.h, dlls/winegstreamer/gst_private.h, dlls/winegstreamer/media_source.c,
-# | 	dlls/winegstreamer/mf_decode.c, dlls/winegstreamer/mfplat.c, dlls/winegstreamer/winegstreamer_classes.idl,
-# | 	include/mfidl.idl, tools/make_makefiles, tools/makedep.c
+# | 	dlls/mfreadwrite/reader.c, dlls/winegstreamer/Makefile.in, dlls/winegstreamer/audioconvert.c,
+# | 	dlls/winegstreamer/colorconvert.c, dlls/winegstreamer/gst_cbs.c, dlls/winegstreamer/gst_cbs.h,
+# | 	dlls/winegstreamer/gst_private.h, dlls/winegstreamer/media_source.c, dlls/winegstreamer/mf_decode.c,
+# | 	dlls/winegstreamer/mfplat.c, dlls/winegstreamer/winegstreamer_classes.idl, include/mfidl.idl, tools/make_makefiles,
+# | 	tools/makedep.c
 # |
 if test "$enable_mfplat_streaming_support" -eq 1; then
 	patch_apply mfplat-streaming-support/0001-winegstreamer-Correct-mistaken-enum-value-in-Process.patch
@@ -2975,8 +2974,6 @@ if test "$enable_mfplat_streaming_support" -eq 1; then
 	patch_apply mfplat-streaming-support/0043-Miscellaneous.patch
 	patch_apply mfplat-streaming-support/0044-WMV.patch
 	patch_apply mfplat-streaming-support/0045-Expose-PCM-output-type-on-AAC-decoder.patch
-	patch_apply mfplat-streaming-support/0046-Improve-tests.patch
-	patch_apply mfplat-streaming-support/0047-Revert-Improve-tests.patch
 	patch_apply mfplat-streaming-support/0048-Report-streams-backwards-and-only-select-one-of-each.patch
 	patch_apply mfplat-streaming-support/0049-winegstreamer-Introduce-MPEG-4-Section-2-video-decod.patch
 	patch_apply mfplat-streaming-support/0050-winegstreamer-Introduce-WMA-audio-decoder.patch
