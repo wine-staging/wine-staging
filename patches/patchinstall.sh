@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "88220e0ee41640940e7686fe0cab7f1e0bfb42f1"
+	echo "04a9c9eba77f56d61d615f1147590c67b466bdf8"
 }
 
 # Show version information
@@ -2915,7 +2915,6 @@ fi
 # | 	tools/makedep.c
 # |
 if test "$enable_mfplat_streaming_support" -eq 1; then
-	patch_apply mfplat-streaming-support/0001-winegstreamer-Correct-mistaken-enum-value-in-Process.patch
 	patch_apply mfplat-streaming-support/0003-winegstreamer-Implement-Process-Input-Output-for-aud.patch
 	patch_apply mfplat-streaming-support/0004-winegstreamer-Implement-Get-Input-Output-StreamInfo-.patch
 	patch_apply mfplat-streaming-support/0005-winegstreamer-Implement-Get-Attributes-functions-for.patch
@@ -3296,7 +3295,7 @@ fi
 # |   *	dlls/ntdll/Makefile.in, dlls/ntdll/critsection.c, dlls/ntdll/ntdll.spec, dlls/ntdll/ntdll_misc.h, dlls/ntdll/sync.c,
 # | 	dlls/ntdll/tests/Makefile.in, dlls/ntdll/tests/om.c, dlls/ntdll/tests/sync.c, dlls/ntdll/thread.c,
 # | 	dlls/ntdll/unix/loader.c, dlls/ntdll/unix/sync.c, dlls/ntdll/unix/thread.c, dlls/ntdll/unix/unix_private.h,
-# | 	dlls/ntdll/unix/virtual.c, dlls/ntdll/unixlib.h, include/winbase.h, include/winternl.h
+# | 	dlls/ntdll/unix/virtual.c, dlls/ntdll/unixlib.h, include/winbase.h, include/winnt.h, include/winternl.h
 # |
 if test "$enable_ntdll_NtAlertThreadByThreadId" -eq 1; then
 	patch_apply ntdll-NtAlertThreadByThreadId/0001-ntdll-tests-Move-some-tests-to-a-new-sync.c-file.patch
