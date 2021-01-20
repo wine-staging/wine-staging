@@ -130,6 +130,7 @@ patch_enable_all ()
 	enable_gdi32_rotation="$1"
 	enable_gdiplus_Performance_Improvements="$1"
 	enable_imagehlp_BindImageEx="$1"
+	enable_imm32_com_initialization="$1"
 	enable_imm32_message_on_focus="$1"
 	enable_include_winsock="$1"
 	enable_inseng_Implementation="$1"
@@ -476,6 +477,9 @@ patch_enable ()
 			;;
 		imagehlp-BindImageEx)
 			enable_imagehlp_BindImageEx="$2"
+			;;
+		imm32-com-initialization)
+			enable_imm32_com_initialization="$2"
 			;;
 		imm32-message_on_focus)
 			enable_imm32_message_on_focus="$2"
@@ -1624,6 +1628,13 @@ if test "$enable_kernel32_CopyFileEx" -eq 1; then
 	enable_ntdll_FileDispositionInformation=1
 fi
 
+if test "$enable_imm32_com_initialization" -eq 1; then
+	if test "$enable_winex11__NET_ACTIVE_WINDOW" -gt 1; then
+		abort "Patchset winex11-_NET_ACTIVE_WINDOW disabled, but imm32-com-initialization depends on that."
+	fi
+	enable_winex11__NET_ACTIVE_WINDOW=1
+fi
+
 if test "$enable_eventfd_synchronization" -eq 1; then
 	if test "$enable_ntdll_Junction_Points" -gt 1; then
 		abort "Patchset ntdll-Junction_Points disabled, but eventfd_synchronization depends on that."
@@ -2710,6 +2721,37 @@ fi
 # |
 if test "$enable_imagehlp_BindImageEx" -eq 1; then
 	patch_apply imagehlp-BindImageEx/0001-imagehlp-Implement-parts-of-BindImageEx-to-make-free.patch
+fi
+
+# Patchset winex11-_NET_ACTIVE_WINDOW
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#2155] Forward activate window requests to WM using _NET_ACTIVE_WINDOW
+# |
+# | Modified files:
+# |   *	dlls/user32/driver.c, dlls/user32/focus.c, dlls/user32/user_private.h, dlls/winex11.drv/event.c,
+# | 	dlls/winex11.drv/window.c, dlls/winex11.drv/winex11.drv.spec, dlls/winex11.drv/x11drv.h, dlls/winex11.drv/x11drv_main.c
+# |
+if test "$enable_winex11__NET_ACTIVE_WINDOW" -eq 1; then
+	patch_apply winex11-_NET_ACTIVE_WINDOW/0001-winex11.drv-Add-support-for-_NET_ACTIVE_WINDOW.patch
+	patch_apply winex11-_NET_ACTIVE_WINDOW/0002-user32-Before-asking-a-WM-to-activate-a-window-make-.patch
+fi
+
+# Patchset imm32-com-initialization
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	winex11-_NET_ACTIVE_WINDOW
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#42695] Path of Exile fails - CoCreateInstance() called in uninitialized apartment
+# |   *	[#47387] Victor Vran has no sound
+# |
+# | Modified files:
+# |   *	dlls/imm32/Makefile.in, dlls/imm32/imm.c, dlls/imm32/imm32.spec, dlls/imm32/tests/imm32.c, dlls/user32/focus.c,
+# | 	dlls/user32/misc.c, dlls/user32/user_private.h
+# |
+if test "$enable_imm32_com_initialization" -eq 1; then
+	patch_apply imm32-com-initialization/0001-imm32-Automatically-initialize-COM-on-window-activat.patch
 fi
 
 # Patchset imm32-message_on_focus
@@ -4953,20 +4995,6 @@ fi
 # |
 if test "$enable_winex11_Vulkan_support" -eq 1; then
 	patch_apply winex11-Vulkan_support/0001-winex11-Specify-a-default-vulkan-driver-if-one-not-f.patch
-fi
-
-# Patchset winex11-_NET_ACTIVE_WINDOW
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#2155] Forward activate window requests to WM using _NET_ACTIVE_WINDOW
-# |
-# | Modified files:
-# |   *	dlls/user32/driver.c, dlls/user32/focus.c, dlls/user32/user_private.h, dlls/winex11.drv/event.c,
-# | 	dlls/winex11.drv/window.c, dlls/winex11.drv/winex11.drv.spec, dlls/winex11.drv/x11drv.h, dlls/winex11.drv/x11drv_main.c
-# |
-if test "$enable_winex11__NET_ACTIVE_WINDOW" -eq 1; then
-	patch_apply winex11-_NET_ACTIVE_WINDOW/0001-winex11.drv-Add-support-for-_NET_ACTIVE_WINDOW.patch
-	patch_apply winex11-_NET_ACTIVE_WINDOW/0002-user32-Before-asking-a-WM-to-activate-a-window-make-.patch
 fi
 
 # Patchset winex11-WM_WINDOWPOSCHANGING
