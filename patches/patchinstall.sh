@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "04a9c9eba77f56d61d615f1147590c67b466bdf8"
+	echo "a952453888fb5df3c70edf357820bc924b4f3e7f"
 }
 
 # Show version information
@@ -4503,13 +4503,12 @@ fi
 # |   *	[#49998] widl - Support WinRT idls
 # |
 # | Modified files:
-# |   *	include/Makefile.in, include/windows.foundation.idl, include/windows.media.speechsynthesis.idl, tools/widl/expr.c,
-# | 	tools/widl/hash.c, tools/widl/hash.h, tools/widl/header.c, tools/widl/parser.l, tools/widl/parser.y,
-# | 	tools/widl/typegen.c, tools/widl/typelib.c, tools/widl/typetree.c, tools/widl/typetree.h, tools/widl/utils.c,
-# | 	tools/widl/utils.h, tools/widl/widltypes.h
+# |   *	include/windows.foundation.idl, include/windows.media.speechsynthesis.idl, tools/widl/expr.c, tools/widl/hash.c,
+# | 	tools/widl/hash.h, tools/widl/header.c, tools/widl/parser.l, tools/widl/parser.y, tools/widl/typegen.c,
+# | 	tools/widl/typelib.c, tools/widl/typetree.c, tools/widl/typetree.h, tools/widl/utils.c, tools/widl/utils.h,
+# | 	tools/widl/widltypes.h
 # |
 if test "$enable_widl_winrt_support" -eq 1; then
-	patch_apply widl-winrt-support/0001-include-Add-windows.media.speechsynthesis.idl-draft.patch
 	patch_apply widl-winrt-support/0002-widl-Support-WinRT-marshaling_behavior-attribute-par.patch
 	patch_apply widl-winrt-support/0003-widl-Support-WinRT-mta-threading-attribute-parsing.patch
 	patch_apply widl-winrt-support/0004-widl-Support-WinRT-exclusiveto-attribute-parsing.patch
