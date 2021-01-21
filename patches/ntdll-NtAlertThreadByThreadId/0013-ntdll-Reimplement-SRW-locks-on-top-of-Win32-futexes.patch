@@ -1,4 +1,4 @@
-From 76e611ca640aeab6ff440d6bfad61e8b8e899093 Mon Sep 17 00:00:00 2001
+From 55ef726442489ed42eba1981fe038b95f910d511 Mon Sep 17 00:00:00 2001
 From: Zebediah Figura <z.figura12@gmail.com>
 Date: Sun, 22 Nov 2020 20:51:10 -0600
 Subject: [PATCH] ntdll: Reimplement SRW locks on top of Win32 futexes.
@@ -9,10 +9,8 @@ Signed-off-by: Zebediah Figura <z.figura12@gmail.com>
  dlls/ntdll/unix/loader.c       |   6 -
  dlls/ntdll/unix/sync.c         | 309 --------------------------------
  dlls/ntdll/unix/unix_private.h |   6 -
- dlls/ntdll/unixlib.h           |   8 -
- include/winbase.h              |   1 -
- include/winnt.h                |  24 +++
- 7 files changed, 166 insertions(+), 504 deletions(-)
+ dlls/ntdll/unixlib.h           |  10 +-
+ 5 files changed, 143 insertions(+), 504 deletions(-)
 
 diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
 index 0e86ecead3d..34b076d6b71 100644
@@ -395,11 +393,11 @@ index 0e86ecead3d..34b076d6b71 100644
  
  /***********************************************************************
 diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
-index 8539e70dd82..4a83df1ec2f 100644
+index ad242b91800..11b94972c3d 100644
 --- a/dlls/ntdll/unix/loader.c
 +++ b/dlls/ntdll/unix/loader.c
-@@ -1512,12 +1512,6 @@ static struct unix_funcs unix_funcs =
-     NtCurrentTeb,
+@@ -1513,12 +1513,6 @@ static struct unix_funcs unix_funcs =
+ #endif
      DbgUiIssueRemoteBreakin,
      RtlGetSystemTimePrecise,
 -    fast_RtlTryAcquireSRWLockExclusive,
@@ -412,10 +410,10 @@ index 8539e70dd82..4a83df1ec2f 100644
      ntdll_ceil,
      ntdll_cos,
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index 6b72ba3023b..455f4ffc365 100644
+index 07e7939fc59..97781a3f0ae 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
-@@ -115,8 +115,6 @@ static inline ULONGLONG monotonic_counter(void)
+@@ -114,8 +114,6 @@ static inline ULONGLONG monotonic_counter(void)
  
  #define FUTEX_WAIT 0
  #define FUTEX_WAKE 1
@@ -424,7 +422,7 @@ index 6b72ba3023b..455f4ffc365 100644
  
  static int futex_private = 128;
  
-@@ -130,16 +128,6 @@ static inline int futex_wake( const int *addr, int val )
+@@ -129,16 +127,6 @@ static inline int futex_wake( const int *addr, int val )
      return syscall( __NR_futex, addr, FUTEX_WAKE | futex_private, val, NULL, 0, 0 );
  }
  
@@ -441,7 +439,7 @@ index 6b72ba3023b..455f4ffc365 100644
  static inline int use_futexes(void)
  {
      static int supported = -1;
-@@ -157,16 +145,6 @@ static inline int use_futexes(void)
+@@ -156,16 +144,6 @@ static inline int use_futexes(void)
      return supported;
  }
  
@@ -458,7 +456,7 @@ index 6b72ba3023b..455f4ffc365 100644
  #endif
  
  
-@@ -2287,290 +2265,3 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
+@@ -2233,290 +2211,3 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
      return NtWaitForSingleObject( ntdll_get_thread_data()->tid_alert_event, FALSE, timeout );
  #endif
  }
@@ -750,10 +748,10 @@ index 6b72ba3023b..455f4ffc365 100644
 -
 -#endif
 diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
-index e78c0c8839c..ad5bb216949 100644
+index d82b8c90e84..1cf917ab89d 100644
 --- a/dlls/ntdll/unix/unix_private.h
 +++ b/dlls/ntdll/unix/unix_private.h
-@@ -95,12 +95,6 @@ extern void     (WINAPI *pKiUserApcDispatcher)(CONTEXT*,ULONG_PTR,ULONG_PTR,ULON
+@@ -93,12 +93,6 @@ extern void     (WINAPI *pKiUserApcDispatcher)(CONTEXT*,ULONG_PTR,ULONG_PTR,ULON
  extern NTSTATUS (WINAPI *pKiUserExceptionDispatcher)(EXCEPTION_RECORD*,CONTEXT*) DECLSPEC_HIDDEN;
  extern void     (WINAPI *pLdrInitializeThunk)(CONTEXT*,void**,ULONG_PTR,ULONG_PTR) DECLSPEC_HIDDEN;
  extern void     (WINAPI *pRtlUserThreadStart)( PRTL_THREAD_START_ROUTINE entry, void *arg ) DECLSPEC_HIDDEN;
@@ -767,10 +765,19 @@ index e78c0c8839c..ad5bb216949 100644
  
  extern NTSTATUS CDECL get_initial_environment( WCHAR **wargv[], WCHAR *env, SIZE_T *size ) DECLSPEC_HIDDEN;
 diff --git a/dlls/ntdll/unixlib.h b/dlls/ntdll/unixlib.h
-index 6116f408572..5ffb09ce397 100644
+index 0d056ef2b80..4c2693b3f6c 100644
 --- a/dlls/ntdll/unixlib.h
 +++ b/dlls/ntdll/unixlib.h
-@@ -38,14 +38,6 @@ struct unix_funcs
+@@ -27,7 +27,7 @@
+ struct _DISPATCHER_CONTEXT;
+ 
+ /* increment this when you change the function table */
+-#define NTDLL_UNIXLIB_VERSION 110
++#define NTDLL_UNIXLIB_VERSION 111
+ 
+ struct unix_funcs
+ {
+@@ -40,14 +40,6 @@ struct unix_funcs
      NTSTATUS      (WINAPI *DbgUiIssueRemoteBreakin)( HANDLE process );
      LONGLONG      (WINAPI *RtlGetSystemTimePrecise)(void);
  
@@ -785,91 +792,6 @@ index 6116f408572..5ffb09ce397 100644
      /* math functions */
      double        (CDECL *atan)( double d );
      double        (CDECL *ceil)( double d );
-diff --git a/include/winbase.h b/include/winbase.h
-index 0262e50d980..968d636f86e 100644
---- a/include/winbase.h
-+++ b/include/winbase.h
-@@ -2918,7 +2918,6 @@ WINBASEAPI UINT        WINAPI _lwrite(HFILE,LPCSTR,UINT);
- extern char * CDECL wine_get_unix_file_name( LPCWSTR dos );
- extern WCHAR * CDECL wine_get_dos_file_name( LPCSTR str );
- 
--
- #ifdef __WINESRC__
- 
- static FORCEINLINE HANDLE WINAPI GetCurrentProcess(void)
-diff --git a/include/winnt.h b/include/winnt.h
-index 98233348cd6..a478aa5128a 100644
---- a/include/winnt.h
-+++ b/include/winnt.h
-@@ -6910,8 +6910,10 @@ static inline BOOLEAN BitScanReverse(DWORD *index, DWORD mask)
- #pragma intrinsic(_InterlockedExchange)
- #pragma intrinsic(_InterlockedExchangeAdd)
- #pragma intrinsic(_InterlockedIncrement)
-+#pragma intrinsic(_InterlockedIncrement16)
- #pragma intrinsic(_InterlockedDecrement)
- #pragma intrinsic(_InterlockedOr)
-+#pragma intrinsic(_InterlockedDecrement16)
- 
- long      _InterlockedCompareExchange(long volatile*,long,long);
- long long _InterlockedCompareExchange64(long long volatile*,long long,long long);
-@@ -6919,16 +6921,23 @@ long long _InterlockedCompareExchange64(long long volatile*,long long,long long)
- unsigned char _InterlockedCompareExchange128(volatile __int64 *, __int64, __int64, __int64 *);
- #endif
- long      _InterlockedDecrement(long volatile*);
-+short     _InterlockedDecrement16(short volatile*);
- long      _InterlockedExchange(long volatile*,long);
- long      _InterlockedExchangeAdd(long volatile*,long);
- long      _InterlockedIncrement(long volatile*);
- long      _InterlockedOr(long volatile *,long);
-+short     _InterlockedIncrement16(short volatile *);
- 
- static FORCEINLINE LONG WINAPI InterlockedCompareExchange( LONG volatile *dest, LONG xchg, LONG compare )
- {
-     return _InterlockedCompareExchange( (long volatile *)dest, xchg, compare );
- }
- 
-+static FORCEINLINE short WINAPI InterlockedIncrement16( short volatile *dest )
-+{
-+    return _InterlockedIncrement16( (short volatile *)dest );
-+}
-+
- static FORCEINLINE LONGLONG WINAPI InterlockedCompareExchange64( LONGLONG volatile *dest, LONGLONG xchg, LONGLONG compare )
- {
-     return _InterlockedCompareExchange64( (long long volatile *)dest, compare, xchg );
-@@ -6966,6 +6975,11 @@ static FORCEINLINE LONG WINAPI InterlockedOr( LONG volatile *dest, LONG val )
-     return _InterlockedOr( (long volatile *)dest, val );
- }
- 
-+static FORCEINLINE short WINAPI InterlockedDecrement16( short volatile *dest )
-+{
-+    return _InterlockedDecrement16( (short volatile *)dest );
-+}
-+
- #ifndef __i386__
- 
- #pragma intrinsic(_InterlockedCompareExchangePointer)
-@@ -7092,11 +7106,21 @@ static FORCEINLINE LONG WINAPI InterlockedIncrement( LONG volatile *dest )
-     return __sync_add_and_fetch( dest, 1 );
- }
- 
-+static FORCEINLINE short WINAPI InterlockedIncrement16( short volatile *dest )
-+{
-+    return __sync_add_and_fetch( dest, 1 );
-+}
-+
- static FORCEINLINE LONG WINAPI InterlockedDecrement( LONG volatile *dest )
- {
-     return __sync_add_and_fetch( dest, -1 );
- }
- 
-+static FORCEINLINE short WINAPI InterlockedDecrement16( short volatile *dest )
-+{
-+    return __sync_add_and_fetch( dest, -1 );
-+}
-+
- static FORCEINLINE void * WINAPI InterlockedExchangePointer( void *volatile *dest, void *val )
- {
-     void *ret;
 -- 
 2.29.2
 

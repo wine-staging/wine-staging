@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "a952453888fb5df3c70edf357820bc924b4f3e7f"
+	echo "158a9e738421cd16f2e8296f11baa724c64c8ca7"
 }
 
 # Show version information
@@ -3337,7 +3337,7 @@ fi
 # |   *	dlls/ntdll/Makefile.in, dlls/ntdll/critsection.c, dlls/ntdll/ntdll.spec, dlls/ntdll/ntdll_misc.h, dlls/ntdll/sync.c,
 # | 	dlls/ntdll/tests/Makefile.in, dlls/ntdll/tests/om.c, dlls/ntdll/tests/sync.c, dlls/ntdll/thread.c,
 # | 	dlls/ntdll/unix/loader.c, dlls/ntdll/unix/sync.c, dlls/ntdll/unix/thread.c, dlls/ntdll/unix/unix_private.h,
-# | 	dlls/ntdll/unix/virtual.c, dlls/ntdll/unixlib.h, include/winbase.h, include/winnt.h, include/winternl.h
+# | 	dlls/ntdll/unix/virtual.c, dlls/ntdll/unixlib.h, include/winternl.h
 # |
 if test "$enable_ntdll_NtAlertThreadByThreadId" -eq 1; then
 	patch_apply ntdll-NtAlertThreadByThreadId/0001-ntdll-tests-Move-some-tests-to-a-new-sync.c-file.patch
