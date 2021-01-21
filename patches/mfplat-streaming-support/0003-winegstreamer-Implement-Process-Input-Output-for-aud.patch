@@ -1,18 +1,19 @@
-From d61ea314bb5d72df0f9f855843fd13b696c364a8 Mon Sep 17 00:00:00 2001
 From: Derek Lesho <dlesho@codeweavers.com>
-Date: Wed, 18 Nov 2020 14:31:00 -0600
-Subject: [PATCH] winegstreamer: Implement ::Process(Input/Output) for audio
- conversion transform.
+Subject: [PATCH resend 3/5] winegstreamer: Implement ::Process(Input/Output) for audio conversion transform.
+Message-Id: <20210118193047.267366-3-dlesho@codeweavers.com>
+Date: Mon, 18 Jan 2021 14:30:45 -0500
+In-Reply-To: <20210118193047.267366-1-dlesho@codeweavers.com>
+References: <20210118193047.267366-1-dlesho@codeweavers.com>
 
 Signed-off-by: Derek Lesho <dlesho@codeweavers.com>
 ---
- dlls/winegstreamer/audioconvert.c | 163 +++++++++++++++++++++++++++++-
+ dlls/winegstreamer/audioconvert.c | 188 ++++++++++++++++++++++++++++--
  dlls/winegstreamer/gst_private.h  |   1 +
- dlls/winegstreamer/mfplat.c       |  69 +++++++++++++
- 3 files changed, 229 insertions(+), 4 deletions(-)
+ dlls/winegstreamer/mfplat.c       |  69 +++++++++++
+ 3 files changed, 250 insertions(+), 8 deletions(-)
 
 diff --git a/dlls/winegstreamer/audioconvert.c b/dlls/winegstreamer/audioconvert.c
-index 85f44dd8856..7baee9c643d 100644
+index 85f44dd8856..e16fc6f1a78 100644
 --- a/dlls/winegstreamer/audioconvert.c
 +++ b/dlls/winegstreamer/audioconvert.c
 @@ -40,6 +40,8 @@ struct audio_converter
@@ -20,7 +21,7 @@ index 85f44dd8856..7baee9c643d 100644
      IMFMediaType *output_type;
      CRITICAL_SECTION cs;
 +    BOOL inflight;
-+    GstElement *container, *appsrc, *audioconvert, *resampler, *appsink;
++    GstElement *container, *appsrc, *appsink;
  };
  
  static struct audio_converter *impl_audio_converter_from_IMFTransform(IMFTransform *iface)
@@ -32,15 +33,46 @@ index 85f44dd8856..7baee9c643d 100644
          heap_free(transform);
      }
  
-@@ -334,6 +337,7 @@ static HRESULT WINAPI audio_converter_SetInputType(IMFTransform *iface, DWORD id
+@@ -295,6 +298,9 @@ static HRESULT WINAPI audio_converter_SetInputType(IMFTransform *iface, DWORD id
+ 
+         EnterCriticalSection(&converter->cs);
+ 
++        converter->inflight = FALSE;
++        gst_element_set_state(converter->container, GST_STATE_READY);
++
+         if (converter->input_type)
+         {
+             IMFMediaType_Release(converter->input_type);
+@@ -326,14 +332,17 @@ static HRESULT WINAPI audio_converter_SetInputType(IMFTransform *iface, DWORD id
+     if (!(input_caps = caps_from_mf_media_type(type)))
+         return MF_E_INVALIDTYPE;
+ 
+-    gst_caps_unref(input_caps);
+-
+     if (flags & MFT_SET_TYPE_TEST_ONLY)
++    {
++        gst_caps_unref(input_caps);
+         return S_OK;
++    }
+ 
      EnterCriticalSection(&converter->cs);
  
      hr = S_OK;
++    converter->inflight = FALSE;
 +    gst_element_set_state(converter->container, GST_STATE_READY);
  
      if (!converter->input_type)
          hr = MFCreateMediaType(&converter->input_type);
-@@ -347,6 +351,9 @@ static HRESULT WINAPI audio_converter_SetInputType(IMFTransform *iface, DWORD id
+@@ -341,12 +350,18 @@ static HRESULT WINAPI audio_converter_SetInputType(IMFTransform *iface, DWORD id
+     if (SUCCEEDED(hr))
+         hr = IMFMediaType_CopyAllItems(type, (IMFAttributes *) converter->input_type);
+ 
++    g_object_set(converter->appsrc, "caps", input_caps, NULL);
++    gst_caps_unref(input_caps);
++
+     if (FAILED(hr))
+     {
+         IMFMediaType_Release(converter->input_type);
          converter->input_type = NULL;
      }
  
@@ -50,15 +82,46 @@ index 85f44dd8856..7baee9c643d 100644
      LeaveCriticalSection(&converter->cs);
  
      return hr;
-@@ -414,6 +421,7 @@ static HRESULT WINAPI audio_converter_SetOutputType(IMFTransform *iface, DWORD i
+@@ -375,6 +390,9 @@ static HRESULT WINAPI audio_converter_SetOutputType(IMFTransform *iface, DWORD i
+ 
+         EnterCriticalSection(&converter->cs);
+ 
++        converter->inflight = FALSE;
++        gst_element_set_state(converter->container, GST_STATE_READY);
++
+         if (converter->output_type)
+         {
+             IMFMediaType_Release(converter->output_type);
+@@ -406,14 +424,17 @@ static HRESULT WINAPI audio_converter_SetOutputType(IMFTransform *iface, DWORD i
+     if (!(output_caps = caps_from_mf_media_type(type)))
+         return MF_E_INVALIDTYPE;
+ 
+-    gst_caps_unref(output_caps);
+-
+     if (flags & MFT_SET_TYPE_TEST_ONLY)
++    {
++        gst_caps_unref(output_caps);
+         return S_OK;
++    }
+ 
      EnterCriticalSection(&converter->cs);
  
      hr = S_OK;
++    converter->inflight = FALSE;
 +    gst_element_set_state(converter->container, GST_STATE_READY);
  
      if (!converter->output_type)
          hr = MFCreateMediaType(&converter->output_type);
-@@ -427,6 +435,9 @@ static HRESULT WINAPI audio_converter_SetOutputType(IMFTransform *iface, DWORD i
+@@ -421,12 +442,18 @@ static HRESULT WINAPI audio_converter_SetOutputType(IMFTransform *iface, DWORD i
+     if (SUCCEEDED(hr))
+         hr = IMFMediaType_CopyAllItems(type, (IMFAttributes *) converter->output_type);
+ 
++    g_object_set(converter->appsink, "caps", output_caps, NULL);
++    gst_caps_unref(output_caps);
++
+     if (FAILED(hr))
+     {
+         IMFMediaType_Release(converter->output_type);
          converter->output_type = NULL;
      }
  
@@ -68,7 +131,7 @@ index 85f44dd8856..7baee9c643d 100644
      LeaveCriticalSection(&converter->cs);
  
      return hr;
-@@ -538,17 +549,102 @@ static HRESULT WINAPI audio_converter_ProcessMessage(IMFTransform *iface, MFT_ME
+@@ -538,17 +565,102 @@ static HRESULT WINAPI audio_converter_ProcessMessage(IMFTransform *iface, MFT_ME
  
  static HRESULT WINAPI audio_converter_ProcessInput(IMFTransform *iface, DWORD id, IMFSample *sample, DWORD flags)
  {
@@ -111,7 +174,7 @@ index 85f44dd8856..7baee9c643d 100644
 +    gst_buffer_unref(gst_buffer);
 +    if (ret != GST_FLOW_OK)
 +    {
-+        ERR("Couldn't push buffer ret = %d (%s)\n", ret, gst_flow_get_name(ret));
++        ERR("Couldn't push buffer ret, (%s)\n", gst_flow_get_name(ret));
 +        LeaveCriticalSection(&converter->cs);
 +        return E_FAIL;
 +    }
@@ -175,7 +238,15 @@ index 85f44dd8856..7baee9c643d 100644
  }
  
  static const IMFTransformVtbl audio_converter_vtbl =
-@@ -596,6 +692,65 @@ HRESULT audio_converter_create(REFIID riid, void **ret)
+@@ -583,6 +695,7 @@ static const IMFTransformVtbl audio_converter_vtbl =
+ 
+ HRESULT audio_converter_create(REFIID riid, void **ret)
+ {
++    GstElement *audioconvert, *resampler;
+     struct audio_converter *object;
+ 
+     TRACE("%s %p\n", debugstr_guid(riid), ret);
+@@ -596,6 +709,65 @@ HRESULT audio_converter_create(REFIID riid, void **ret)
      InitializeCriticalSection(&object->cs);
      object->cs.DebugInfo->Spare[0] = (DWORD_PTR)(__FILE__ ": audio_converter_lock");
  
@@ -190,23 +261,23 @@ index 85f44dd8856..7baee9c643d 100644
 +    }
 +    gst_bin_add(GST_BIN(object->container), object->appsrc);
 +
-+    if (!(object->audioconvert = gst_element_factory_make("audioconvert", NULL)))
++    if (!(audioconvert = gst_element_factory_make("audioconvert", NULL)))
 +    {
 +        ERR("Failed to create audioconvert, are %u-bit Gstreamer \"base\" plugins installed?\n",
 +                8 * (int)sizeof(void *));
 +        IMFTransform_Release(&object->IMFTransform_iface);
 +        return E_FAIL;
 +    }
-+    gst_bin_add(GST_BIN(object->container), object->audioconvert);
++    gst_bin_add(GST_BIN(object->container), audioconvert);
 +
-+    if (!(object->resampler = gst_element_factory_make("audioresample", NULL)))
++    if (!(resampler = gst_element_factory_make("audioresample", NULL)))
 +    {
 +        ERR("Failed to create audioresample, are %u-bit Gstreamer \"base\" plugins installed?\n",
 +                8 * (int)sizeof(void *));
 +        IMFTransform_Release(&object->IMFTransform_iface);
 +        return E_FAIL;
 +    }
-+    gst_bin_add(GST_BIN(object->container), object->resampler);
++    gst_bin_add(GST_BIN(object->container), resampler);
 +
 +    if (!(object->appsink = gst_element_factory_make("appsink", NULL)))
 +    {
@@ -217,21 +288,21 @@ index 85f44dd8856..7baee9c643d 100644
 +    }
 +    gst_bin_add(GST_BIN(object->container), object->appsink);
 +
-+    if (!gst_element_link(object->appsrc, object->audioconvert))
++    if (!gst_element_link(object->appsrc, audioconvert))
 +    {
 +        ERR("Failed to link appsrc to audioconvert\n");
 +        IMFTransform_Release(&object->IMFTransform_iface);
 +        return E_FAIL;
 +    }
 +
-+    if (!gst_element_link(object->audioconvert, object->resampler))
++    if (!gst_element_link(audioconvert, resampler))
 +    {
 +        ERR("Failed to link audioconvert to resampler\n");
 +        IMFTransform_Release(&object->IMFTransform_iface);
 +        return E_FAIL;
 +    }
 +
-+    if (!gst_element_link(object->resampler, object->appsink))
++    if (!gst_element_link(resampler, object->appsink))
 +    {
 +        ERR("Failed to link resampler to appsink\n");
 +        IMFTransform_Release(&object->IMFTransform_iface);
@@ -242,7 +313,7 @@ index 85f44dd8856..7baee9c643d 100644
      return S_OK;
  }
 diff --git a/dlls/winegstreamer/gst_private.h b/dlls/winegstreamer/gst_private.h
-index e591a95f3ca..c188754fa45 100644
+index 9518f721504..14b6a011ac2 100644
 --- a/dlls/winegstreamer/gst_private.h
 +++ b/dlls/winegstreamer/gst_private.h
 @@ -82,6 +82,7 @@ HRESULT winegstreamer_stream_handler_create(REFIID riid, void **obj) DECLSPEC_HI
@@ -254,7 +325,7 @@ index e591a95f3ca..c188754fa45 100644
  HRESULT winegstreamer_stream_handler_create(REFIID riid, void **obj) DECLSPEC_HIDDEN;
  
 diff --git a/dlls/winegstreamer/mfplat.c b/dlls/winegstreamer/mfplat.c
-index f300988fc5c..883084b2d89 100644
+index f300988fc5c..b2b5b247dac 100644
 --- a/dlls/winegstreamer/mfplat.c
 +++ b/dlls/winegstreamer/mfplat.c
 @@ -865,3 +865,72 @@ done:
@@ -262,7 +333,7 @@ index f300988fc5c..883084b2d89 100644
      return out;
  }
 +
-+GstBuffer* gst_buffer_from_mf_sample(IMFSample *mf_sample)
++GstBuffer *gst_buffer_from_mf_sample(IMFSample *mf_sample)
 +{
 +    GstBuffer *out = gst_buffer_new();
 +    IMFMediaBuffer *mf_buffer = NULL;
@@ -299,7 +370,7 @@ index f300988fc5c..883084b2d89 100644
 +        memory = gst_allocator_alloc(NULL, buffer_size, NULL);
 +        gst_memory_resize(memory, 0, buffer_size);
 +
-+        if (!(gst_memory_map(memory, &map_info, GST_MAP_WRITE)))
++        if (!gst_memory_map(memory, &map_info, GST_MAP_WRITE))
 +        {
 +            hr = E_FAIL;
 +            goto fail;
@@ -330,6 +401,7 @@ index f300988fc5c..883084b2d89 100644
 +    gst_buffer_unref(out);
 +    return NULL;
 +}
+
 -- 
-2.29.2
+2.30.0
 
