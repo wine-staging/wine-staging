@@ -1,4 +1,4 @@
-From 6dfa30d0a77102ad39285c39b901b16138d894fe Mon Sep 17 00:00:00 2001
+From 846818cb0adabcc072f08b8816ac91019ef3150a Mon Sep 17 00:00:00 2001
 From: Zebediah Figura <z.figura12@gmail.com>
 Date: Mon, 2 Nov 2020 20:24:07 -0600
 Subject: [PATCH] ntdll: Reimplement Win32 futexes on top of thread-ID alerts.
@@ -6,12 +6,12 @@ Subject: [PATCH] ntdll: Reimplement Win32 futexes on top of thread-ID alerts.
 Signed-off-by: Zebediah Figura <z.figura12@gmail.com>
 ---
  dlls/ntdll/ntdll_misc.h  |   2 +
- dlls/ntdll/sync.c        | 155 ++++++++++++++++++++++++++++++++++++-
+ dlls/ntdll/sync.c        | 185 ++++++++++++++++++++++++++++++++++++++-
  dlls/ntdll/thread.c      |   2 +
  dlls/ntdll/unix/loader.c |   3 -
- dlls/ntdll/unix/sync.c   | 162 ---------------------------------------
+ dlls/ntdll/unix/sync.c   | 162 ----------------------------------
  dlls/ntdll/unixlib.h     |   6 +-
- 6 files changed, 157 insertions(+), 173 deletions(-)
+ 6 files changed, 187 insertions(+), 173 deletions(-)
 
 diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
 index 41e8666a25c..8ba5c2e22fd 100644
@@ -27,7 +27,7 @@ index 41e8666a25c..8ba5c2e22fd 100644
  extern LCID user_lcid, system_lcid;
  extern DWORD ntdll_umbstowcs( const char* src, DWORD srclen, WCHAR* dst, DWORD dstlen ) DECLSPEC_HIDDEN;
 diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
-index 8df7015df9f..c3dfa0bcab1 100644
+index 8df7015df9f..a1c0b90b366 100644
 --- a/dlls/ntdll/sync.c
 +++ b/dlls/ntdll/sync.c
 @@ -37,6 +37,13 @@
@@ -44,7 +44,7 @@ index 8df7015df9f..c3dfa0bcab1 100644
  
  /******************************************************************
   *              RtlRunOnceInitialize (NTDLL.@)
-@@ -531,13 +538,123 @@ NTSTATUS WINAPI RtlSleepConditionVariableSRW( RTL_CONDITION_VARIABLE *variable,
+@@ -531,13 +538,143 @@ NTSTATUS WINAPI RtlSleepConditionVariableSRW( RTL_CONDITION_VARIABLE *variable,
      return status;
  }
  
@@ -156,6 +156,26 @@ index 8df7015df9f..c3dfa0bcab1 100644
 +
 +    InterlockedExchangePointer( &entry->addr, (void *)addr );
 +
++    /* Ensure that the compare-and-swap above is ordered before the comparison
++     * below. This barrier is paired with another in RtlWakeByAddress*().
++     *
++     * In more detail, given the following sequence:
++     *
++     * Thread A                                 Thread B
++     * -----------------------------------------------------------------
++     * RtlWaitOnAddress( &val );                val = 1;
++     * queue thread                             RtlWakeByAddress( &val );
++     * MemoryBarrier(); <---- paired with ----> MemoryBarrier();
++     * compare_addr( &val );                    if (thread is queued)
++     *
++     * We must ensure that the thread is queued [through the above
++     * InterlockedExchangePointer()] before reading "val", and that writes to
++     * "val" by the application happen before we check for queued threads.
++     * Otherwise, thread A can deadlock: "val" may appear unchanged, while
++     * thread B observed that thread A was not queued.
++     */
++    MemoryBarrier();
++
 +    if (!compare_addr( addr, cmp, size ))
 +    {
 +        InterlockedExchangePointer( &entry->addr, NULL );
@@ -169,7 +189,7 @@ index 8df7015df9f..c3dfa0bcab1 100644
  }
  
  /***********************************************************************
-@@ -545,7 +662,21 @@ NTSTATUS WINAPI RtlWaitOnAddress( const void *addr, const void *cmp, SIZE_T size
+@@ -545,7 +682,26 @@ NTSTATUS WINAPI RtlWaitOnAddress( const void *addr, const void *cmp, SIZE_T size
   */
  void WINAPI RtlWakeAddressAll( const void *addr )
  {
@@ -180,6 +200,11 @@ index 8df7015df9f..c3dfa0bcab1 100644
 +    TRACE("%p\n", addr);
 +
 +    if (!addr) return;
++
++    /* Ensure that memory stores to "addr" are ordered before reading the
++     * array below. Paired with another barrier in RtlWaitOnAddress() [q.v.].
++     */
++    MemoryBarrier();
 +
 +    for (array = &first_addr_wait_array; array != NULL; array = array->next)
 +    {
@@ -192,7 +217,7 @@ index 8df7015df9f..c3dfa0bcab1 100644
  }
  
  /***********************************************************************
-@@ -553,5 +684,23 @@ void WINAPI RtlWakeAddressAll( const void *addr )
+@@ -553,5 +709,28 @@ void WINAPI RtlWakeAddressAll( const void *addr )
   */
  void WINAPI RtlWakeAddressSingle( const void *addr )
  {
@@ -203,6 +228,11 @@ index 8df7015df9f..c3dfa0bcab1 100644
 +    TRACE("%p\n", addr);
 +
 +    if (!addr) return;
++
++    /* Ensure that memory stores to "addr" are ordered before reading the
++     * array below. Paired with another barrier in RtlWaitOnAddress() [q.v.].
++     */
++    MemoryBarrier();
 +
 +    for (array = &first_addr_wait_array; array != NULL; array = array->next)
 +    {
