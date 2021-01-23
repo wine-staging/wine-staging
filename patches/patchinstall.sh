@@ -327,6 +327,7 @@ patch_enable_all ()
 	enable_wtsapi32_EnumerateProcesses="$1"
 	enable_xactengine_initial="$1"
 	enable_xactengine2_dll="$1"
+	enable_xactengine3_7_Notification="$1"
 	enable_xactengine3_7_PrepareWave="$1"
 }
 
@@ -1068,6 +1069,9 @@ patch_enable ()
 			;;
 		xactengine2-dll)
 			enable_xactengine2_dll="$2"
+			;;
+		xactengine3_7-Notification)
+			enable_xactengine3_7_Notification="$2"
 			;;
 		xactengine3_7-PrepareWave)
 			enable_xactengine3_7_PrepareWave="$2"
@@ -5273,6 +5277,18 @@ if test "$enable_xactengine2_dll" -eq 1; then
 	patch_apply xactengine2-dll/0020-xactengine2_2-New-Dll.patch
 	patch_apply xactengine2-dll/0021-xactengine2_1-New-Dll.patch
 	patch_apply xactengine2-dll/0022-xactengine2_0-New-Dll.patch
+fi
+
+# Patchset xactengine3_7-Notification
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#50546] xactengine3_7: Send Notification after the Wavebank is created.
+# |
+# | Modified files:
+# |   *	dlls/xactengine3_7/xact_dll.c
+# |
+if test "$enable_xactengine3_7_Notification" -eq 1; then
+	patch_apply xactengine3_7-Notification/0001-xactengine3.7-Delay-Notication-for-WAVEBANKPREPARED.patch
 fi
 
 # Patchset xactengine3_7-PrepareWave
