@@ -2384,6 +2384,7 @@ if test "$enable_dsound_EAX" -eq 1; then
 	patch_apply dsound-EAX/0020-dsound-Add-stub-support-for-DSPROPSETID_EAX20_Listen.patch
 	patch_apply dsound-EAX/0021-dsound-Add-stub-support-for-DSPROPSETID_EAX20_Buffer.patch
 	patch_apply dsound-EAX/0022-dsound-Enable-EAX-by-default.patch
+	patch_apply dsound-EAX/0023-dsound-Fake-success-for-EAX-Set-Buffer-ListenerPrope.patch
 fi
 
 # Patchset dwrite-FontFallback
