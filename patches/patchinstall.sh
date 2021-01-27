@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "2d6462cdee2bd87a49382794e5a554f33c367f09"
+	echo "c1824d578ac514d29e79a5a00d6759f11dbe4813"
 }
 
 # Show version information
@@ -4514,8 +4514,6 @@ fi
 # | 	tools/widl/widltypes.h
 # |
 if test "$enable_widl_winrt_support" -eq 1; then
-	patch_apply widl-winrt-support/0003-widl-Support-WinRT-mta-threading-attribute-parsing.patch
-	patch_apply widl-winrt-support/0004-widl-Support-WinRT-exclusiveto-attribute-parsing.patch
 	patch_apply widl-winrt-support/0005-widl-Support-WinRT-runtimeclass-type.patch
 	patch_apply widl-winrt-support/0006-widl-Support-WinRT-eventadd-eventremove-attributes.patch
 	patch_apply widl-winrt-support/0007-widl-Support-WinRT-flags-attribute-parsing.patch
