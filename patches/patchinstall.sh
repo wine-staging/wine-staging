@@ -168,7 +168,6 @@ patch_enable_all ()
 	enable_ntdll_HashLinks="$1"
 	enable_ntdll_Heap_Improvements="$1"
 	enable_ntdll_Hide_Wine_Exports="$1"
-	enable_ntdll_Interrupt_0x2e="$1"
 	enable_ntdll_Junction_Points="$1"
 	enable_ntdll_Manifest_Range="$1"
 	enable_ntdll_NtAccessCheck="$1"
@@ -592,9 +591,6 @@ patch_enable ()
 			;;
 		ntdll-Hide_Wine_Exports)
 			enable_ntdll_Hide_Wine_Exports="$2"
-			;;
-		ntdll-Interrupt-0x2e)
-			enable_ntdll_Interrupt_0x2e="$2"
 			;;
 		ntdll-Junction_Points)
 			enable_ntdll_Junction_Points="$2"
@@ -3272,18 +3268,6 @@ fi
 # |
 if test "$enable_ntdll_Hide_Wine_Exports" -eq 1; then
 	patch_apply ntdll-Hide_Wine_Exports/0001-ntdll-Add-support-for-hiding-wine-version-informatio.patch
-fi
-
-# Patchset ntdll-Interrupt-0x2e
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#42647] Implement stub handler for int 0x2e
-# |
-# | Modified files:
-# |   *	dlls/ntdll/unix/signal_i386.c
-# |
-if test "$enable_ntdll_Interrupt_0x2e" -eq 1; then
-	patch_apply ntdll-Interrupt-0x2e/0001-ntdll-Catch-windows-int-0x2e-syscall-on-i386.patch
 fi
 
 # Patchset ntdll-Manifest_Range
