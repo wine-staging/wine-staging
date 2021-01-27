@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "c1824d578ac514d29e79a5a00d6759f11dbe4813"
+	echo "24b9203d3544001dd51894f1c1edd99819367198"
 }
 
 # Show version information
@@ -218,7 +218,6 @@ patch_enable_all ()
 	enable_server_Object_Types="$1"
 	enable_server_PeekMessage="$1"
 	enable_server_Realtime_Priority="$1"
-	enable_server_Registry_Notifications="$1"
 	enable_server_Signal_Thread="$1"
 	enable_server_Stored_ACLs="$1"
 	enable_server_unix_name="$1"
@@ -741,9 +740,6 @@ patch_enable ()
 			;;
 		server-Realtime_Priority)
 			enable_server_Realtime_Priority="$2"
-			;;
-		server-Registry_Notifications)
-			enable_server_Registry_Notifications="$2"
 			;;
 		server-Signal_Thread)
 			enable_server_Signal_Thread="$2"
@@ -3835,16 +3831,6 @@ fi
 if test "$enable_server_Key_State" -eq 1; then
 	patch_apply server-Key_State/0001-server-Introduce-a-helper-function-to-update-the-thr.patch
 	patch_apply server-Key_State/0002-server-Implement-locking-and-synchronization-of-keys.patch
-fi
-
-# Patchset server-Registry_Notifications
-# |
-# | Modified files:
-# |   *	dlls/ntdll/tests/reg.c, server/registry.c
-# |
-if test "$enable_server_Registry_Notifications" -eq 1; then
-	patch_apply server-Registry_Notifications/0001-server-Allow-multiple-registry-notifications-for-the.patch
-	patch_apply server-Registry_Notifications/0002-server-Introduce-refcounting-for-registry-notificati.patch
 fi
 
 # Patchset server-unix_name
