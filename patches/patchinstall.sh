@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "24b9203d3544001dd51894f1c1edd99819367198"
+	echo "f72ef20e88fba67254caf0124ab8713e3d15fa2a"
 }
 
 # Show version information
@@ -4478,29 +4478,33 @@ fi
 # |   *	[#49998] widl - Support WinRT idls
 # |
 # | Modified files:
-# |   *	include/windows.foundation.idl, include/windows.media.speechsynthesis.idl, tools/widl/expr.c, tools/widl/hash.c,
-# | 	tools/widl/hash.h, tools/widl/header.c, tools/widl/parser.l, tools/widl/parser.y, tools/widl/typegen.c,
-# | 	tools/widl/typelib.c, tools/widl/typetree.c, tools/widl/typetree.h, tools/widl/utils.c, tools/widl/utils.h,
-# | 	tools/widl/widltypes.h
+# |   *	include/windows.foundation.idl, include/windows.media.speechsynthesis.idl, include/winnt.h, tools/widl/expr.c,
+# | 	tools/widl/hash.c, tools/widl/hash.h, tools/widl/header.c, tools/widl/parser.l, tools/widl/parser.y,
+# | 	tools/widl/typegen.c, tools/widl/typelib.c, tools/widl/typetree.c, tools/widl/typetree.h, tools/widl/utils.c,
+# | 	tools/widl/utils.h, tools/widl/widltypes.h
 # |
 if test "$enable_widl_winrt_support" -eq 1; then
-	patch_apply widl-winrt-support/0005-widl-Support-WinRT-runtimeclass-type.patch
-	patch_apply widl-winrt-support/0006-widl-Support-WinRT-eventadd-eventremove-attributes.patch
-	patch_apply widl-winrt-support/0007-widl-Support-WinRT-flags-attribute-parsing.patch
-	patch_apply widl-winrt-support/0008-widl-Support-using-qualified-names-for-interfaces.patch
-	patch_apply widl-winrt-support/0009-widl-Support-WinRT-static-attribute-parsing.patch
-	patch_apply widl-winrt-support/0010-widl-Support-WinRT-requires-keyword.patch
-	patch_apply widl-winrt-support/0011-widl-Support-WinRT-activatable-attribute.patch
-	patch_apply widl-winrt-support/0012-widl-Support-WinRT-parameterized-type-parsing.patch
-	patch_apply widl-winrt-support/0013-widl-Introduce-new-strappend-helper.patch
-	patch_apply widl-winrt-support/0014-widl-Support-partially-specialized-parameterized-typ.patch
-	patch_apply widl-winrt-support/0015-widl-Support-WinRT-parameterized-interface-type.patch
-	patch_apply widl-winrt-support/0016-widl-Support-WinRT-delegate-type.patch
-	patch_apply widl-winrt-support/0017-widl-Support-WinRT-parameterized-delegate-type.patch
-	patch_apply widl-winrt-support/0018-widl-Compute-signatures-for-parameterized-types.patch
-	patch_apply widl-winrt-support/0019-widl-Compute-uuids-for-parameterized-types.patch
-	patch_apply widl-winrt-support/0020-widl-Generate-helper-macros-for-WinRT-implementation.patch
-	patch_apply widl-winrt-support/0021-include-Add-IVectorView-HSTRING-declaration-to-windo.patch
+	patch_apply widl-winrt-support/0001-include-Define-DECLSPEC_SELECTANY-on-MinGW.patch
+	patch_apply widl-winrt-support/0002-widl-Generate-WinRT-runtimeclass-name-constants.patch
+	patch_apply widl-winrt-support/0003-widl-Support-WinRT-eventadd-eventremove-attributes.patch
+	patch_apply widl-winrt-support/0004-widl-Support-WinRT-flags-attribute-parsing.patch
+	patch_apply widl-winrt-support/0005-widl-Support-using-qualified-names-for-interfaces.patch
+	patch_apply widl-winrt-support/0006-widl-Support-WinRT-static-attribute-parsing.patch
+	patch_apply widl-winrt-support/0007-widl-Support-WinRT-requires-keyword.patch
+	patch_apply widl-winrt-support/0008-widl-Support-WinRT-activatable-attribute.patch
+	patch_apply widl-winrt-support/0009-widl-Support-WinRT-parameterized-type-parsing.patch
+	patch_apply widl-winrt-support/0010-widl-Introduce-new-strappend-helper.patch
+	patch_apply widl-winrt-support/0011-widl-Support-partially-specialized-parameterized-typ.patch
+	patch_apply widl-winrt-support/0012-widl-Support-WinRT-parameterized-interface-type.patch
+	patch_apply widl-winrt-support/0013-widl-Support-WinRT-delegate-type.patch
+	patch_apply widl-winrt-support/0014-widl-Support-WinRT-parameterized-delegate-type.patch
+	patch_apply widl-winrt-support/0015-widl-Compute-signatures-for-parameterized-types.patch
+	patch_apply widl-winrt-support/0016-widl-Compute-uuids-for-parameterized-types.patch
+	patch_apply widl-winrt-support/0017-widl-Generate-helper-macros-for-WinRT-implementation.patch
+	patch_apply widl-winrt-support/0018-include-Add-IVectorView-HSTRING-declaration-to-windo.patch
+	patch_apply widl-winrt-support/0019-widl-Never-use-the-namespace-ABI-prefix-for-global-t.patch
+	patch_apply widl-winrt-support/0020-widl-Precompute-qualified-type-names-and-use-them-fo.patch
+	patch_apply widl-winrt-support/0021-widl-Define-the-C-type-name-as-an-alias-for-the-C-qu.patch
 fi
 
 # Patchset windows.media.speech.dll
