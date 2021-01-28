@@ -5257,6 +5257,7 @@ fi
 # |
 if test "$enable_xactengine3_7_Notification" -eq 1; then
 	patch_apply xactengine3_7-Notification/0001-xactengine3.7-Delay-Notication-for-WAVEBANKPREPARED.patch
+	patch_apply xactengine3_7-Notification/0002-xactengine3_7-Record-context-for-each-notications.patch
 fi
 
 # Patchset xactengine3_7-PrepareWave
