@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "f72ef20e88fba67254caf0124ab8713e3d15fa2a"
+	echo "47ac628b4a4e476c1b044765c95d5be2a7101d14"
 }
 
 # Show version information
@@ -140,7 +140,6 @@ patch_enable_all ()
 	enable_kernel32_FindFirstFile="$1"
 	enable_kernel32_Job_Tests="$1"
 	enable_kernel32_Processor_Group="$1"
-	enable_kernel32_SetProcessDEPPolicy="$1"
 	enable_krnl386_exe16_GDT_LDT_Emulation="$1"
 	enable_krnl386_exe16_Invalid_Console_Handles="$1"
 	enable_libs_Unicode_Collation="$1"
@@ -506,9 +505,6 @@ patch_enable ()
 			;;
 		kernel32-Processor_Group)
 			enable_kernel32_Processor_Group="$2"
-			;;
-		kernel32-SetProcessDEPPolicy)
-			enable_kernel32_SetProcessDEPPolicy="$2"
 			;;
 		krnl386.exe16-GDT_LDT_Emulation)
 			enable_krnl386_exe16_GDT_LDT_Emulation="$2"
@@ -2867,20 +2863,6 @@ fi
 if test "$enable_kernel32_Processor_Group" -eq 1; then
 	patch_apply kernel32-Processor_Group/0001-kernel32-Implement-some-processor-group-functions.patch
 	patch_apply kernel32-Processor_Group/0002-kernel32-Add-stub-for-SetThreadIdealProcessorEx.patch
-fi
-
-# Patchset kernel32-SetProcessDEPPolicy
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#24125] kernel32: Implement SetProcessDEPPolicy.
-# |
-# | Modified files:
-# |   *	dlls/kernel32/process.c
-# |
-if test "$enable_kernel32_SetProcessDEPPolicy" -eq 1; then
-	patch_apply kernel32-SetProcessDEPPolicy/0001-kernel32-Implement-SetProcessDEPPolicy.patch
-	patch_apply kernel32-SetProcessDEPPolicy/0002-kernel32-Implement-GetSystemDEPPolicy.patch
-	patch_apply kernel32-SetProcessDEPPolicy/0003-kernel32-Make-system-DEP-policy-affect-GetProcessDEP.patch
 fi
 
 # Patchset krnl386.exe16-GDT_LDT_Emulation
