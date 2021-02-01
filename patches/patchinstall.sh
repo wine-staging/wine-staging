@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "47ac628b4a4e476c1b044765c95d5be2a7101d14"
+	echo "cfbbde2abce1eedc7f53db3f8af8078fe4a11cac"
 }
 
 # Show version information
@@ -3304,7 +3304,7 @@ fi
 # |   *	dlls/ntdll/Makefile.in, dlls/ntdll/critsection.c, dlls/ntdll/ntdll.spec, dlls/ntdll/ntdll_misc.h, dlls/ntdll/sync.c,
 # | 	dlls/ntdll/tests/Makefile.in, dlls/ntdll/tests/om.c, dlls/ntdll/tests/sync.c, dlls/ntdll/thread.c,
 # | 	dlls/ntdll/unix/loader.c, dlls/ntdll/unix/sync.c, dlls/ntdll/unix/thread.c, dlls/ntdll/unix/unix_private.h,
-# | 	dlls/ntdll/unix/virtual.c, dlls/ntdll/unixlib.h, include/winternl.h
+# | 	dlls/ntdll/unix/virtual.c, dlls/ntdll/unixlib.h, include/winternl.h, server/thread.c
 # |
 if test "$enable_ntdll_NtAlertThreadByThreadId" -eq 1; then
 	patch_apply ntdll-NtAlertThreadByThreadId/0001-ntdll-tests-Move-some-tests-to-a-new-sync.c-file.patch
@@ -4460,16 +4460,13 @@ fi
 # |   *	[#49998] widl - Support WinRT idls
 # |
 # | Modified files:
-# |   *	include/windows.foundation.idl, include/windows.media.speechsynthesis.idl, include/winnt.h, tools/widl/expr.c,
-# | 	tools/widl/hash.c, tools/widl/hash.h, tools/widl/header.c, tools/widl/parser.l, tools/widl/parser.y,
-# | 	tools/widl/typegen.c, tools/widl/typelib.c, tools/widl/typetree.c, tools/widl/typetree.h, tools/widl/utils.c,
-# | 	tools/widl/utils.h, tools/widl/widltypes.h
+# |   *	include/windows.foundation.idl, include/windows.media.speechsynthesis.idl, tools/widl/expr.c, tools/widl/hash.c,
+# | 	tools/widl/hash.h, tools/widl/header.c, tools/widl/parser.l, tools/widl/parser.y, tools/widl/typegen.c,
+# | 	tools/widl/typelib.c, tools/widl/typetree.c, tools/widl/typetree.h, tools/widl/utils.c, tools/widl/utils.h,
+# | 	tools/widl/widltypes.h
 # |
 if test "$enable_widl_winrt_support" -eq 1; then
-	patch_apply widl-winrt-support/0001-include-Define-DECLSPEC_SELECTANY-on-MinGW.patch
 	patch_apply widl-winrt-support/0002-widl-Generate-WinRT-runtimeclass-name-constants.patch
-	patch_apply widl-winrt-support/0003-widl-Support-WinRT-eventadd-eventremove-attributes.patch
-	patch_apply widl-winrt-support/0004-widl-Support-WinRT-flags-attribute-parsing.patch
 	patch_apply widl-winrt-support/0005-widl-Support-using-qualified-names-for-interfaces.patch
 	patch_apply widl-winrt-support/0006-widl-Support-WinRT-static-attribute-parsing.patch
 	patch_apply widl-winrt-support/0007-widl-Support-WinRT-requires-keyword.patch
