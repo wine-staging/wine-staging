@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "cfbbde2abce1eedc7f53db3f8af8078fe4a11cac"
+	echo "433b9081ba7c862feb947400f507228e793d7d4c"
 }
 
 # Show version information
@@ -98,7 +98,6 @@ patch_enable_all ()
 	enable_cryptext_CryptExtOpenCER="$1"
 	enable_d3d11_Deferred_Context="$1"
 	enable_d3drm_IDirect3D3_support="$1"
-	enable_d3dx9_32bpp_Alpha_Channel="$1"
 	enable_d3dx9_36_BumpLuminance="$1"
 	enable_d3dx9_36_CloneEffect="$1"
 	enable_d3dx9_36_D3DXDisassembleShader="$1"
@@ -379,9 +378,6 @@ patch_enable ()
 			;;
 		d3drm-IDirect3D3-support)
 			enable_d3drm_IDirect3D3_support="$2"
-			;;
-		d3dx9-32bpp_Alpha_Channel)
-			enable_d3dx9_32bpp_Alpha_Channel="$2"
 			;;
 		d3dx9_36-BumpLuminance)
 			enable_d3dx9_36_BumpLuminance="$2"
@@ -2034,18 +2030,6 @@ if test "$enable_d3drm_IDirect3D3_support" -eq 1; then
 	patch_apply d3drm-IDirect3D3-support/0001-d3drm-Support-IDirect3D3-when-creating-device.patch
 fi
 
-# Patchset d3dx9-32bpp_Alpha_Channel
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#48563] Runaway: A Twist of Fate renders its cursor incorrectly
-# |
-# | Modified files:
-# |   *	dlls/d3dx9_36/surface.c, dlls/d3dx9_36/tests/surface.c
-# |
-if test "$enable_d3dx9_32bpp_Alpha_Channel" -eq 1; then
-	patch_apply d3dx9-32bpp_Alpha_Channel/0001-d3dx9-Return-D3DFMT_A8R8G8B8-in-D3DXGetImageInfoFrom.patch
-fi
-
 # Patchset d3dx9_36-BumpLuminance
 # |
 # | Modified files:
@@ -3304,7 +3288,7 @@ fi
 # |   *	dlls/ntdll/Makefile.in, dlls/ntdll/critsection.c, dlls/ntdll/ntdll.spec, dlls/ntdll/ntdll_misc.h, dlls/ntdll/sync.c,
 # | 	dlls/ntdll/tests/Makefile.in, dlls/ntdll/tests/om.c, dlls/ntdll/tests/sync.c, dlls/ntdll/thread.c,
 # | 	dlls/ntdll/unix/loader.c, dlls/ntdll/unix/sync.c, dlls/ntdll/unix/thread.c, dlls/ntdll/unix/unix_private.h,
-# | 	dlls/ntdll/unix/virtual.c, dlls/ntdll/unixlib.h, include/winternl.h, server/thread.c
+# | 	dlls/ntdll/unix/virtual.c, dlls/ntdll/unixlib.h, include/winternl.h
 # |
 if test "$enable_ntdll_NtAlertThreadByThreadId" -eq 1; then
 	patch_apply ntdll-NtAlertThreadByThreadId/0001-ntdll-tests-Move-some-tests-to-a-new-sync.c-file.patch
