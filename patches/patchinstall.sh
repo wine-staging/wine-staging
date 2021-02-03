@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "433b9081ba7c862feb947400f507228e793d7d4c"
+	echo "2201ca08fb03d069fa2ccf46773c150a6f7988bc"
 }
 
 # Show version information
@@ -136,7 +136,6 @@ patch_enable_all ()
 	enable_iphlpapi_System_Ping="$1"
 	enable_kernel32_CopyFileEx="$1"
 	enable_kernel32_Debugger="$1"
-	enable_kernel32_FindFirstFile="$1"
 	enable_kernel32_Job_Tests="$1"
 	enable_kernel32_Processor_Group="$1"
 	enable_krnl386_exe16_GDT_LDT_Emulation="$1"
@@ -492,9 +491,6 @@ patch_enable ()
 			;;
 		kernel32-Debugger)
 			enable_kernel32_Debugger="$2"
-			;;
-		kernel32-FindFirstFile)
-			enable_kernel32_FindFirstFile="$2"
 			;;
 		kernel32-Job_Tests)
 			enable_kernel32_Job_Tests="$2"
@@ -2812,19 +2808,6 @@ if test "$enable_kernel32_Debugger" -eq 1; then
 	patch_apply kernel32-Debugger/0001-kernel32-Always-start-debugger-on-WinSta0.patch
 fi
 
-# Patchset kernel32-FindFirstFile
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#22635] Strip invalid characters from mask in FindFirstFileExW
-# |
-# | Modified files:
-# |   *	dlls/kernel32/tests/file.c, dlls/kernelbase/file.c
-# |
-if test "$enable_kernel32_FindFirstFile" -eq 1; then
-	patch_apply kernel32-FindFirstFile/0001-kernel32-Strip-invalid-characters-from-mask-in-FindF.patch
-	patch_apply kernel32-FindFirstFile/0002-kernel32-tests-Add-tests-for-FindFirstFileA-with-inv.patch
-fi
-
 # Patchset kernel32-Job_Tests
 # |
 # | Modified files:
@@ -4450,7 +4433,6 @@ fi
 # | 	tools/widl/widltypes.h
 # |
 if test "$enable_widl_winrt_support" -eq 1; then
-	patch_apply widl-winrt-support/0002-widl-Generate-WinRT-runtimeclass-name-constants.patch
 	patch_apply widl-winrt-support/0005-widl-Support-using-qualified-names-for-interfaces.patch
 	patch_apply widl-winrt-support/0006-widl-Support-WinRT-static-attribute-parsing.patch
 	patch_apply widl-winrt-support/0007-widl-Support-WinRT-requires-keyword.patch
