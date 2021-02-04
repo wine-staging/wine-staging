@@ -1,19 +1,19 @@
-From 47bde84ad4a5dc3320f7531e12909046730835dd Mon Sep 17 00:00:00 2001
+From d96043bc45facf3fd26a69f6338968f9fdb96be7 Mon Sep 17 00:00:00 2001
 From: "Erich E. Hoover" <erich.e.hoover@gmail.com>
 Date: Thu, 11 Apr 2019 12:31:16 -0600
 Subject: ntdll: Add support for reading relative symlinks.
 
 Signed-off-by: Erich E. Hoover <erich.e.hoover@gmail.com>
 ---
- dlls/ntdll/tests/file.c | 13 ++++++++-
- dlls/ntdll/unix/file.c  | 60 ++++++++++++++++++++++++++++++++++++++++-
- 2 files changed, 71 insertions(+), 2 deletions(-)
+ dlls/ntdll/tests/file.c | 15 ++++++++++++++-
+ dlls/ntdll/unix/file.c  | 38 +++++++++++++++++++++++++++++++++-----
+ 2 files changed, 47 insertions(+), 6 deletions(-)
 
 diff --git a/dlls/ntdll/tests/file.c b/dlls/ntdll/tests/file.c
-index 7e9b214eb63..c288d7f62ab 100644
+index e2dae32ca18..cd207497b24 100644
 --- a/dlls/ntdll/tests/file.c
 +++ b/dlls/ntdll/tests/file.c
-@@ -5427,9 +5427,20 @@ static void test_reparse_points(void)
+@@ -5441,9 +5441,22 @@ static void test_reparse_points(void)
      ok(dwret == STATUS_SUCCESS, "Failed to get symlink folder's attributes (0x%x).\n", dwret);
      buffer_len = build_reparse_buffer(targetW, IO_REPARSE_TAG_SYMLINK, SYMLINK_FLAG_RELATIVE, &buffer);
      bret = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, (LPVOID)buffer, buffer_len, NULL, 0, &dwret, 0);
@@ -27,6 +27,8 @@ index 7e9b214eb63..c288d7f62ab 100644
 +    bret = DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, NULL, 0, (LPVOID)buffer, buffer_len, &dwret, 0);
 +    ok(bret, "Failed to read relative symlink!\n");
 +    string_len = buffer->SymbolicLinkReparseBuffer.SubstituteNameLength;
++    ok(string_len != lstrlenW(targetW), "Symlink destination length does not match ('%d' != '%d')!\n",
++                                        string_len, lstrlenW(targetW));
 +    dest = &buffer->SymbolicLinkReparseBuffer.PathBuffer[buffer->SymbolicLinkReparseBuffer.SubstituteNameOffset/sizeof(WCHAR)];
 +    ok((memcmp(dest, targetW, string_len) == 0), "Symlink destination does not match ('%s' != '%s')!\n",
 +                                                 wine_dbgstr_w(dest), wine_dbgstr_w(targetW));
@@ -36,18 +38,10 @@ index 7e9b214eb63..c288d7f62ab 100644
      /* Cleanup */
      pRtlFreeUnicodeString(&nameW);
 diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
-index 638621fec87..628a76c795a 100644
+index 1b3c019a929..920d21af5bd 100644
 --- a/dlls/ntdll/unix/file.c
 +++ b/dlls/ntdll/unix/file.c
-@@ -6008,6 +6008,7 @@ NTSTATUS FILE_GetSymlink(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out_s
-     BOOL dest_allocated = FALSE;
-     int dest_fd, needs_close;
-     int unix_dest_len;
-+    int path_len = 0;
-     DWORD max_length;
-     NTSTATUS status;
-     ULONG flags = 0;
-@@ -6033,6 +6034,11 @@ NTSTATUS FILE_GetSymlink(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out_s
+@@ -6046,6 +6046,11 @@ NTSTATUS FILE_GetSymlink(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out_s
  
      /* Decode the reparse tag from the symlink */
      p = unix_dest;
@@ -59,70 +53,55 @@ index 638621fec87..628a76c795a 100644
      if (*p++ != '/')
      {
          status = STATUS_NOT_IMPLEMENTED;
-@@ -6070,6 +6076,24 @@ NTSTATUS FILE_GetSymlink(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out_s
+@@ -6083,24 +6088,47 @@ NTSTATUS FILE_GetSymlink(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out_s
      memmove(unix_dest, p, unix_dest_len);
      unix_dest[unix_dest_len] = 0;
  
+-    for (;;)
 +    /* convert the relative path into an absolute path */
 +    if (flags == SYMLINK_FLAG_RELATIVE)
-+    {
-+        int unix_src_len = strlen(unix_src);
-+        int offset = unix_src_len + 2;
-+        char *d;
-+
-+        memcpy( &unix_dest[offset], unix_dest, unix_dest_len + 1 );
-+        memcpy( unix_dest, unix_src, unix_src_len );
-+        unix_dest[unix_src_len] = 0;
-+        d = dirname( unix_dest );
-+        if (d != unix_dest) strcpy( unix_dest, d );
-+        strcat( unix_dest, "/" );
-+        path_len = strlen( unix_dest );
-+        memmove( &unix_dest[path_len], &unix_dest[offset], unix_dest_len + 1 );
-+        unix_dest_len = strlen( unix_dest );
-+    }
-+    /* resolve the NT path */
-     for (;;)
      {
-         nt_dest = malloc( nt_dest_len * sizeof(WCHAR) );
-@@ -6087,7 +6111,41 @@ NTSTATUS FILE_GetSymlink(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out_s
-         goto cleanup;
-     nt_dest_len *= sizeof(WCHAR);
- 
--    prefix_len = strlen("\\??\\");
-+    /* remove the relative path from the NT path */
-+    if (flags == SYMLINK_FLAG_RELATIVE)
-+    {
-+        SIZE_T nt_path_len = PATH_MAX;
-+        int relative_offset;
-+        WCHAR *nt_path;
++        int i;
 +
-+        unix_dest_len = path_len;
++        nt_dest_len = unix_dest_len;
+         nt_dest = malloc( nt_dest_len * sizeof(WCHAR) );
+         if (!nt_dest)
+         {
+             status = STATUS_NO_MEMORY;
+             goto cleanup;
+         }
+-        status = wine_unix_to_nt_file_name( unix_dest, nt_dest, &nt_dest_len );
+-        if (status != STATUS_BUFFER_TOO_SMALL) break;
+-        free( nt_dest );
++        /* wine_unix_to_nt_file_name does not work on relative paths, so convert manually */
++        for (i = 0; i < unix_dest_len; i++)
++        {
++            if (unix_dest[i] == '/') unix_dest[i] = '\\';
++        }
++        ascii_to_unicode( nt_dest, unix_dest, unix_dest_len );
++    }
++    else
++    {
++        /* resolve the NT path */
 +        for (;;)
 +        {
-+            nt_path = malloc( nt_path_len * sizeof(WCHAR) );
-+            if (!nt_path)
++            nt_dest = malloc( nt_dest_len * sizeof(WCHAR) );
++            if (!nt_dest)
 +            {
 +                status = STATUS_NO_MEMORY;
 +                goto cleanup;
 +            }
-+            status = wine_unix_to_nt_file_name( unix_dest, nt_path, &nt_path_len );
++            status = wine_unix_to_nt_file_name( unix_dest, nt_dest, &nt_dest_len );
 +            if (status != STATUS_BUFFER_TOO_SMALL) break;
-+            free( nt_path );
++            free( nt_dest );
 +        }
-+        if (status != STATUS_SUCCESS)
-+            goto cleanup;
-+        relative_offset = lstrlenW( nt_path );
-+        if (wcsnicmp( nt_path, nt_dest, relative_offset ) != 0)
-+        {
-+            free( nt_path );
-+            status = STATUS_IO_REPARSE_DATA_INVALID;
-+            goto cleanup;
-+        }
-+        free( nt_path );
-+        nt_dest_len = lstrlenW( &nt_dest[relative_offset] ) * sizeof(WCHAR);
-+        memmove( nt_dest, &nt_dest[relative_offset], nt_dest_len + sizeof(WCHAR) );
-+    }
-+
+     }
+     dest_allocated = TRUE;
+     if (status != STATUS_SUCCESS)
+         goto cleanup;
+     nt_dest_len *= sizeof(WCHAR);
+ 
+-    prefix_len = strlen("\\??\\");
 +    prefix_len = (flags == SYMLINK_FLAG_RELATIVE) ? 0 : strlen("\\??\\");
      switch(buffer->ReparseTag)
      {

@@ -2501,22 +2501,23 @@ if test "$enable_ntdll_Junction_Points" -eq 1; then
 	patch_apply ntdll-Junction_Points/0012-ntdll-Add-support-for-file-symlinks.patch
 	patch_apply ntdll-Junction_Points/0013-ntdll-Allow-creation-of-dangling-reparse-points-to-n.patch
 	patch_apply ntdll-Junction_Points/0014-ntdll-Correctly-report-file-symbolic-links-as-files.patch
-	patch_apply ntdll-Junction_Points/0015-kernel32-Set-error-code-when-attempting-to-delete-fi.patch
-	patch_apply ntdll-Junction_Points/0016-server-Properly-handle-file-symlink-deletion.patch
-	patch_apply ntdll-Junction_Points/0017-ntdll-Always-report-symbolic-links-as-containing-zer.patch
-	patch_apply ntdll-Junction_Points/0018-ntdll-Find-dangling-symlinks-quickly.patch
-	patch_apply ntdll-Junction_Points/0019-kernel32-Implement-CreateSymbolicLink-A-W-with-ntdll.patch
-	patch_apply ntdll-Junction_Points/0020-kernel32-Add-reparse-support-to-FindNextFile.patch
-	patch_apply ntdll-Junction_Points/0021-wcmd-Display-reparse-point-type-in-directory-listing.patch
-	patch_apply ntdll-Junction_Points/0022-wcmd-Show-reparse-point-target-in-directory-listing.patch
-	patch_apply ntdll-Junction_Points/0023-wcmd-Add-junction-point-support-to-mklink.patch
-	patch_apply ntdll-Junction_Points/0024-server-Fix-obtaining-information-about-a-symlink.patch
-	patch_apply ntdll-Junction_Points/0025-ntdll-Allow-set_file_times_precise-to-work-on-repars.patch
-	patch_apply ntdll-Junction_Points/0026-kernelbase-Convert-FILE_FLAG_OPEN_REPARSE_POINT-for-.patch
-	patch_apply ntdll-Junction_Points/0027-server-Implement-FILE_OPEN_REPARSE_POINT-option.patch
-	patch_apply ntdll-Junction_Points/0028-ntdll-Succeed-with-no-data-for-NtReadFile-on-reparse.patch
-	patch_apply ntdll-Junction_Points/0029-ntdll-Support-reparse-point-properties-in-fd_get_fil.patch
-	patch_apply ntdll-Junction_Points/0030-ntdll-Add-support-for-FileAttributeTagInformation.patch
+	patch_apply ntdll-Junction_Points/0015-kernelbase-Convert-FILE_FLAG_OPEN_REPARSE_POINT-for-.patch
+	patch_apply ntdll-Junction_Points/0016-server-Implement-FILE_OPEN_REPARSE_POINT-option.patch
+	patch_apply ntdll-Junction_Points/0017-ntdll-Allow-set_file_times_precise-to-work-on-repars.patch
+	patch_apply ntdll-Junction_Points/0018-server-Properly-handle-file-symlink-deletion.patch
+	patch_apply ntdll-Junction_Points/0019-server-Properly-handle-deleting-dangling-symlinks.patch
+	patch_apply ntdll-Junction_Points/0020-kernelbase-Use-FILE_OPEN_REPARSE_POINT-in-RemoveDire.patch
+	patch_apply ntdll-Junction_Points/0021-ntdll-Always-report-symbolic-links-as-containing-zer.patch
+	patch_apply ntdll-Junction_Points/0022-ntdll-Find-dangling-symlinks-quickly.patch
+	patch_apply ntdll-Junction_Points/0023-kernel32-Implement-CreateSymbolicLink-A-W-with-ntdll.patch
+	patch_apply ntdll-Junction_Points/0024-kernel32-Add-reparse-support-to-FindNextFile.patch
+	patch_apply ntdll-Junction_Points/0025-wcmd-Display-reparse-point-type-in-directory-listing.patch
+	patch_apply ntdll-Junction_Points/0026-wcmd-Show-reparse-point-target-in-directory-listing.patch
+	patch_apply ntdll-Junction_Points/0027-wcmd-Add-junction-point-support-to-mklink.patch
+	patch_apply ntdll-Junction_Points/0028-server-Fix-obtaining-information-about-a-symlink.patch
+	patch_apply ntdll-Junction_Points/0029-ntdll-Succeed-with-no-data-for-NtReadFile-on-reparse.patch
+	patch_apply ntdll-Junction_Points/0030-ntdll-Support-reparse-point-properties-in-fd_get_fil.patch
+	patch_apply ntdll-Junction_Points/0031-ntdll-Add-support-for-FileAttributeTagInformation.patch
 fi
 
 # Patchset server-PeekMessage
