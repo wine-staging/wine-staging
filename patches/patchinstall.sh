@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "2201ca08fb03d069fa2ccf46773c150a6f7988bc"
+	echo "dd417540bb3afb3aa5a04a007eea9a7ee347655b"
 }
 
 # Show version information
@@ -212,7 +212,6 @@ patch_enable_all ()
 	enable_server_File_Permissions="$1"
 	enable_server_Inherited_ACLs="$1"
 	enable_server_Key_State="$1"
-	enable_server_Object_Types="$1"
 	enable_server_PeekMessage="$1"
 	enable_server_Realtime_Priority="$1"
 	enable_server_Signal_Thread="$1"
@@ -719,9 +718,6 @@ patch_enable ()
 			;;
 		server-Key_State)
 			enable_server_Key_State="$2"
-			;;
-		server-Object_Types)
-			enable_server_Object_Types="$2"
 			;;
 		server-PeekMessage)
 			enable_server_PeekMessage="$2"
@@ -1575,13 +1571,6 @@ if test "$enable_ntdll_NtDevicePath" -eq 1; then
 		abort "Patchset ntdll-Pipe_SpecialCharacters disabled, but ntdll-NtDevicePath depends on that."
 	fi
 	enable_ntdll_Pipe_SpecialCharacters=1
-fi
-
-if test "$enable_ntdll_NtAlertThreadByThreadId" -eq 1; then
-	if test "$enable_server_Object_Types" -gt 1; then
-		abort "Patchset server-Object_Types disabled, but ntdll-NtAlertThreadByThreadId depends on that."
-	fi
-	enable_server_Object_Types=1
 fi
 
 if test "$enable_ntdll_Builtin_Prot" -eq 1; then
@@ -3237,33 +3226,7 @@ if test "$enable_ntdll_NtAccessCheck" -eq 1; then
 	patch_apply ntdll-NtAccessCheck/0001-ntdll-Improve-invalid-paramater-handling-in-NtAccess.patch
 fi
 
-# Patchset server-Object_Types
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#44629] Process Hacker can't enumerate handles
-# |   *	[#45374] Yet Another Process Monitor (.NET 2.0 app) reports System.AccessViolationException
-# |
-# | Modified files:
-# |   *	dlls/ntdll/tests/info.c, dlls/ntdll/tests/om.c, dlls/ntdll/unix/file.c, dlls/ntdll/unix/system.c, include/winternl.h,
-# | 	server/completion.c, server/directory.c, server/event.c, server/file.c, server/handle.c, server/mailslot.c,
-# | 	server/main.c, server/mapping.c, server/mutex.c, server/named_pipe.c, server/object.c, server/object.h,
-# | 	server/process.c, server/protocol.def, server/registry.c, server/semaphore.c, server/symlink.c, server/thread.c,
-# | 	server/timer.c, server/token.c, server/winstation.c
-# |
-if test "$enable_server_Object_Types" -eq 1; then
-	patch_apply server-Object_Types/0001-ntdll-Implement-SystemExtendedHandleInformation-in-N.patch
-	patch_apply server-Object_Types/0002-ntdll-Implement-ObjectTypesInformation-in-NtQueryObj.patch
-	patch_apply server-Object_Types/0003-server-Register-types-during-startup.patch
-	patch_apply server-Object_Types/0004-server-Rename-ObjectType-to-Type.patch
-	patch_apply server-Object_Types/0008-ntdll-Set-TypeIndex-for-ObjectTypeInformation-in-NtQ.patch
-	patch_apply server-Object_Types/0009-ntdll-Set-object-type-for-System-Extended-HandleInfo.patch
-	patch_apply server-Object_Types/0010-ntdll-Mimic-object-type-behavior-for-different-windo.patch
-fi
-
 # Patchset ntdll-NtAlertThreadByThreadId
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	server-Object_Types
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#50292] Process-local synchronization objects use private interfaces into the Unix library
@@ -4429,28 +4392,38 @@ fi
 # |
 # | Modified files:
 # |   *	include/windows.foundation.idl, include/windows.media.speechsynthesis.idl, tools/widl/expr.c, tools/widl/hash.c,
-# | 	tools/widl/hash.h, tools/widl/header.c, tools/widl/parser.l, tools/widl/parser.y, tools/widl/typegen.c,
-# | 	tools/widl/typelib.c, tools/widl/typetree.c, tools/widl/typetree.h, tools/widl/utils.c, tools/widl/utils.h,
-# | 	tools/widl/widltypes.h
+# | 	tools/widl/hash.h, tools/widl/header.c, tools/widl/parser.h, tools/widl/parser.l, tools/widl/parser.y,
+# | 	tools/widl/typegen.c, tools/widl/typelib.c, tools/widl/typetree.c, tools/widl/typetree.h, tools/widl/utils.c,
+# | 	tools/widl/utils.h, tools/widl/widltypes.h
 # |
 if test "$enable_widl_winrt_support" -eq 1; then
-	patch_apply widl-winrt-support/0005-widl-Support-using-qualified-names-for-interfaces.patch
-	patch_apply widl-winrt-support/0006-widl-Support-WinRT-static-attribute-parsing.patch
-	patch_apply widl-winrt-support/0007-widl-Support-WinRT-requires-keyword.patch
-	patch_apply widl-winrt-support/0008-widl-Support-WinRT-activatable-attribute.patch
-	patch_apply widl-winrt-support/0009-widl-Support-WinRT-parameterized-type-parsing.patch
-	patch_apply widl-winrt-support/0010-widl-Introduce-new-strappend-helper.patch
-	patch_apply widl-winrt-support/0011-widl-Support-partially-specialized-parameterized-typ.patch
-	patch_apply widl-winrt-support/0012-widl-Support-WinRT-parameterized-interface-type.patch
-	patch_apply widl-winrt-support/0013-widl-Support-WinRT-delegate-type.patch
-	patch_apply widl-winrt-support/0014-widl-Support-WinRT-parameterized-delegate-type.patch
-	patch_apply widl-winrt-support/0015-widl-Compute-signatures-for-parameterized-types.patch
-	patch_apply widl-winrt-support/0016-widl-Compute-uuids-for-parameterized-types.patch
-	patch_apply widl-winrt-support/0017-widl-Generate-helper-macros-for-WinRT-implementation.patch
-	patch_apply widl-winrt-support/0018-include-Add-IVectorView-HSTRING-declaration-to-windo.patch
-	patch_apply widl-winrt-support/0019-widl-Never-use-the-namespace-ABI-prefix-for-global-t.patch
-	patch_apply widl-winrt-support/0020-widl-Precompute-qualified-type-names-and-use-them-fo.patch
-	patch_apply widl-winrt-support/0021-widl-Define-the-C-type-name-as-an-alias-for-the-C-qu.patch
+	patch_apply widl-winrt-support/0001-widl-Factor-and-cleanup-interface-type-declaration-a.patch
+	patch_apply widl-winrt-support/0002-widl-Factor-and-cleanup-dispinterface-type-declarati.patch
+	patch_apply widl-winrt-support/0003-widl-Factor-and-cleanup-apicontract-type-declaration.patch
+	patch_apply widl-winrt-support/0004-widl-Factor-and-cleanup-module-type-declaration-and-.patch
+	patch_apply widl-winrt-support/0005-widl-Fold-aIDENTIFIER-aKNOWNTYPE-rules-together.patch
+	patch_apply widl-winrt-support/0006-widl-Add-explicit-namespace-parameter-to-find_type_o.patch
+	patch_apply widl-winrt-support/0007-widl-Use-explicit-namespace-parameter-for-qualified-.patch
+	patch_apply widl-winrt-support/0008-widl-Disallow-qualified-types-in-expressions.patch
+	patch_apply widl-winrt-support/0009-widl-Remove-aNAMESPACE-token-from-the-lexer.patch
+	patch_apply widl-winrt-support/0010-widl-Fold-inherit-cases-by-using-typename-rule-in-qu.patch
+	patch_apply widl-winrt-support/0011-widl-Support-referencing-qualified-interface-names.patch
+	patch_apply widl-winrt-support/0012-widl-Support-WinRT-activatable-attribute-parsing.patch
+	patch_apply widl-winrt-support/0013-widl-Support-WinRT-static-attribute-parsing.patch
+	patch_apply widl-winrt-support/0014-include-Add-Windows.Media.SpeechSynthesis.SpeechSynt.patch
+	patch_apply widl-winrt-support/0015-widl-Support-WinRT-requires-keyword.patch
+	patch_apply widl-winrt-support/0016-widl-Support-WinRT-parameterized-type-parsing.patch
+	patch_apply widl-winrt-support/0017-widl-Introduce-new-strappend-helper.patch
+	patch_apply widl-winrt-support/0018-widl-Support-WinRT-parameterized-interface-type.patch
+	patch_apply widl-winrt-support/0019-widl-Support-WinRT-delegate-type.patch
+	patch_apply widl-winrt-support/0020-widl-Support-WinRT-parameterized-delegate-type.patch
+	patch_apply widl-winrt-support/0021-widl-Compute-signatures-for-parameterized-types.patch
+	patch_apply widl-winrt-support/0022-widl-Compute-uuids-for-parameterized-types.patch
+	patch_apply widl-winrt-support/0023-widl-Generate-helper-macros-for-WinRT-implementation.patch
+	patch_apply widl-winrt-support/0024-include-Add-IVectorView-HSTRING-declaration-to-windo.patch
+	patch_apply widl-winrt-support/0025-widl-Never-use-the-namespace-ABI-prefix-for-global-t.patch
+	patch_apply widl-winrt-support/0026-widl-Precompute-qualified-type-names-and-use-them-fo.patch
+	patch_apply widl-winrt-support/0027-widl-Define-the-C-type-name-as-an-alias-for-the-C-qu.patch
 fi
 
 # Patchset windows.media.speech.dll

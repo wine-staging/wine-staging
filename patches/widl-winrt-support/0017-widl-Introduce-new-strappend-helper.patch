@@ -1,0 +1,309 @@
+From ef2cb861ce5a9d47ecc10e337a192a3de32dbda3 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Tue, 1 Dec 2020 14:41:01 +0100
+Subject: [PATCH] widl: Introduce new strappend helper.
+
+And use it for format_namespace to grow buffer as needed.
+---
+ include/windows.foundation.idl |  9 +++++
+ tools/widl/parser.y            | 35 ++++++++++++++++
+ tools/widl/typetree.c          | 73 +++++++++++++++++++++-------------
+ tools/widl/typetree.h          |  3 ++
+ tools/widl/utils.c             | 37 +++++++++++++++++
+ tools/widl/utils.h             |  1 +
+ tools/widl/widltypes.h         |  1 +
+ 7 files changed, 132 insertions(+), 27 deletions(-)
+
+diff --git a/include/windows.foundation.idl b/include/windows.foundation.idl
+index ab7c4753c3b..5f7a49c38e4 100644
+--- a/include/windows.foundation.idl
++++ b/include/windows.foundation.idl
+@@ -127,6 +127,15 @@ namespace Windows {
+                 HRESULT GetMany([in] UINT32 count, [out] T *items, [out, retval] UINT32 *value);
+             }
+ 
++            [
++                contract(Windows.Foundation.FoundationContract, 1.0),
++                uuid(faa585ea-6214-4217-afda-7f46de5869b3)
++            ]
++            interface IIterable<T> : IInspectable
++            {
++                HRESULT First([out, retval] Windows.Foundation.Collections.IIterator<T> **value);
++            }
++
+             [
+                 contract(Windows.Foundation.FoundationContract, 1.0),
+                 uuid(bbe1fa4c-b0e3-4583-baef-1f1b2e483e56)
+diff --git a/tools/widl/parser.y b/tools/widl/parser.y
+index c417a3ec963..92f6345e2dc 100644
+--- a/tools/widl/parser.y
++++ b/tools/widl/parser.y
+@@ -294,6 +294,8 @@ static typelib_t *current_typelib;
+ %type <type> type unqualified_type qualified_type
+ %type <type> type_parameter
+ %type <typelist> type_parameters
++%type <type> parameterized_type
++%type <typelist> parameterized_types
+ %type <typelist> requires required_types
+ %type <ifref> class_interface
+ %type <ifref_list> class_interfaces
+@@ -910,6 +912,20 @@ qualified_type:
+ 	| namespace_pfx typename		{ $$ = find_type_or_error($1, $2); }
+ 	;
+ 
++parameterized_type: qualified_type '<' parameterized_types '>'
++						{ $$ = find_parameterized_type($1, $3); }
++	;
++
++parameterized_types:
++	  base_type				{ $$ = append_type(NULL, $1); }
++	| qualified_type			{ $$ = append_type(NULL, $1); }
++	| qualified_type '*'			{ $$ = append_type(NULL, type_new_pointer($1)); }
++	| parameterized_type			{ $$ = append_type(NULL, $1); }
++	| parameterized_type '*'		{ $$ = append_type(NULL, type_new_pointer($1)); }
++	| parameterized_types ',' parameterized_types
++						{ $$ = append_types($1, $3); }
++	;
++
+ coclass:  tCOCLASS typename			{ $$ = type_coclass_declare($2); }
+ 	;
+ 
+@@ -966,6 +982,7 @@ dispinterfacedef:
+ 
+ inherit:					{ $$ = NULL; }
+ 	| ':' qualified_type                    { $$ = $2; }
++	| ':' parameterized_type		{ $$ = $2; }
+ 	;
+ 
+ type_parameter: typename			{ $$ = get_type(TYPE_PARAMETER, $1, parameters_namespace, 0); }
+@@ -984,6 +1001,7 @@ interface:
+ 
+ required_types:
+ 	  qualified_type			{ $$ = append_type(NULL, $1); }
++	| parameterized_type			{ $$ = append_type(NULL, $1); }
+ 	| required_types ',' required_types	{ $$ = append_types($1, $3); }
+ 
+ requires:					{ $$ = NULL; }
+@@ -1208,6 +1226,7 @@ unqualified_type:
+ type:
+ 	  unqualified_type
+ 	| namespace_pfx typename		{ $$ = find_type_or_error($1, $2); }
++	| parameterized_type			{ $$ = $1; }
+ 	;
+ 
+ typedef: m_attributes tTYPEDEF m_attributes decl_spec declarator_list
+@@ -3279,3 +3298,19 @@ void init_loc_info(loc_info_t *i)
+     i->line_number = line_number;
+     i->near_text = parser_text;
+ }
++
++type_t *find_parameterized_type(type_t *type, type_list_t *params)
++{
++    char *name = format_parameterized_type_name(type, params);
++
++    if (parameters_namespace)
++    {
++        assert(type->type_type == TYPE_PARAMETERIZED_TYPE);
++        type = type_parameterized_type_specialize_partial(type, params);
++    }
++    /* FIXME: If not in another parameterized type, we'll have to look for the declared specialization. */
++    else error_loc("parameterized type '%s' not declared\n", name);
++
++    free(name);
++    return type;
++}
+diff --git a/tools/widl/typetree.c b/tools/widl/typetree.c
+index 3a0934af7c5..1a5b13add96 100644
+--- a/tools/widl/typetree.c
++++ b/tools/widl/typetree.c
+@@ -89,41 +89,52 @@ const char *type_get_name(const type_t *type, enum name_type name_type)
+     return NULL;
+ }
+ 
+-static char *append_namespace(char *ptr, struct namespace *namespace, const char *separator, const char *abi_prefix)
++static size_t append_namespace(char **buf, size_t *len, size_t pos, struct namespace *namespace, const char *separator, const char *abi_prefix)
+ {
+-    if(is_global_namespace(namespace)) {
+-        if(!abi_prefix) return ptr;
+-        strcpy(ptr, abi_prefix);
+-        strcat(ptr, separator);
+-        return ptr + strlen(ptr);
+-    }
+-
+-    ptr = append_namespace(ptr, namespace->parent, separator, abi_prefix);
+-    strcpy(ptr, namespace->name);
+-    strcat(ptr, separator);
+-    return ptr + strlen(ptr);
++    int nested = namespace && !is_global_namespace(namespace);
++    const char *name = nested ? namespace->name : abi_prefix;
++    size_t n = 0;
++    if (!name) return 0;
++    if (nested) n += append_namespace(buf, len, pos + n, namespace->parent, separator, abi_prefix);
++    n += strappend(buf, len, pos + n, "%s%s", name, separator);
++    return n;
+ }
+ 
+-char *format_namespace(struct namespace *namespace, const char *prefix, const char *separator, const char *suffix,
+-                       const char *abi_prefix)
++static size_t append_namespaces(char **buf, size_t *len, size_t pos, struct namespace *namespace, const char *prefix,
++                                const char *separator, const char *suffix, const char *abi_prefix)
+ {
+-    unsigned len = strlen(prefix) + strlen(suffix);
+-    unsigned sep_len = strlen(separator);
+-    struct namespace *iter;
+-    char *ret, *ptr;
++    size_t n = 0;
++    n += strappend(buf, len, pos + n, "%s", prefix);
++    n += append_namespace(buf, len, pos + n, namespace, separator, abi_prefix);
++    n += strappend(buf, len, pos + n, "%s", suffix);
++    return n;
++}
+ 
+-    if(abi_prefix)
+-        len += strlen(abi_prefix) + sep_len;
++char *format_namespace(struct namespace *namespace, const char *prefix, const char *separator, const char *suffix, const char *abi_prefix)
++{
++    size_t len = 0;
++    char *buf = NULL;
++    append_namespaces(&buf, &len, 0, namespace, prefix, separator, suffix, abi_prefix);
++    return buf;
++}
+ 
+-    for(iter = namespace; !is_global_namespace(iter); iter = iter->parent)
+-        len += strlen(iter->name) + sep_len;
++char *format_parameterized_type_name(type_t *type, type_list_t *params)
++{
++    size_t len = 0, pos = 0;
++    char *buf = NULL;
++    type_list_t *entry;
+ 
+-    ret = xmalloc(len+1);
+-    strcpy(ret, prefix);
+-    ptr = append_namespace(ret + strlen(ret), namespace, separator, abi_prefix);
+-    strcpy(ptr, suffix);
++    pos += strappend(&buf, &len, pos, "%s<", type->name);
++    for (entry = params; entry; entry = entry->next)
++    {
++        for (type = entry->type; type->type_type == TYPE_POINTER; type = type_pointer_get_ref_type(type)) {}
++        pos += append_namespaces(&buf, &len, pos, type->namespace, "", "::", type->name, use_abi_namespace ? "ABI" : NULL);
++        for (type = entry->type; type->type_type == TYPE_POINTER; type = type_pointer_get_ref_type(type)) pos += strappend(&buf, &len, pos, "*");
++        if (entry->next) pos += strappend(&buf, &len, pos, ",");
++    }
++    pos += strappend(&buf, &len, pos, ">");
+ 
+-    return ret;
++    return buf;
+ }
+ 
+ type_t *type_new_function(var_list_t *args)
+@@ -633,6 +644,14 @@ type_t *type_parameterized_interface_define(type_t *type, attr_list_t *attrs, ty
+     return type;
+ }
+ 
++type_t *type_parameterized_type_specialize_partial(type_t *type, type_list_t *params)
++{
++    type_t *new_type = duptype(type, 0);
++    new_type->details.parameterized.type = type;
++    new_type->details.parameterized.params = params;
++    return new_type;
++}
++
+ int type_is_equal(const type_t *type1, const type_t *type2)
+ {
+     if (type_get_type_detect_alias(type1) != type_get_type_detect_alias(type2))
+diff --git a/tools/widl/typetree.h b/tools/widl/typetree.h
+index fab32ff9e64..538134871a2 100644
+--- a/tools/widl/typetree.h
++++ b/tools/widl/typetree.h
+@@ -36,6 +36,8 @@ attr_list_t *check_interface_attrs(const char *name, attr_list_t *attrs);
+ attr_list_t *check_module_attrs(const char *name, attr_list_t *attrs);
+ attr_list_t *check_runtimeclass_attrs(const char *name, attr_list_t *attrs);
+ 
++type_t *find_parameterized_type(type_t *type, type_list_t *params);
++
+ type_t *type_new_function(var_list_t *args);
+ type_t *type_new_pointer(type_t *ref);
+ type_t *type_new_alias(const decl_spec_t *t, const char *name);
+@@ -64,6 +66,7 @@ type_t *type_apicontract_declare(char *name, struct namespace *namespace);
+ type_t *type_apicontract_define(type_t *apicontract, attr_list_t *attrs);
+ type_t *type_parameterized_interface_declare(char *name, struct namespace *namespace, type_list_t *params);
+ type_t *type_parameterized_interface_define(type_t *type, attr_list_t *attrs, type_t *inherit, statement_list_t *stmts, type_list_t *requires);
++type_t *type_parameterized_type_specialize_partial(type_t *type, type_list_t *params);
+ int type_is_equal(const type_t *type1, const type_t *type2);
+ const char *type_get_name(const type_t *type, enum name_type name_type);
+ char *gen_name(void);
+diff --git a/tools/widl/utils.c b/tools/widl/utils.c
+index ea92372c8c7..634bd12a0ba 100644
+--- a/tools/widl/utils.c
++++ b/tools/widl/utils.c
+@@ -245,6 +245,43 @@ char *strmake( const char* fmt, ... )
+     }
+ }
+ 
++size_t strappend(char **buf, size_t *len, size_t pos, const char* fmt, ...)
++{
++    size_t size;
++    va_list ap;
++    char *ptr;
++    int n;
++
++    assert( buf && len );
++    assert( (*len == 0 && *buf == NULL) || (*len != 0 && *buf != NULL) );
++
++    if (*buf)
++    {
++        size = *len;
++        ptr = *buf;
++    }
++    else
++    {
++        size = 100;
++        ptr = xmalloc( size );
++    }
++
++    for (;;)
++    {
++        va_start( ap, fmt );
++        n = vsnprintf( ptr + pos, size - pos, fmt, ap );
++        va_end( ap );
++        if (n == -1) size *= 2;
++        else if (pos + (size_t)n >= size) size = pos + n + 1;
++        else break;
++        ptr = xrealloc( ptr, size );
++    }
++
++    *len = size;
++    *buf = ptr;
++    return n;
++}
++
+ char *xstrdup(const char *str)
+ {
+ 	char *s;
+diff --git a/tools/widl/utils.h b/tools/widl/utils.h
+index 37406656504..82e0a6ae489 100644
+--- a/tools/widl/utils.h
++++ b/tools/widl/utils.h
+@@ -45,6 +45,7 @@ void warning(const char *s, ...) __attribute__((format (printf, 1, 2)));
+ void warning_loc_info(const loc_info_t *, const char *s, ...) __attribute__((format (printf, 2, 3)));
+ void chat(const char *s, ...) __attribute__((format (printf, 1, 2)));
+ char *strmake(const char* fmt, ...) __attribute__((__format__ (__printf__, 1, 2 )));
++size_t strappend(char **buf, size_t *len, size_t pos, const char* fmt, ...) __attribute__((__format__ (__printf__, 4, 5 )));
+ 
+ char *dup_basename(const char *name, const char *ext);
+ size_t widl_getline(char **linep, size_t *lenp, FILE *fp);
+diff --git a/tools/widl/widltypes.h b/tools/widl/widltypes.h
+index 2c0ac4003ce..be82342e31a 100644
+--- a/tools/widl/widltypes.h
++++ b/tools/widl/widltypes.h
+@@ -650,6 +650,7 @@ void init_loc_info(loc_info_t *);
+ 
+ char *format_namespace(struct namespace *namespace, const char *prefix, const char *separator, const char *suffix,
+                        const char *abi_prefix);
++char *format_parameterized_type_name(type_t *type, type_list_t *params);
+ 
+ static inline enum type_type type_get_type_detect_alias(const type_t *type)
+ {
+-- 
+2.20.1
+
