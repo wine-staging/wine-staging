@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "dd417540bb3afb3aa5a04a007eea9a7ee347655b"
+	echo "4f1b297a14bbd304fb20da7c4b64266c14d110e5"
 }
 
 # Show version information
@@ -180,7 +180,6 @@ patch_enable_all ()
 	enable_ntdll_RtlQueryProcessPlaceholderCompatibilityMode="$1"
 	enable_ntdll_RtlQueryRegistryValuesEx="$1"
 	enable_ntdll_Serial_Port_Detection="$1"
-	enable_ntdll_Status_Mapping="$1"
 	enable_ntdll_Syscall_Emulation="$1"
 	enable_ntdll_SystemCodeIntegrityInformation="$1"
 	enable_ntdll_WRITECOPY="$1"
@@ -622,9 +621,6 @@ patch_enable ()
 			;;
 		ntdll-Serial_Port_Detection)
 			enable_ntdll_Serial_Port_Detection="$2"
-			;;
-		ntdll-Status_Mapping)
-			enable_ntdll_Status_Mapping="$2"
 			;;
 		ntdll-Syscall_Emulation)
 			enable_ntdll_Syscall_Emulation="$2"
@@ -3382,15 +3378,6 @@ if test "$enable_ntdll_Serial_Port_Detection" -eq 1; then
 	patch_apply ntdll-Serial_Port_Detection/0001-ntdll-Do-a-device-check-before-returning-a-default-s.patch
 fi
 
-# Patchset ntdll-Status_Mapping
-# |
-# | Modified files:
-# |   *	dlls/ntdll/tests/file.c, dlls/ntdll/unix/file.c
-# |
-if test "$enable_ntdll_Status_Mapping" -eq 1; then
-	patch_apply ntdll-Status_Mapping/0001-ntdll-Return-STATUS_INVALID_DEVICE_REQUEST-when-tryi.patch
-fi
-
 # Patchset ntdll-Syscall_Emulation
 # |
 # | This patchset fixes the following Wine bugs:
@@ -4397,11 +4384,6 @@ fi
 # | 	tools/widl/utils.h, tools/widl/widltypes.h
 # |
 if test "$enable_widl_winrt_support" -eq 1; then
-	patch_apply widl-winrt-support/0001-widl-Factor-and-cleanup-interface-type-declaration-a.patch
-	patch_apply widl-winrt-support/0002-widl-Factor-and-cleanup-dispinterface-type-declarati.patch
-	patch_apply widl-winrt-support/0003-widl-Factor-and-cleanup-apicontract-type-declaration.patch
-	patch_apply widl-winrt-support/0004-widl-Factor-and-cleanup-module-type-declaration-and-.patch
-	patch_apply widl-winrt-support/0005-widl-Fold-aIDENTIFIER-aKNOWNTYPE-rules-together.patch
 	patch_apply widl-winrt-support/0006-widl-Add-explicit-namespace-parameter-to-find_type_o.patch
 	patch_apply widl-winrt-support/0007-widl-Use-explicit-namespace-parameter-for-qualified-.patch
 	patch_apply widl-winrt-support/0008-widl-Disallow-qualified-types-in-expressions.patch
