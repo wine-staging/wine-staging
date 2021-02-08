@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "4f1b297a14bbd304fb20da7c4b64266c14d110e5"
+	echo "7a9745022b1bfcc235b922be98a8fdc91976c587"
 }
 
 # Show version information
@@ -167,7 +167,6 @@ patch_enable_all ()
 	enable_ntdll_Hide_Wine_Exports="$1"
 	enable_ntdll_Junction_Points="$1"
 	enable_ntdll_Manifest_Range="$1"
-	enable_ntdll_NtAccessCheck="$1"
 	enable_ntdll_NtAlertThreadByThreadId="$1"
 	enable_ntdll_NtDevicePath="$1"
 	enable_ntdll_NtQueryEaFile="$1"
@@ -582,9 +581,6 @@ patch_enable ()
 			;;
 		ntdll-Manifest_Range)
 			enable_ntdll_Manifest_Range="$2"
-			;;
-		ntdll-NtAccessCheck)
-			enable_ntdll_NtAccessCheck="$2"
 			;;
 		ntdll-NtAlertThreadByThreadId)
 			enable_ntdll_NtAlertThreadByThreadId="$2"
@@ -3094,10 +3090,9 @@ fi
 # | 	Empires II, MSYS2)
 # |
 # | Modified files:
-# |   *	dlls/advapi32/tests/security.c, dlls/kernel32/tests/virtual.c, dlls/ntdll/unix/loader.c, dlls/ntdll/unix/server.c,
-# | 	dlls/ntdll/unix/signal_arm.c, dlls/ntdll/unix/signal_arm64.c, dlls/ntdll/unix/signal_i386.c,
-# | 	dlls/ntdll/unix/signal_x86_64.c, dlls/ntdll/unix/unix_private.h, dlls/ntdll/unix/virtual.c,
-# | 	dlls/psapi/tests/psapi_main.c
+# |   *	dlls/kernel32/tests/virtual.c, dlls/ntdll/unix/loader.c, dlls/ntdll/unix/server.c, dlls/ntdll/unix/signal_arm.c,
+# | 	dlls/ntdll/unix/signal_arm64.c, dlls/ntdll/unix/signal_i386.c, dlls/ntdll/unix/signal_x86_64.c,
+# | 	dlls/ntdll/unix/unix_private.h, dlls/ntdll/unix/virtual.c, dlls/psapi/tests/psapi_main.c
 # |
 if test "$enable_ntdll_WRITECOPY" -eq 1; then
 	patch_apply ntdll-WRITECOPY/0001-ntdll-Trigger-write-watches-before-passing-userdata-.patch
@@ -3211,15 +3206,6 @@ fi
 # |
 if test "$enable_ntdll_Manifest_Range" -eq 1; then
 	patch_apply ntdll-Manifest_Range/0001-ntdll-Support-ISOLATIONAWARE_MANIFEST_RESOURCE_ID-ra.patch
-fi
-
-# Patchset ntdll-NtAccessCheck
-# |
-# | Modified files:
-# |   *	dlls/advapi32/tests/security.c, dlls/ntdll/unix/security.c
-# |
-if test "$enable_ntdll_NtAccessCheck" -eq 1; then
-	patch_apply ntdll-NtAccessCheck/0001-ntdll-Improve-invalid-paramater-handling-in-NtAccess.patch
 fi
 
 # Patchset ntdll-NtAlertThreadByThreadId
@@ -4379,17 +4365,11 @@ fi
 # |
 # | Modified files:
 # |   *	include/windows.foundation.idl, include/windows.media.speechsynthesis.idl, tools/widl/expr.c, tools/widl/hash.c,
-# | 	tools/widl/hash.h, tools/widl/header.c, tools/widl/parser.h, tools/widl/parser.l, tools/widl/parser.y,
-# | 	tools/widl/typegen.c, tools/widl/typelib.c, tools/widl/typetree.c, tools/widl/typetree.h, tools/widl/utils.c,
-# | 	tools/widl/utils.h, tools/widl/widltypes.h
+# | 	tools/widl/hash.h, tools/widl/header.c, tools/widl/parser.l, tools/widl/parser.y, tools/widl/typegen.c,
+# | 	tools/widl/typelib.c, tools/widl/typetree.c, tools/widl/typetree.h, tools/widl/utils.c, tools/widl/utils.h,
+# | 	tools/widl/widltypes.h
 # |
 if test "$enable_widl_winrt_support" -eq 1; then
-	patch_apply widl-winrt-support/0006-widl-Add-explicit-namespace-parameter-to-find_type_o.patch
-	patch_apply widl-winrt-support/0007-widl-Use-explicit-namespace-parameter-for-qualified-.patch
-	patch_apply widl-winrt-support/0008-widl-Disallow-qualified-types-in-expressions.patch
-	patch_apply widl-winrt-support/0009-widl-Remove-aNAMESPACE-token-from-the-lexer.patch
-	patch_apply widl-winrt-support/0010-widl-Fold-inherit-cases-by-using-typename-rule-in-qu.patch
-	patch_apply widl-winrt-support/0011-widl-Support-referencing-qualified-interface-names.patch
 	patch_apply widl-winrt-support/0012-widl-Support-WinRT-activatable-attribute-parsing.patch
 	patch_apply widl-winrt-support/0013-widl-Support-WinRT-static-attribute-parsing.patch
 	patch_apply widl-winrt-support/0014-include-Add-Windows.Media.SpeechSynthesis.SpeechSynt.patch
