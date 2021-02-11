@@ -1,19 +1,19 @@
-From 55ef726442489ed42eba1981fe038b95f910d511 Mon Sep 17 00:00:00 2001
+From 5fde43f2d58b318d8e9c8a85dd21dc61fbeb0d95 Mon Sep 17 00:00:00 2001
 From: Zebediah Figura <z.figura12@gmail.com>
 Date: Sun, 22 Nov 2020 20:51:10 -0600
 Subject: [PATCH] ntdll: Reimplement SRW locks on top of Win32 futexes.
 
 Signed-off-by: Zebediah Figura <z.figura12@gmail.com>
 ---
- dlls/ntdll/sync.c              | 316 +++++++++++++++------------------
+ dlls/ntdll/sync.c              | 312 +++++++++++++++------------------
  dlls/ntdll/unix/loader.c       |   6 -
  dlls/ntdll/unix/sync.c         | 309 --------------------------------
  dlls/ntdll/unix/unix_private.h |   6 -
  dlls/ntdll/unixlib.h           |  10 +-
- 5 files changed, 143 insertions(+), 504 deletions(-)
+ 5 files changed, 141 insertions(+), 502 deletions(-)
 
 diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
-index 0e86ecead3d..34b076d6b71 100644
+index 42b62a2cd87..d4944951dc6 100644
 --- a/dlls/ntdll/sync.c
 +++ b/dlls/ntdll/sync.c
 @@ -161,127 +161,23 @@ DWORD WINAPI RtlRunOnceExecuteOnce( RTL_RUN_ONCE *once, PRTL_RUN_ONCE_INIT_FN fu
@@ -120,7 +120,8 @@ index 0e86ecead3d..34b076d6b71 100644
 -}
 -
 -static inline void srwlock_leave_exclusive( RTL_SRWLOCK *lock, unsigned int val )
--{
++struct srw_lock
+ {
 -    /* Used when a thread leaves an exclusive section. If there are other
 -     * exclusive access threads they are processed first, followed by
 -     * the shared waiters. */
@@ -133,7 +134,8 @@ index 0e86ecead3d..34b076d6b71 100644
 -            NtReleaseKeyedEvent( 0, srwlock_key_shared(lock), FALSE, NULL );
 -    }
 -}
--
++    short exclusive_waiters;
+ 
 -static inline void srwlock_leave_shared( RTL_SRWLOCK *lock, unsigned int val )
 -{
 -    /* Wake up one exclusive thread as soon as the last shared access thread
@@ -141,10 +143,6 @@ index 0e86ecead3d..34b076d6b71 100644
 -    if ((val & SRWLOCK_MASK_EXCLUSIVE_QUEUE) && !(val & SRWLOCK_MASK_SHARED_QUEUE))
 -        NtReleaseKeyedEvent( 0, srwlock_key_exclusive(lock), FALSE, NULL );
 -}
-+struct srw_lock
-+{
-+    short exclusive_waiters;
-+
 +    /* Number of shared owners, or -1 if owned exclusive.
 +     *
 +     * Sadly Windows has no equivalent to FUTEX_WAIT_BITSET, so in order to wake
@@ -274,11 +272,11 @@ index 0e86ecead3d..34b076d6b71 100644
 +    {
 +        old.s = *u.s;
 +        new = old;
++
++        if (old.s.owners != -1) ERR("Lock %p is not owned exclusive!\n", lock);
  
 -    srwlock_leave_exclusive( lock, srwlock_unlock_exclusive( (unsigned int *)&lock->Ptr,
 -                             - SRWLOCK_RES_EXCLUSIVE ) - SRWLOCK_RES_EXCLUSIVE );
-+        if (old.s.owners != -1) ERR("Lock %p is not owned exclusive!\n", lock);
-+
 +        new.s.owners = 0;
 +    } while (InterlockedCompareExchange( u.l, new.l, old.l ) != old.l);
 +
@@ -302,12 +300,12 @@ index 0e86ecead3d..34b076d6b71 100644
 +    {
 +        old.s = *u.s;
 +        new = old;
++
++        if (old.s.owners == -1) ERR("Lock %p is owned exclusive!\n", lock);
++        else if (!old.s.owners) ERR("Lock %p is not owned shared!\n", lock);
  
 -    srwlock_leave_shared( lock, srwlock_lock_exclusive( (unsigned int *)&lock->Ptr,
 -                          - SRWLOCK_RES_SHARED ) - SRWLOCK_RES_SHARED );
-+        if (old.s.owners == -1) ERR("Lock %p is owned exclusive!\n", lock);
-+        else if (!old.s.owners) ERR("Lock %p is not owned shared!\n", lock);
-+
 +        --new.s.owners;
 +    } while (InterlockedCompareExchange( u.l, new.l, old.l ) != old.l);
 +
@@ -331,7 +329,9 @@ index 0e86ecead3d..34b076d6b71 100644
 +    {
 +        old.s = *u.s;
 +        new.s = old.s;
-+
+ 
+-    return InterlockedCompareExchange( (int *)&lock->Ptr, SRWLOCK_MASK_IN_EXCLUSIVE |
+-                                       SRWLOCK_RES_EXCLUSIVE, 0 ) == 0;
 +        if (!old.s.owners)
 +        {
 +            /* Not locked exclusive or shared. We can try to grab it. */
@@ -343,9 +343,7 @@ index 0e86ecead3d..34b076d6b71 100644
 +            ret = FALSE;
 +        }
 +    } while (InterlockedCompareExchange( u.l, new.l, old.l ) != old.l);
- 
--    return InterlockedCompareExchange( (int *)&lock->Ptr, SRWLOCK_MASK_IN_EXCLUSIVE |
--                                       SRWLOCK_RES_EXCLUSIVE, 0 ) == 0;
++
 +    return ret;
  }
  
@@ -393,10 +391,10 @@ index 0e86ecead3d..34b076d6b71 100644
  
  /***********************************************************************
 diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
-index ad242b91800..11b94972c3d 100644
+index 2269a9f62c9..d8f1a00ade7 100644
 --- a/dlls/ntdll/unix/loader.c
 +++ b/dlls/ntdll/unix/loader.c
-@@ -1513,12 +1513,6 @@ static struct unix_funcs unix_funcs =
+@@ -1582,12 +1582,6 @@ static struct unix_funcs unix_funcs =
  #endif
      DbgUiIssueRemoteBreakin,
      RtlGetSystemTimePrecise,
@@ -410,7 +408,7 @@ index ad242b91800..11b94972c3d 100644
      ntdll_ceil,
      ntdll_cos,
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index 07e7939fc59..97781a3f0ae 100644
+index ca4b5b22f53..4e4345098ca 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
 @@ -114,8 +114,6 @@ static inline ULONGLONG monotonic_counter(void)
@@ -456,7 +454,7 @@ index 07e7939fc59..97781a3f0ae 100644
  #endif
  
  
-@@ -2233,290 +2211,3 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
+@@ -2393,290 +2371,3 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
      return NtWaitForSingleObject( ntdll_get_thread_data()->tid_alert_event, FALSE, timeout );
  #endif
  }
@@ -748,10 +746,10 @@ index 07e7939fc59..97781a3f0ae 100644
 -
 -#endif
 diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
-index d82b8c90e84..1cf917ab89d 100644
+index 0da243799f1..c1ddb47a611 100644
 --- a/dlls/ntdll/unix/unix_private.h
 +++ b/dlls/ntdll/unix/unix_private.h
-@@ -93,12 +93,6 @@ extern void     (WINAPI *pKiUserApcDispatcher)(CONTEXT*,ULONG_PTR,ULONG_PTR,ULON
+@@ -97,12 +97,6 @@ extern void     (WINAPI *pKiUserApcDispatcher)(CONTEXT*,ULONG_PTR,ULONG_PTR,ULON
  extern NTSTATUS (WINAPI *pKiUserExceptionDispatcher)(EXCEPTION_RECORD*,CONTEXT*) DECLSPEC_HIDDEN;
  extern void     (WINAPI *pLdrInitializeThunk)(CONTEXT*,void**,ULONG_PTR,ULONG_PTR) DECLSPEC_HIDDEN;
  extern void     (WINAPI *pRtlUserThreadStart)( PRTL_THREAD_START_ROUTINE entry, void *arg ) DECLSPEC_HIDDEN;
@@ -765,15 +763,15 @@ index d82b8c90e84..1cf917ab89d 100644
  
  extern NTSTATUS CDECL get_initial_environment( WCHAR **wargv[], WCHAR *env, SIZE_T *size ) DECLSPEC_HIDDEN;
 diff --git a/dlls/ntdll/unixlib.h b/dlls/ntdll/unixlib.h
-index 0d056ef2b80..4c2693b3f6c 100644
+index bd74bf8267a..534d22483e7 100644
 --- a/dlls/ntdll/unixlib.h
 +++ b/dlls/ntdll/unixlib.h
 @@ -27,7 +27,7 @@
  struct _DISPATCHER_CONTEXT;
  
  /* increment this when you change the function table */
--#define NTDLL_UNIXLIB_VERSION 110
-+#define NTDLL_UNIXLIB_VERSION 111
+-#define NTDLL_UNIXLIB_VERSION 111
++#define NTDLL_UNIXLIB_VERSION 112
  
  struct unix_funcs
  {
@@ -793,5 +791,5 @@ index 0d056ef2b80..4c2693b3f6c 100644
      double        (CDECL *atan)( double d );
      double        (CDECL *ceil)( double d );
 -- 
-2.29.2
+2.20.1
 

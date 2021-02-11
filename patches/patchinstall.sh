@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "7a9745022b1bfcc235b922be98a8fdc91976c587"
+	echo "2d6b0b67d91b6433744ec859b10b8ee8eb4a37b3"
 }
 
 # Show version information
@@ -142,7 +142,6 @@ patch_enable_all ()
 	enable_krnl386_exe16_Invalid_Console_Handles="$1"
 	enable_libs_Unicode_Collation="$1"
 	enable_loader_KeyboardLayouts="$1"
-	enable_mfplat_streaming_support="$1"
 	enable_mmsystem_dll16_MIDIHDR_Refcount="$1"
 	enable_mountmgr_DosDevices="$1"
 	enable_mscoree_CorValidateImage="$1"
@@ -171,7 +170,6 @@ patch_enable_all ()
 	enable_ntdll_NtDevicePath="$1"
 	enable_ntdll_NtQueryEaFile="$1"
 	enable_ntdll_NtQuerySection="$1"
-	enable_ntdll_NtQueryVirtualMemory="$1"
 	enable_ntdll_NtSetLdtEntries="$1"
 	enable_ntdll_Pipe_SpecialCharacters="$1"
 	enable_ntdll_ProcessQuotaLimits="$1"
@@ -208,13 +206,11 @@ patch_enable_all ()
 	enable_riched20_IText_Interface="$1"
 	enable_server_FileEndOfFileInformation="$1"
 	enable_server_File_Permissions="$1"
-	enable_server_Inherited_ACLs="$1"
 	enable_server_Key_State="$1"
 	enable_server_PeekMessage="$1"
 	enable_server_Realtime_Priority="$1"
 	enable_server_Signal_Thread="$1"
 	enable_server_Stored_ACLs="$1"
-	enable_server_unix_name="$1"
 	enable_setupapi_DiskSpaceList="$1"
 	enable_setupapi_SPFILENOTIFY_FILEINCABINET="$1"
 	enable_shdocvw_ParseURLFromOutsideSource_Tests="$1"
@@ -260,11 +256,6 @@ patch_enable_all ()
 	enable_uxtheme_CloseThemeClass="$1"
 	enable_version_VerQueryValue="$1"
 	enable_widl_SLTG_Typelib_Support="$1"
-	enable_widl_winrt_support="$1"
-	enable_windows_gaming_input_dll="$1"
-	enable_windows_globalization_dll="$1"
-	enable_windows_media_speech_dll="$1"
-	enable_windows_networking_connectivity_dll="$1"
 	enable_windowscodecs_GIF_Encoder="$1"
 	enable_windowscodecs_TIFF_Support="$1"
 	enable_wine_inf_Directory_ContextMenuHandlers="$1"
@@ -507,9 +498,6 @@ patch_enable ()
 		loader-KeyboardLayouts)
 			enable_loader_KeyboardLayouts="$2"
 			;;
-		mfplat-streaming-support)
-			enable_mfplat_streaming_support="$2"
-			;;
 		mmsystem.dll16-MIDIHDR_Refcount)
 			enable_mmsystem_dll16_MIDIHDR_Refcount="$2"
 			;;
@@ -593,9 +581,6 @@ patch_enable ()
 			;;
 		ntdll-NtQuerySection)
 			enable_ntdll_NtQuerySection="$2"
-			;;
-		ntdll-NtQueryVirtualMemory)
-			enable_ntdll_NtQueryVirtualMemory="$2"
 			;;
 		ntdll-NtSetLdtEntries)
 			enable_ntdll_NtSetLdtEntries="$2"
@@ -705,9 +690,6 @@ patch_enable ()
 		server-File_Permissions)
 			enable_server_File_Permissions="$2"
 			;;
-		server-Inherited_ACLs)
-			enable_server_Inherited_ACLs="$2"
-			;;
 		server-Key_State)
 			enable_server_Key_State="$2"
 			;;
@@ -722,9 +704,6 @@ patch_enable ()
 			;;
 		server-Stored_ACLs)
 			enable_server_Stored_ACLs="$2"
-			;;
-		server-unix_name)
-			enable_server_unix_name="$2"
 			;;
 		setupapi-DiskSpaceList)
 			enable_setupapi_DiskSpaceList="$2"
@@ -860,21 +839,6 @@ patch_enable ()
 			;;
 		widl-SLTG_Typelib_Support)
 			enable_widl_SLTG_Typelib_Support="$2"
-			;;
-		widl-winrt-support)
-			enable_widl_winrt_support="$2"
-			;;
-		windows.gaming.input-dll)
-			enable_windows_gaming_input_dll="$2"
-			;;
-		windows.globalization-dll)
-			enable_windows_globalization_dll="$2"
-			;;
-		windows.media.speech.dll)
-			enable_windows_media_speech_dll="$2"
-			;;
-		windows.networking.connectivity.dll)
-			enable_windows_networking_connectivity_dll="$2"
 			;;
 		windowscodecs-GIF_Encoder)
 			enable_windowscodecs_GIF_Encoder="$2"
@@ -1416,34 +1380,6 @@ if test "$enable_wineboot_ProxySettings" -eq 1; then
 	enable_wineboot_drivers_etc_Stubs=1
 fi
 
-if test "$enable_windows_networking_connectivity_dll" -eq 1; then
-	if test "$enable_windows_globalization_dll" -gt 1; then
-		abort "Patchset windows.globalization-dll disabled, but windows.networking.connectivity.dll depends on that."
-	fi
-	enable_windows_globalization_dll=1
-fi
-
-if test "$enable_windows_globalization_dll" -eq 1; then
-	if test "$enable_windows_gaming_input_dll" -gt 1; then
-		abort "Patchset windows.gaming.input-dll disabled, but windows.globalization-dll depends on that."
-	fi
-	enable_windows_gaming_input_dll=1
-fi
-
-if test "$enable_windows_gaming_input_dll" -eq 1; then
-	if test "$enable_windows_media_speech_dll" -gt 1; then
-		abort "Patchset windows.media.speech.dll disabled, but windows.gaming.input-dll depends on that."
-	fi
-	enable_windows_media_speech_dll=1
-fi
-
-if test "$enable_windows_media_speech_dll" -eq 1; then
-	if test "$enable_widl_winrt_support" -gt 1; then
-		abort "Patchset widl-winrt-support disabled, but windows.media.speech.dll depends on that."
-	fi
-	enable_widl_winrt_support=1
-fi
-
 if test "$enable_user32_window_activation" -eq 1; then
 	if test "$enable_user32_recursive_activation" -gt 1; then
 		abort "Patchset user32-recursive-activation disabled, but user32-window-activation depends on that."
@@ -1497,13 +1433,6 @@ if test "$enable_shell32_Progress_Dialog" -eq 1; then
 	enable_shell32_SHFileOperation_Move=1
 fi
 
-if test "$enable_server_Inherited_ACLs" -eq 1; then
-	if test "$enable_server_Stored_ACLs" -gt 1; then
-		abort "Patchset server-Stored_ACLs disabled, but server-Inherited_ACLs depends on that."
-	fi
-	enable_server_Stored_ACLs=1
-fi
-
 if test "$enable_server_Stored_ACLs" -eq 1; then
 	if test "$enable_ntdll_DOS_Attributes" -gt 1; then
 		abort "Patchset ntdll-DOS_Attributes disabled, but server-Stored_ACLs depends on that."
@@ -1541,21 +1470,6 @@ if test "$enable_nvcuvid_CUDA_Video_Support" -eq 1; then
 		abort "Patchset nvapi-Stub_DLL disabled, but nvcuvid-CUDA_Video_Support depends on that."
 	fi
 	enable_nvapi_Stub_DLL=1
-fi
-
-if test "$enable_ntdll_NtQueryVirtualMemory" -eq 1; then
-	if test "$enable_ntdll_ForceBottomUpAlloc" -gt 1; then
-		abort "Patchset ntdll-ForceBottomUpAlloc disabled, but ntdll-NtQueryVirtualMemory depends on that."
-	fi
-	if test "$enable_ntdll_Junction_Points" -gt 1; then
-		abort "Patchset ntdll-Junction_Points disabled, but ntdll-NtQueryVirtualMemory depends on that."
-	fi
-	if test "$enable_ntdll_NtDevicePath" -gt 1; then
-		abort "Patchset ntdll-NtDevicePath disabled, but ntdll-NtQueryVirtualMemory depends on that."
-	fi
-	enable_ntdll_ForceBottomUpAlloc=1
-	enable_ntdll_Junction_Points=1
-	enable_ntdll_NtDevicePath=1
 fi
 
 if test "$enable_ntdll_NtDevicePath" -eq 1; then
@@ -2871,70 +2785,6 @@ if test "$enable_loader_KeyboardLayouts" -eq 1; then
 	patch_apply loader-KeyboardLayouts/0002-user32-Improve-GetKeyboardLayoutList.patch
 fi
 
-# Patchset mfplat-streaming-support
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#49692] Multiple applications need a Media Foundation media source implementation
-# |
-# | Modified files:
-# |   *	dlls/mf/Makefile.in, dlls/mf/handler.c, dlls/mf/handler.h, dlls/mf/main.c, dlls/mf/session.c, dlls/mf/tests/mf.c,
-# | 	dlls/mfreadwrite/reader.c, dlls/winegstreamer/Makefile.in, dlls/winegstreamer/audioconvert.c,
-# | 	dlls/winegstreamer/colorconvert.c, dlls/winegstreamer/gst_cbs.c, dlls/winegstreamer/gst_cbs.h,
-# | 	dlls/winegstreamer/gst_private.h, dlls/winegstreamer/media_source.c, dlls/winegstreamer/mf_decode.c,
-# | 	dlls/winegstreamer/mfplat.c, dlls/winegstreamer/winegstreamer_classes.idl, include/mfidl.idl, tools/make_makefiles,
-# | 	tools/makedep.c
-# |
-if test "$enable_mfplat_streaming_support" -eq 1; then
-	patch_apply mfplat-streaming-support/0003-winegstreamer-Implement-Process-Input-Output-for-aud.patch
-	patch_apply mfplat-streaming-support/0004-winegstreamer-Implement-Get-Input-Output-StreamInfo-.patch
-	patch_apply mfplat-streaming-support/0005-winegstreamer-Implement-Get-Attributes-functions-for.patch
-	patch_apply mfplat-streaming-support/0007-winegstreamer-Introduce-color-conversion-transform.patch
-	patch_apply mfplat-streaming-support/0008-winegstreamer-Register-the-color-conversion-transfor.patch
-	patch_apply mfplat-streaming-support/0009-winegstreamer-Implement-GetInputAvailableType-for-co.patch
-	patch_apply mfplat-streaming-support/0010-winegstreamer-Implement-SetInputType-for-color-conve.patch
-	patch_apply mfplat-streaming-support/0011-winegstreamer-Implement-GetOutputAvailableType-for-c.patch
-	patch_apply mfplat-streaming-support/0012-winegstreamer-Implement-SetOutputType-for-color-conv.patch
-	patch_apply mfplat-streaming-support/0013-winegstreamer-Implement-Process-Input-Output-for-col.patch
-	patch_apply mfplat-streaming-support/0014-winegstreamer-Implement-ProcessMessage-for-color-con.patch
-	patch_apply mfplat-streaming-support/0015-winegstreamer-Implement-Get-Input-Output-StreamInfo-.patch
-	patch_apply mfplat-streaming-support/0016-winegstreamer-Implement-Get-Attributes-functions-for.patch
-	patch_apply mfplat-streaming-support/0017-winegstreamer-Implement-Get-Input-Output-CurrentType.patch
-	patch_apply mfplat-streaming-support/0018-winegstreamer-Implement-IMFMediaSource-Stop.patch
-	patch_apply mfplat-streaming-support/0019-winegstreamer-Set-MF_MT_ALL_SAMPLES_INDEPENDENT-attr.patch
-	patch_apply mfplat-streaming-support/0020-mf-Add-invalid-connect-method-test.patch
-	patch_apply mfplat-streaming-support/0021-Allow-for-compressed-types.patch
-	patch_apply mfplat-streaming-support/0022-mf-session-Unconditionally-deliver-NULL-EOS-samples.patch
-	patch_apply mfplat-streaming-support/0023-mf-session-Request-more-samples-when-a-transform-nee.patch
-	patch_apply mfplat-streaming-support/0024-HACK-Flush-decoder-when-changing-times.patch
-	patch_apply mfplat-streaming-support/0025-winegstreamer-Add-IMFSeekInfo-GetNearestKeyFrames-st.patch
-	patch_apply mfplat-streaming-support/0026-winegstreamer-Fixup-raw-audio-caps-to-be-compatible-.patch
-	patch_apply mfplat-streaming-support/0027-winegstreamer-Set-MF_PD_MIME_TYPE-on-source-s-presen.patch
-	patch_apply mfplat-streaming-support/0028-winegstreamer-Insert-parser-into-pipeline-to-rectify.patch
-	patch_apply mfplat-streaming-support/0029-winegstreamer-Translate-H.264-caps-to-attributes.patch
-	patch_apply mfplat-streaming-support/0030-winegstreamer-Translate-WMV-caps-to-attributes.patch
-	patch_apply mfplat-streaming-support/0031-winegstreamer-Translate-AAC-caps-to-attributes.patch
-	patch_apply mfplat-streaming-support/0032-winegstreamer-Translate-MPEG-4-Section-2-caps-to-att.patch
-	patch_apply mfplat-streaming-support/0033-winegstreamer-Translate-WMA-caps-to-attributes.patch
-	patch_apply mfplat-streaming-support/0034-winegstreamer-Translate-H.264-attributes-to-caps.patch
-	patch_apply mfplat-streaming-support/0035-winegstreamer-Translate-WMV-attributes-to-caps.patch
-	patch_apply mfplat-streaming-support/0036-winegstreamer-Translate-AAC-attributes-to-caps.patch
-	patch_apply mfplat-streaming-support/0037-winegstreamer-Translate-MPEG-4-Section-2-attributes-.patch
-	patch_apply mfplat-streaming-support/0038-winegstreamer-Translate-WMA-attributes-to-caps.patch
-	patch_apply mfplat-streaming-support/0039-tools-Add-support-for-multiple-parent-directories.patch
-	patch_apply mfplat-streaming-support/0040-mf-Introduce-handler-helper.patch
-	patch_apply mfplat-streaming-support/0041-winegstreamer-Implement-decoder-MFT-on-gstreamer.patch
-	patch_apply mfplat-streaming-support/0042-mfreadwrite-Select-all-streams-when-creating-a-sourc.patch
-	patch_apply mfplat-streaming-support/0043-Miscellaneous.patch
-	patch_apply mfplat-streaming-support/0044-WMV.patch
-	patch_apply mfplat-streaming-support/0045-Expose-PCM-output-type-on-AAC-decoder.patch
-	patch_apply mfplat-streaming-support/0048-Report-streams-backwards-and-only-select-one-of-each.patch
-	patch_apply mfplat-streaming-support/0049-winegstreamer-Introduce-MPEG-4-Section-2-video-decod.patch
-	patch_apply mfplat-streaming-support/0050-winegstreamer-Introduce-WMA-audio-decoder.patch
-	patch_apply mfplat-streaming-support/0051-winegstreamer-Implement-MF_SD_LANGUAGE.patch
-	patch_apply mfplat-streaming-support/0052-winegstreamer-Force-audio-mpeg-to-decode-in-source.patch
-	patch_apply mfplat-streaming-support/0060-winegstreamer-Support-eAVEncH264VProfile_Constrained.patch
-fi
-
 # Patchset mmsystem.dll16-MIDIHDR_Refcount
 # |
 # | This patchset fixes the following Wine bugs:
@@ -3268,32 +3118,6 @@ fi
 # |
 if test "$enable_ntdll_NtQuerySection" -eq 1; then
 	patch_apply ntdll-NtQuerySection/0002-kernel32-tests-Add-tests-for-NtQuerySection.patch
-fi
-
-# Patchset ntdll-NtQueryVirtualMemory
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-ForceBottomUpAlloc, ntdll-DOS_Attributes, ntdll-NtQueryEaFile, ntdll-Junction_Points, ntdll-
-# | 	Pipe_SpecialCharacters, ntdll-NtDevicePath
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#23999] Implement MemorySectionName class in NtQueryVirtualMemory
-# |   *	[#27248] Implement K32GetMappedFileName
-# |
-# | Modified files:
-# |   *	dlls/kernelbase/debug.c, dlls/ntdll/tests/info.c, dlls/ntdll/unix/file.c, dlls/ntdll/unix/process.c,
-# | 	dlls/ntdll/unix/unix_private.h, dlls/ntdll/unix/virtual.c, dlls/psapi/tests/psapi_main.c, server/mapping.c,
-# | 	server/protocol.def
-# |
-if test "$enable_ntdll_NtQueryVirtualMemory" -eq 1; then
-	patch_apply ntdll-NtQueryVirtualMemory/0003-ntdll-Implement-NtQueryVirtualMemory-MemorySectionNa.patch
-	patch_apply ntdll-NtQueryVirtualMemory/0004-ntdll-tests-Add-tests-for-NtQueryVirtualMemory-Memor.patch
-	patch_apply ntdll-NtQueryVirtualMemory/0005-ntdll-tests-Add-test-to-ensure-section-name-is-full-.patch
-	patch_apply ntdll-NtQueryVirtualMemory/0006-ntdll-Allow-to-query-section-names-from-other-proces.patch
-	patch_apply ntdll-NtQueryVirtualMemory/0007-kernel32-Implement-K32GetMappedFileName.-v2.patch
-	patch_apply ntdll-NtQueryVirtualMemory/0008-ntdll-Resolve-drive-symlinks-before-returning-sectio.patch
-	patch_apply ntdll-NtQueryVirtualMemory/0009-ntdll-Fixup-builtin-dll-names-in-get_section_name.patch
-	patch_apply ntdll-NtQueryVirtualMemory/0010-server-Fix-process-access-rights-in-get_mapping_file.patch
 fi
 
 # Patchset ntdll-NtSetLdtEntries
@@ -3672,6 +3496,20 @@ if test "$enable_server_File_Permissions" -eq 1; then
 	patch_apply server-File_Permissions/0008-server-Improve-mapping-of-DACL-to-file-permissions.patch
 fi
 
+# Patchset server-Key_State
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#31899] Implement locking and synchronization of key states
+# |   *	[#35907] Fix caps lock state issues with multiple processes
+# |
+# | Modified files:
+# |   *	server/queue.c
+# |
+if test "$enable_server_Key_State" -eq 1; then
+	patch_apply server-Key_State/0001-server-Introduce-a-helper-function-to-update-the-thr.patch
+	patch_apply server-Key_State/0002-server-Implement-locking-and-synchronization-of-keys.patch
+fi
+
 # Patchset server-Stored_ACLs
 # |
 # | This patchset has the following (direct or indirect) dependencies:
@@ -3691,44 +3529,6 @@ if test "$enable_server_Stored_ACLs" -eq 1; then
 	patch_apply server-Stored_ACLs/0005-server-Store-file-security-attributes-with-extended-.patch
 	patch_apply server-Stored_ACLs/0006-server-Convert-return-of-file-security-masks-with-ge.patch
 	patch_apply server-Stored_ACLs/0007-server-Retrieve-file-security-attributes-with-extend.patch
-fi
-
-# Patchset server-Inherited_ACLs
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-DOS_Attributes, ntdll-NtQueryEaFile, ntdll-Junction_Points, server-File_Permissions, server-Stored_ACLs
-# |
-# | Modified files:
-# |   *	dlls/advapi32/tests/security.c, server/file.c
-# |
-if test "$enable_server_Inherited_ACLs" -eq 1; then
-	patch_apply server-Inherited_ACLs/0001-server-Inherit-security-attributes-from-parent-direc.patch
-fi
-
-# Patchset server-Key_State
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#31899] Implement locking and synchronization of key states
-# |   *	[#35907] Fix caps lock state issues with multiple processes
-# |
-# | Modified files:
-# |   *	server/queue.c
-# |
-if test "$enable_server_Key_State" -eq 1; then
-	patch_apply server-Key_State/0001-server-Introduce-a-helper-function-to-update-the-thr.patch
-	patch_apply server-Key_State/0002-server-Implement-locking-and-synchronization-of-keys.patch
-fi
-
-# Patchset server-unix_name
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#46070] Basemark Web 3.0 Desktop Launcher crashes
-# |
-# | Modified files:
-# |   *	server/fd.c, server/file.c, server/file.h
-# |
-if test "$enable_server_unix_name" -eq 1; then
-	patch_apply server-unix_name/0001-server-Try-to-retrieve-the-unix-name-on-handles-crea.patch
 fi
 
 # Patchset setupapi-DiskSpaceList
@@ -4356,122 +4156,6 @@ fi
 # |
 if test "$enable_version_VerQueryValue" -eq 1; then
 	patch_apply version-VerQueryValue/0001-version-Test-for-VerQueryValueA-try-2.patch
-fi
-
-# Patchset widl-winrt-support
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#49998] widl - Support WinRT idls
-# |
-# | Modified files:
-# |   *	include/windows.foundation.idl, include/windows.media.speechsynthesis.idl, tools/widl/expr.c, tools/widl/hash.c,
-# | 	tools/widl/hash.h, tools/widl/header.c, tools/widl/parser.l, tools/widl/parser.y, tools/widl/typegen.c,
-# | 	tools/widl/typelib.c, tools/widl/typetree.c, tools/widl/typetree.h, tools/widl/utils.c, tools/widl/utils.h,
-# | 	tools/widl/widltypes.h
-# |
-if test "$enable_widl_winrt_support" -eq 1; then
-	patch_apply widl-winrt-support/0012-widl-Support-WinRT-activatable-attribute-parsing.patch
-	patch_apply widl-winrt-support/0013-widl-Support-WinRT-static-attribute-parsing.patch
-	patch_apply widl-winrt-support/0014-include-Add-Windows.Media.SpeechSynthesis.SpeechSynt.patch
-	patch_apply widl-winrt-support/0015-widl-Support-WinRT-requires-keyword.patch
-	patch_apply widl-winrt-support/0016-widl-Support-WinRT-parameterized-type-parsing.patch
-	patch_apply widl-winrt-support/0017-widl-Introduce-new-strappend-helper.patch
-	patch_apply widl-winrt-support/0018-widl-Support-WinRT-parameterized-interface-type.patch
-	patch_apply widl-winrt-support/0019-widl-Support-WinRT-delegate-type.patch
-	patch_apply widl-winrt-support/0020-widl-Support-WinRT-parameterized-delegate-type.patch
-	patch_apply widl-winrt-support/0021-widl-Compute-signatures-for-parameterized-types.patch
-	patch_apply widl-winrt-support/0022-widl-Compute-uuids-for-parameterized-types.patch
-	patch_apply widl-winrt-support/0023-widl-Generate-helper-macros-for-WinRT-implementation.patch
-	patch_apply widl-winrt-support/0024-include-Add-IVectorView-HSTRING-declaration-to-windo.patch
-	patch_apply widl-winrt-support/0025-widl-Never-use-the-namespace-ABI-prefix-for-global-t.patch
-	patch_apply widl-winrt-support/0026-widl-Precompute-qualified-type-names-and-use-them-fo.patch
-	patch_apply widl-winrt-support/0027-widl-Define-the-C-type-name-as-an-alias-for-the-C-qu.patch
-fi
-
-# Patchset windows.media.speech.dll
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	widl-winrt-support
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#49740] windows.media.speech: New DLL
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/windows.media.speech.dll/Makefile.in, dlls/windows.media.speech.dll/windows.media.speech.spec,
-# | 	dlls/windows.media.speech.dll/windows.media.speech_main.c, loader/wine.inf.in
-# |
-if test "$enable_windows_media_speech_dll" -eq 1; then
-	patch_apply windows.media.speech.dll/0001-windows.media.speech-Add-stub-dll.patch
-	patch_apply windows.media.speech.dll/0002-windows.media.speech-Implement-IInstalledVoicesStati.patch
-	patch_apply windows.media.speech.dll/0003-windows.media.speech-Implement-IInstalledVoicesStati.patch
-	patch_apply windows.media.speech.dll/0004-windows.media.speech-Fake-empty-IInstalledVoicesStat.patch
-fi
-
-# Patchset windows.gaming.input-dll
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	widl-winrt-support, windows.media.speech.dll
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#49756] windows.gaming.input: New DLL
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/windows.gaming.input.dll/Makefile.in, dlls/windows.gaming.input.dll/windows.gaming.input.spec,
-# | 	dlls/windows.gaming.input.dll/windows.gaming.input_main.c, include/Makefile.in, include/asyncinfo.idl,
-# | 	include/windows.foundation.idl, include/windows.gaming.input.forcefeedback.idl, include/windows.gaming.input.idl,
-# | 	include/windows.system.idl, loader/wine.inf.in
-# |
-if test "$enable_windows_gaming_input_dll" -eq 1; then
-	patch_apply windows.gaming.input-dll/0001-windows.gaming.input-Add-stub-dll.patch
-	patch_apply windows.gaming.input-dll/0002-windows.gaming.input-Implement-IGamepadStatics-stubs.patch
-	patch_apply windows.gaming.input-dll/0003-windows.gaming.input-Implement-IGamepadStatics-Gamep.patch
-	patch_apply windows.gaming.input-dll/0004-windows.gaming.input-Fake-empty-IGamepadStatics-Game.patch
-	patch_apply windows.gaming.input-dll/0005-windows.gaming.input-Fake-IEventHandler_Gamepad-supp.patch
-	patch_apply windows.gaming.input-dll/0006-windows.gaming.input-Implement-IRawGameControllerSta.patch
-	patch_apply windows.gaming.input-dll/0007-windows.gaming.input-Implement-IRawGameControllerSta.patch
-	patch_apply windows.gaming.input-dll/0008-windows.gaming.input-Fake-empty-IRawGameControllerSt.patch
-	patch_apply windows.gaming.input-dll/0009-windows.gaming.input-Fake-IEventHandler_RawGameContr.patch
-fi
-
-# Patchset windows.globalization-dll
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	widl-winrt-support, windows.media.speech.dll, windows.gaming.input-dll
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#49740] windows.globalization: New DLL
-# |   *	[#49998] windows.globalization: New DLL
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/windows.globalization.dll/Makefile.in, dlls/windows.globalization.dll/windows.globalization.spec,
-# | 	dlls/windows.globalization.dll/windows.globalization_main.c, include/Makefile.in, include/windows.globalization.idl,
-# | 	include/windows.system.userprofile.idl, loader/wine.inf.in
-# |
-if test "$enable_windows_globalization_dll" -eq 1; then
-	patch_apply windows.globalization-dll/0001-windows.globalization-Add-stub-dll.patch
-	patch_apply windows.globalization-dll/0002-windows.globalization-Implement-IGlobalizationPrefer.patch
-	patch_apply windows.globalization-dll/0003-windows.globalization-Implement-IGlobalizationPrefer.patch
-	patch_apply windows.globalization-dll/0004-windows.globalization-Implement-IGlobalizationPrefer.patch
-	patch_apply windows.globalization-dll/0005-windows.globalization-Fake-empty-IGlobalizationPrefe.patch
-fi
-
-# Patchset windows.networking.connectivity.dll
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	widl-winrt-support, windows.media.speech.dll, windows.gaming.input-dll, windows.globalization-dll
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#46534] windows.networking.connectivity: New DLL
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/windows.networking.connectivity.dll/Makefile.in,
-# | 	dlls/windows.networking.connectivity.dll/windows.networking.connectivity.spec,
-# | 	dlls/windows.networking.connectivity.dll/windows.networking.connectivity_main.c, loader/wine.inf.in
-# |
-if test "$enable_windows_networking_connectivity_dll" -eq 1; then
-	patch_apply windows.networking.connectivity.dll/0001-windows.networking.connectivity-Add-stub-dll.patch
-	patch_apply windows.networking.connectivity.dll/0002-windows.networking.connectivity-Implement-IActivatio.patch
-	patch_apply windows.networking.connectivity.dll/0003-windows.networking.connectivity-Implement-INetworkIn.patch
 fi
 
 # Patchset windowscodecs-GIF_Encoder
