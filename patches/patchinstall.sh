@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "4f7e621dc58fd82924e64c695dc61a78c55fd44e"
+	echo "a9c8196e97ec255f4f69d005ea1cbf8fcf2537e8"
 }
 
 # Show version information
@@ -128,7 +128,6 @@ patch_enable_all ()
 	enable_fonts_Missing_Fonts="$1"
 	enable_gdi32_rotation="$1"
 	enable_gdiplus_Performance_Improvements="$1"
-	enable_imagehlp_BindImageEx="$1"
 	enable_imm32_com_initialization="$1"
 	enable_imm32_message_on_focus="$1"
 	enable_include_winsock="$1"
@@ -455,9 +454,6 @@ patch_enable ()
 			;;
 		gdiplus-Performance-Improvements)
 			enable_gdiplus_Performance_Improvements="$2"
-			;;
-		imagehlp-BindImageEx)
-			enable_imagehlp_BindImageEx="$2"
 			;;
 		imm32-com-initialization)
 			enable_imm32_com_initialization="$2"
@@ -2578,18 +2574,6 @@ if test "$enable_gdiplus_Performance_Improvements" -eq 1; then
 	patch_apply gdiplus-Performance-Improvements/0002-gdiplus-Change-multiplications-by-additions-in-the-x.patch
 	patch_apply gdiplus-Performance-Improvements/0003-gdiplus-Remove-ceilf-floorf-calls-from-bilinear-scal.patch
 	patch_apply gdiplus-Performance-Improvements/0004-gdiplus-Prefer-using-pre-multiplied-ARGB-data-in-the.patch
-fi
-
-# Patchset imagehlp-BindImageEx
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#3591] Support for BindImageEx
-# |
-# | Modified files:
-# |   *	dlls/imagehlp/modify.c, dlls/imagehlp/tests/image.c
-# |
-if test "$enable_imagehlp_BindImageEx" -eq 1; then
-	patch_apply imagehlp-BindImageEx/0001-imagehlp-Implement-parts-of-BindImageEx-to-make-free.patch
 fi
 
 # Patchset winex11-_NET_ACTIVE_WINDOW
