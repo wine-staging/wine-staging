@@ -210,6 +210,7 @@ patch_enable_all ()
 	enable_server_Realtime_Priority="$1"
 	enable_server_Signal_Thread="$1"
 	enable_server_Stored_ACLs="$1"
+	enable_server_default_integrity="$1"
 	enable_setupapi_DiskSpaceList="$1"
 	enable_setupapi_SPFILENOTIFY_FILEINCABINET="$1"
 	enable_shdocvw_ParseURLFromOutsideSource_Tests="$1"
@@ -700,6 +701,9 @@ patch_enable ()
 			;;
 		server-Stored_ACLs)
 			enable_server_Stored_ACLs="$2"
+			;;
+		server-default_integrity)
+			enable_server_default_integrity="$2"
 			;;
 		setupapi-DiskSpaceList)
 			enable_setupapi_DiskSpaceList="$2"
@@ -3513,6 +3517,21 @@ if test "$enable_server_Stored_ACLs" -eq 1; then
 	patch_apply server-Stored_ACLs/0005-server-Store-file-security-attributes-with-extended-.patch
 	patch_apply server-Stored_ACLs/0006-server-Convert-return-of-file-security-masks-with-ge.patch
 	patch_apply server-Stored_ACLs/0007-server-Retrieve-file-security-attributes-with-extend.patch
+fi
+
+# Patchset server-default_integrity
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#40613] Multiple applications require UAC implementation to run installer/app as a normal user instead of administrator
+# | 	(WhatsApp Desktop, Smartflix, Squirrel Installers, OneDrive)
+# |   *	[#39262] DiscordSetup.exe (.NET 4.5.2 app): Squirrell installer requires being run as unelevated process ('explorer.exe'
+# | 	should run unelevated by default with Vista+ setting)
+# |
+# | Modified files:
+# |   *	server/process.c
+# |
+if test "$enable_server_default_integrity" -eq 1; then
+	patch_apply server-default_integrity/0001-server-Create-processes-using-a-limited-administrato.patch
 fi
 
 # Patchset setupapi-DiskSpaceList
