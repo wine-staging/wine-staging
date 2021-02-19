@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "c6a3072051fb88edd3847c750c2ec852f11870f6"
+	echo "b8719736c5a022fa9c50f64adfc3ef58b40460f2"
 }
 
 # Show version information
@@ -189,7 +189,6 @@ patch_enable_all ()
 	enable_nvcuda_CUDA_Support="$1"
 	enable_nvcuvid_CUDA_Video_Support="$1"
 	enable_nvencodeapi_Video_Encoder="$1"
-	enable_odbccp32_SQLWriteDSNToIni="$1"
 	enable_oleaut32_CreateTypeLib="$1"
 	enable_oleaut32_Load_Save_EMF="$1"
 	enable_oleaut32_OLEPictureImpl_SaveAsFile="$1"
@@ -252,7 +251,6 @@ patch_enable_all ()
 	enable_user32_rawinput_mouse="$1"
 	enable_user32_rawinput_mouse_experimental="$1"
 	enable_user32_recursive_activation="$1"
-	enable_user32_window_activation="$1"
 	enable_uxtheme_CloseThemeClass="$1"
 	enable_version_VerQueryValue="$1"
 	enable_widl_SLTG_Typelib_Support="$1"
@@ -639,9 +637,6 @@ patch_enable ()
 		nvencodeapi-Video_Encoder)
 			enable_nvencodeapi_Video_Encoder="$2"
 			;;
-		odbccp32-SQLWriteDSNToIni)
-			enable_odbccp32_SQLWriteDSNToIni="$2"
-			;;
 		oleaut32-CreateTypeLib)
 			enable_oleaut32_CreateTypeLib="$2"
 			;;
@@ -827,9 +822,6 @@ patch_enable ()
 			;;
 		user32-recursive-activation)
 			enable_user32_recursive_activation="$2"
-			;;
-		user32-window-activation)
-			enable_user32_window_activation="$2"
 			;;
 		uxtheme-CloseThemeClass)
 			enable_uxtheme_CloseThemeClass="$2"
@@ -1378,13 +1370,6 @@ if test "$enable_wineboot_ProxySettings" -eq 1; then
 	fi
 	enable_wineboot_DriveSerial=1
 	enable_wineboot_drivers_etc_Stubs=1
-fi
-
-if test "$enable_user32_window_activation" -eq 1; then
-	if test "$enable_user32_recursive_activation" -gt 1; then
-		abort "Patchset user32-recursive-activation disabled, but user32-window-activation depends on that."
-	fi
-	enable_user32_recursive_activation=1
 fi
 
 if test "$enable_user32_rawinput_mouse_experimental" -eq 1; then
@@ -2303,21 +2288,18 @@ fi
 # |   *	[#50293] : native dxdiag complains about missing
 # |
 # | Modified files:
-# |   *	configure.ac, dlls/d3dpmesh/Makefile.in, dlls/d3dpmesh/d3dpmesh.spec, dlls/d3dpmesh/d3dpmesh_main.c,
-# | 	dlls/d3dpmesh/version.rc, dlls/diactfrm/Makefile.in, dlls/diactfrm/diactfrm.spec, dlls/diactfrm/diactfrm_main.c,
-# | 	dlls/diactfrm/version.rc, dlls/dimap/Makefile.in, dlls/dimap/dimap.spec, dlls/dimap/dimap_main.c, dlls/dimap/version.rc,
-# | 	dlls/dpmodemx/Makefile.in, dlls/dpmodemx/dpmodemx.spec, dlls/dpmodemx/dpmodemx_main.c, dlls/dpmodemx/version.rc,
-# | 	dlls/dpnhupnp/Makefile.in, dlls/dpnhupnp/dpnhupnp.spec, dlls/dpnhupnp/dpnhupnp_main.c, dlls/dpnhupnp/version.rc,
-# | 	dlls/dpvacm/Makefile.in, dlls/dpvacm/dpvacm.spec, dlls/dpvacm/dpvacm_main.c, dlls/dpvacm/version.rc,
-# | 	dlls/dpvvox/Makefile.in, dlls/dpvvox/dpvvox.spec, dlls/dpvvox/dpvvox_main.c, dlls/dpvvox/version.rc,
-# | 	dlls/dsdmoprp/Makefile.in, dlls/dsdmoprp/dsdmoprp.spec, dlls/dsdmoprp/dsdmoprp_main.c, dlls/dsdmoprp/version.rc,
-# | 	dlls/dsound3d/Makefile.in, dlls/dsound3d/dsound3d.spec, dlls/dsound3d/dsound3d_main.c, dlls/dsound3d/version.rc,
-# | 	dlls/dx7vb/Makefile.in, dlls/dx7vb/dx7vb.spec, dlls/dx7vb/dx7vb_main.c, dlls/dx7vb/version.rc,
-# | 	dlls/dxapi.sys/Makefile.in, dlls/dxapi.sys/dxapi.sys.spec, dlls/dxapi.sys/main.c, dlls/dxapi.sys/version.rc,
-# | 	dlls/encapi/Makefile.in, dlls/encapi/encapi.spec, dlls/encapi/encapi_main.c, dlls/encapi/version.rc,
-# | 	dlls/gcdef/Makefile.in, dlls/gcdef/gcdef.spec, dlls/gcdef/gcdef_main.c, dlls/gcdef/version.rc, dlls/qdv/Makefile.in,
-# | 	dlls/qdv/qdv.spec, dlls/qdv/qdv_main.c, dlls/qdv/version.rc, dlls/qedwipes/Makefile.in, dlls/qedwipes/qedwipes.spec,
-# | 	dlls/qedwipes/qedwipes_main.c, dlls/qedwipes/version.rc, loader/wine.inf.in
+# |   *	configure.ac, dlls/d3dpmesh/Makefile.in, dlls/d3dpmesh/d3dpmesh.spec, dlls/d3dpmesh/version.rc,
+# | 	dlls/diactfrm/Makefile.in, dlls/diactfrm/diactfrm.spec, dlls/diactfrm/version.rc, dlls/dimap/Makefile.in,
+# | 	dlls/dimap/dimap.spec, dlls/dimap/version.rc, dlls/dpmodemx/Makefile.in, dlls/dpmodemx/dpmodemx.spec,
+# | 	dlls/dpmodemx/dpmodemx_main.c, dlls/dpmodemx/version.rc, dlls/dpnhupnp/Makefile.in, dlls/dpnhupnp/dpnhupnp.spec,
+# | 	dlls/dpnhupnp/version.rc, dlls/dpvacm/Makefile.in, dlls/dpvacm/dpvacm.spec, dlls/dpvacm/version.rc,
+# | 	dlls/dpvvox/Makefile.in, dlls/dpvvox/dpvvox.spec, dlls/dpvvox/version.rc, dlls/dsdmoprp/Makefile.in,
+# | 	dlls/dsdmoprp/dsdmoprp.spec, dlls/dsdmoprp/version.rc, dlls/dsound3d/Makefile.in, dlls/dsound3d/dsound3d.spec,
+# | 	dlls/dsound3d/version.rc, dlls/dx7vb/Makefile.in, dlls/dx7vb/dx7vb.spec, dlls/dx7vb/version.rc,
+# | 	dlls/dxapi.sys/Makefile.in, dlls/dxapi.sys/dxapi.sys.spec, dlls/dxapi.sys/version.rc, dlls/encapi/Makefile.in,
+# | 	dlls/encapi/encapi.spec, dlls/encapi/version.rc, dlls/gcdef/Makefile.in, dlls/gcdef/gcdef.spec, dlls/gcdef/version.rc,
+# | 	dlls/qdv/Makefile.in, dlls/qdv/qdv.spec, dlls/qdv/version.rc, dlls/qedwipes/Makefile.in, dlls/qedwipes/qedwipes.spec,
+# | 	dlls/qedwipes/version.rc, loader/wine.inf.in
 # |
 if test "$enable_dxdiag_new_dlls" -eq 1; then
 	patch_apply dxdiag-new-dlls/0001-d3dpmesh-add-stub-dll.patch
@@ -3283,18 +3265,6 @@ if test "$enable_nvencodeapi_Video_Encoder" -eq 1; then
 	patch_apply nvencodeapi-Video_Encoder/0003-nvencodeapi-Add-support-for-version-6.0.patch
 fi
 
-# Patchset odbccp32-SQLWriteDSNToIni
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#50150] : odbccp32: Implement SQLWriteDSNToIni/W
-# |
-# | Modified files:
-# |   *	dlls/odbccp32/odbccp32.c, dlls/odbccp32/tests/misc.c
-# |
-if test "$enable_odbccp32_SQLWriteDSNToIni" -eq 1; then
-	patch_apply odbccp32-SQLWriteDSNToIni/0001-odbccp32-Implement-SQLWriteDSNToIni-W.patch
-fi
-
 # Patchset oleaut32-CreateTypeLib
 # |
 # | This patchset fixes the following Wine bugs:
@@ -4125,21 +4095,6 @@ if test "$enable_user32_recursive_activation" -eq 1; then
 	patch_apply user32-recursive-activation/0002-user32-tests-Test-a-recursive-activation-loop-on-WM_.patch
 fi
 
-# Patchset user32-window-activation
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	user32-recursive-activation
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#47507] Send a WM_ACTIVATE message after restoring a minimized window.
-# |
-# | Modified files:
-# |   *	dlls/user32/tests/msg.c, dlls/user32/winpos.c
-# |
-if test "$enable_user32_window_activation" -eq 1; then
-	patch_apply user32-window-activation/0001-user32-Send-a-WM_ACTIVATE-message-after-restoring-a-.patch
-fi
-
 # Patchset uxtheme-CloseThemeClass
 # |
 # | This patchset fixes the following Wine bugs:
@@ -4841,7 +4796,6 @@ fi
 # |   *	dlls/xactengine3_7/xact_dll.c
 # |
 if test "$enable_xactengine3_7_PrepareWave" -eq 1; then
-	patch_apply xactengine3_7-PrepareWave/0001-xactengine3_7-Implement-IXACT3Engine-PrepareWave.patch
 	patch_apply xactengine3_7-PrepareWave/0002-xactengine3_7-Implement-IXACT3Engine-PrepareStreamin.patch
 	patch_apply xactengine3_7-PrepareWave/0003-xactengine3_7-Implement-IXACT3Engine-PrepareInMemory.patch
 fi
