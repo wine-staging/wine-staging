@@ -3352,7 +3352,7 @@ fi
 # |   *	[#43472] Prefer native version of packager.dll
 # |
 # | Modified files:
-# |   *	dlls/packager/packager_main.c
+# |   *	dlls/packager/Makefile.in
 # |
 if test "$enable_packager_DllMain" -eq 1; then
 	patch_apply packager-DllMain/0001-packager-Prefer-native-version.patch
