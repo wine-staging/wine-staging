@@ -3524,10 +3524,12 @@ fi
 # | 	should run unelevated by default with Vista+ setting)
 # |
 # | Modified files:
-# |   *	server/process.c
+# |   *	dlls/shell32/shlexec.c, loader/wine.inf.in, server/process.c
 # |
 if test "$enable_server_default_integrity" -eq 1; then
 	patch_apply server-default_integrity/0001-server-Create-processes-using-a-limited-administrato.patch
+	patch_apply server-default_integrity/0002-shell32-Implement-the-runas-verb.patch
+	patch_apply server-default_integrity/0003-wine.inf-Set-the-EnableLUA-value-to-1.patch
 fi
 
 # Patchset setupapi-DiskSpaceList
