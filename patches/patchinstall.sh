@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "35e43ccf1b42e9f67d7765753f0c3ef8cf102c46"
+	echo "0f972e2247932f255f131792724e4796b4b2b87a"
 }
 
 # Show version information
@@ -254,6 +254,9 @@ patch_enable_all ()
 	enable_uxtheme_CloseThemeClass="$1"
 	enable_version_VerQueryValue="$1"
 	enable_widl_SLTG_Typelib_Support="$1"
+	enable_windows_gaming_input_dll="$1"
+	enable_windows_globalization_dll="$1"
+	enable_windows_media_speech_dll="$1"
 	enable_windowscodecs_GIF_Encoder="$1"
 	enable_windowscodecs_TIFF_Support="$1"
 	enable_wine_inf_Directory_ContextMenuHandlers="$1"
@@ -832,6 +835,15 @@ patch_enable ()
 		widl-SLTG_Typelib_Support)
 			enable_widl_SLTG_Typelib_Support="$2"
 			;;
+		windows.gaming.input-dll)
+			enable_windows_gaming_input_dll="$2"
+			;;
+		windows.globalization-dll)
+			enable_windows_globalization_dll="$2"
+			;;
+		windows.media.speech.dll)
+			enable_windows_media_speech_dll="$2"
+			;;
 		windowscodecs-GIF_Encoder)
 			enable_windowscodecs_GIF_Encoder="$2"
 			;;
@@ -1370,6 +1382,20 @@ if test "$enable_wineboot_ProxySettings" -eq 1; then
 	fi
 	enable_wineboot_DriveSerial=1
 	enable_wineboot_drivers_etc_Stubs=1
+fi
+
+if test "$enable_windows_globalization_dll" -eq 1; then
+	if test "$enable_windows_gaming_input_dll" -gt 1; then
+		abort "Patchset windows.gaming.input-dll disabled, but windows.globalization-dll depends on that."
+	fi
+	enable_windows_gaming_input_dll=1
+fi
+
+if test "$enable_windows_gaming_input_dll" -eq 1; then
+	if test "$enable_windows_media_speech_dll" -gt 1; then
+		abort "Patchset windows.media.speech.dll disabled, but windows.gaming.input-dll depends on that."
+	fi
+	enable_windows_media_speech_dll=1
 fi
 
 if test "$enable_user32_rawinput_mouse_experimental" -eq 1; then
@@ -4114,6 +4140,71 @@ fi
 # |
 if test "$enable_version_VerQueryValue" -eq 1; then
 	patch_apply version-VerQueryValue/0001-version-Test-for-VerQueryValueA-try-2.patch
+fi
+
+# Patchset windows.media.speech.dll
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#49740] windows.media.speech: New DLL
+# |
+# | Modified files:
+# |   *	configure.ac, dlls/windows.media.speech.dll/Makefile.in, dlls/windows.media.speech.dll/windows.media.speech.spec,
+# | 	dlls/windows.media.speech.dll/windows.media.speech_main.c, loader/wine.inf.in
+# |
+if test "$enable_windows_media_speech_dll" -eq 1; then
+	patch_apply windows.media.speech.dll/0001-windows.media.speech-Add-stub-dll.patch
+	patch_apply windows.media.speech.dll/0002-windows.media.speech-Implement-IInstalledVoicesStati.patch
+	patch_apply windows.media.speech.dll/0003-windows.media.speech-Implement-IInstalledVoicesStati.patch
+	patch_apply windows.media.speech.dll/0004-windows.media.speech-Fake-empty-IInstalledVoicesStat.patch
+fi
+
+# Patchset windows.gaming.input-dll
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	windows.media.speech.dll
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#49756] windows.gaming.input: New DLL
+# |
+# | Modified files:
+# |   *	configure.ac, dlls/windows.gaming.input.dll/Makefile.in, dlls/windows.gaming.input.dll/windows.gaming.input.spec,
+# | 	dlls/windows.gaming.input.dll/windows.gaming.input_main.c, include/Makefile.in, include/asyncinfo.idl,
+# | 	include/windows.foundation.collections.idl, include/windows.foundation.idl,
+# | 	include/windows.gaming.input.forcefeedback.idl, include/windows.gaming.input.idl, include/windows.system.idl,
+# | 	loader/wine.inf.in
+# |
+if test "$enable_windows_gaming_input_dll" -eq 1; then
+	patch_apply windows.gaming.input-dll/0001-windows.gaming.input-Add-stub-dll.patch
+	patch_apply windows.gaming.input-dll/0002-windows.gaming.input-Implement-IGamepadStatics-stubs.patch
+	patch_apply windows.gaming.input-dll/0003-windows.gaming.input-Implement-IGamepadStatics-Gamep.patch
+	patch_apply windows.gaming.input-dll/0004-windows.gaming.input-Fake-empty-IGamepadStatics-Game.patch
+	patch_apply windows.gaming.input-dll/0005-windows.gaming.input-Fake-IEventHandler_Gamepad-supp.patch
+	patch_apply windows.gaming.input-dll/0006-windows.gaming.input-Implement-IRawGameControllerSta.patch
+	patch_apply windows.gaming.input-dll/0007-windows.gaming.input-Implement-IRawGameControllerSta.patch
+	patch_apply windows.gaming.input-dll/0008-windows.gaming.input-Fake-empty-IRawGameControllerSt.patch
+	patch_apply windows.gaming.input-dll/0009-windows.gaming.input-Fake-IEventHandler_RawGameContr.patch
+fi
+
+# Patchset windows.globalization-dll
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	windows.media.speech.dll, windows.gaming.input-dll
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#49740] windows.globalization: New DLL
+# |   *	[#49998] windows.globalization: New DLL
+# |
+# | Modified files:
+# |   *	configure.ac, dlls/windows.globalization.dll/Makefile.in, dlls/windows.globalization.dll/windows.globalization.spec,
+# | 	dlls/windows.globalization.dll/windows.globalization_main.c, include/Makefile.in, include/windows.foundation.idl,
+# | 	include/windows.globalization.idl, include/windows.system.userprofile.idl, loader/wine.inf.in
+# |
+if test "$enable_windows_globalization_dll" -eq 1; then
+	patch_apply windows.globalization-dll/0001-windows.globalization-Add-stub-dll.patch
+	patch_apply windows.globalization-dll/0002-windows.globalization-Implement-IGlobalizationPrefer.patch
+	patch_apply windows.globalization-dll/0003-windows.globalization-Implement-IGlobalizationPrefer.patch
+	patch_apply windows.globalization-dll/0004-windows.globalization-Implement-IGlobalizationPrefer.patch
+	patch_apply windows.globalization-dll/0005-windows.globalization-Fake-empty-IGlobalizationPrefe.patch
 fi
 
 # Patchset windowscodecs-GIF_Encoder
