@@ -2386,9 +2386,10 @@ fi
 # |   *	[#44948] Multiple apps (Spine (Mod starter for Gothic), MS Office 365 installer) need CreateSymbolicLinkW implementation
 # |
 # | Modified files:
-# |   *	configure.ac, dlls/kernel32/path.c, dlls/kernel32/tests/path.c, dlls/kernelbase/file.c, dlls/msvcp120/tests/msvcp120.c,
-# | 	dlls/msvcp140/tests/msvcp140.c, dlls/ntdll/tests/file.c, dlls/ntdll/unix/file.c, include/Makefile.in, include/ntifs.h,
-# | 	include/winternl.h, programs/cmd/builtins.c, programs/cmd/directory.c, server/fd.c, server/file.c, server/protocol.def
+# |   *	configure.ac, dlls/kernel32/path.c, dlls/kernel32/tests/path.c, dlls/kernelbase/file.c, dlls/mountmgr.sys/device.c,
+# | 	dlls/msvcp120/tests/msvcp120.c, dlls/msvcp140/tests/msvcp140.c, dlls/ntdll/tests/file.c, dlls/ntdll/unix/file.c,
+# | 	include/Makefile.in, include/ntifs.h, include/winternl.h, programs/cmd/builtins.c, programs/cmd/directory.c,
+# | 	server/fd.c, server/file.c, server/protocol.def
 # |
 if test "$enable_ntdll_Junction_Points" -eq 1; then
 	patch_apply ntdll-Junction_Points/0001-ntdll-Add-support-for-junction-point-creation.patch
@@ -2396,6 +2397,7 @@ if test "$enable_ntdll_Junction_Points" -eq 1; then
 	patch_apply ntdll-Junction_Points/0003-ntdll-Add-support-for-deleting-junction-points.patch
 	patch_apply ntdll-Junction_Points/0004-ntdll-Add-a-test-for-junction-point-advertisement.patch
 	patch_apply ntdll-Junction_Points/0005-server-Add-support-for-deleting-junction-points-with.patch
+	patch_apply ntdll-Junction_Points/0006-kernel32-Advertise-junction-point-support.patch
 	patch_apply ntdll-Junction_Points/0007-ntdll-Add-support-for-absolute-symlink-creation.patch
 	patch_apply ntdll-Junction_Points/0008-ntdll-Add-support-for-reading-absolute-symlinks.patch
 	patch_apply ntdll-Junction_Points/0009-ntdll-Add-support-for-deleting-symlinks.patch
@@ -2421,6 +2423,13 @@ if test "$enable_ntdll_Junction_Points" -eq 1; then
 	patch_apply ntdll-Junction_Points/0029-ntdll-Succeed-with-no-data-for-NtReadFile-on-reparse.patch
 	patch_apply ntdll-Junction_Points/0030-ntdll-Support-reparse-point-properties-in-fd_get_fil.patch
 	patch_apply ntdll-Junction_Points/0031-ntdll-Add-support-for-FileAttributeTagInformation.patch
+	patch_apply ntdll-Junction_Points/0032-server-Properly-handle-renames-involving-symlinks.patch
+	patch_apply ntdll-Junction_Points/0033-kernelbase-Use-FILE_OPEN_REPARSE_POINT-in-MoveFileWi.patch
+	patch_apply ntdll-Junction_Points/0034-kernelbase-Use-FILE_OPEN_REPARSE_POINT-in-DeleteFile.patch
+	patch_apply ntdll-Junction_Points/0035-ntdll-Treat-undecoded-unix-symlinks-as-NT-symlinks.patch
+	patch_apply ntdll-Junction_Points/0036-ntdll-Strip-the-wine-prefix-from-reparse-point-paths.patch
+	patch_apply ntdll-Junction_Points/0037-ntdll-Add-a-marker-to-reparse-point-paths-to-indicat.patch
+	patch_apply ntdll-Junction_Points/0038-server-Rewrite-absolute-reparse-point-targets-if-the.patch
 fi
 
 # Patchset server-PeekMessage

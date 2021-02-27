@@ -1,0 +1,163 @@
+From d50198b3aa971c3b1b76afb2630901466503107c Mon Sep 17 00:00:00 2001
+From: "Erich E. Hoover" <erich.e.hoover@wine-staging.com>
+Date: Sat, 6 Feb 2021 16:15:03 -0700
+Subject: [PATCH] server: Rewrite absolute reparse point targets if the prefix
+ location changes.
+
+---
+ server/fd.c | 87 +++++++++++++++++++++++++++++++++++++++++++++--------
+ 1 file changed, 74 insertions(+), 13 deletions(-)
+
+diff --git a/server/fd.c b/server/fd.c
+index ee58aa3c8ae..43c0d36dff9 100644
+--- a/server/fd.c
++++ b/server/fd.c
+@@ -1902,7 +1902,7 @@ void get_nt_name( struct fd *fd, struct unicode_str *name )
+     name->len = fd->nt_namelen;
+ }
+ 
+-static void decode_symlink(char *name, int *is_dir)
++static char *decode_symlink(const char *name, ULONG *tag, int *is_dir)
+ {
+     char link[MAX_PATH], *p;
+     ULONG reparse_tag;
+@@ -1910,7 +1910,7 @@ static void decode_symlink(char *name, int *is_dir)
+ 
+     len = readlink( name, link, sizeof(link) );
+     if (len == -1)
+-        return;
++        return NULL;
+     link[len] = 0;
+     p = link;
+     /* skip past relative/absolute indication */
+@@ -1918,7 +1918,7 @@ static void decode_symlink(char *name, int *is_dir)
+         p++;
+     if (*p++ != '/')
+     {
+-        return;
++        return NULL;
+     }
+     /* decode the reparse tag */
+     reparse_tag = 0;
+@@ -1932,7 +1932,7 @@ static void decode_symlink(char *name, int *is_dir)
+         else if (c == '.' && *p++ == '/')
+             val = 1;
+         else
+-            return;
++            return NULL;
+         reparse_tag |= (val << i);
+     }
+     /* decode the directory/file flag */
+@@ -1945,10 +1945,69 @@ static void decode_symlink(char *name, int *is_dir)
+         else if (c == '.' && *p++ == '/')
+             *is_dir = TRUE;
+         else
+-            return;
++            return NULL;
+     }
+     else
+         *is_dir = TRUE;
++    if (tag) *tag = reparse_tag;
++    return p;
++}
++
++static void rewrite_symlink( const char *path )
++{
++    static char marker[] = "////.//.//"; /* "P" (0x50) encoded as a path (0=/ 1=./) */
++    char *link, *prefix_end, *local_link;
++    static char config_dir[MAX_PATH];
++    static int config_dir_len = 0;
++    char new_target[PATH_MAX];
++    int len, is_dir, i;
++    ULONG tag;
++
++    /* obtain the wine prefix path */
++    if (!config_dir_len)
++    {
++        char tmp_dir[MAX_PATH];
++
++        if (getcwd( tmp_dir, sizeof(tmp_dir) ) == NULL) return;
++        if (fchdir( config_dir_fd ) == -1) return;
++        if (getcwd( config_dir, sizeof(config_dir) ) == NULL) return;
++        if (chdir( tmp_dir ) == -1) return;
++        config_dir_len = strlen( config_dir );
++    }
++
++    /* grab the current link contents */
++    link = decode_symlink( path, &tag, &is_dir );
++    if (link == NULL) return;
++
++    /* find out if the prefix matches, if it does then do not modify the link */
++    prefix_end = strstr( link, marker );
++    if (prefix_end == NULL) return;
++    local_link = prefix_end + strlen( marker );
++    len = prefix_end - link;
++    if (len == config_dir_len && strncmp( config_dir, link, len ) == 0) return;
++    /* if the prefix does not match then re-encode the link with the new prefix */
++
++    /* Encode the reparse tag into the symlink */
++    strcpy( new_target, "/" );
++    for (i = 0; i < sizeof(ULONG)*8; i++)
++    {
++        if ((tag >> i) & 1)
++            strcat( new_target, "." );
++        strcat( new_target, "/" );
++    }
++    /* Encode the type (file or directory) if NT symlink */
++    if (tag == IO_REPARSE_TAG_SYMLINK)
++    {
++        if (is_dir)
++            strcat( new_target, "." );
++        strcat( new_target, "/" );
++    }
++    strcat( new_target, config_dir );
++    strcat( new_target, marker );
++    strcat( new_target, local_link );
++    /* replace the symlink */
++    unlink( path );
++    symlink( new_target, path );
+ }
+ 
+ /* open() wrapper that returns a struct fd with no fd user set */
+@@ -2016,6 +2075,15 @@ struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_nam
+         flags |= O_SYMLINK;
+ #endif
+ 
++    fd->unix_name = NULL;
++    if ((path = dup_fd_name( root, name )))
++    {
++        rewrite_symlink( path );
++        fd->unlink_name = path;
++        fd->unix_name = realpath( path, NULL );
++        if (!fd->unix_name) fd->unix_name = dup_fd_name( root, name ); /* dangling symlink */
++    }
++
+     if ((fd->unix_fd = open( name, rw_mode | (flags & ~O_TRUNC), *mode )) == -1)
+     {
+         /* if we tried to open a directory for write access, retry read-only */
+@@ -2033,13 +2101,6 @@ struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_nam
+     }
+ 
+     fd->nt_name = dup_nt_name( root, nt_name, &fd->nt_namelen );
+-    fd->unix_name = NULL;
+-    if ((path = dup_fd_name( root, name )))
+-    {
+-        fd->unlink_name = path;
+-        fd->unix_name = realpath( path, NULL );
+-        if (!fd->unix_name) fd->unix_name = dup_fd_name( root, name ); /* dangling symlink */
+-    }
+ 
+     closed_fd->unix_fd = fd->unix_fd;
+     closed_fd->unlink = 0;
+@@ -2073,7 +2134,7 @@ struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_nam
+         *mode = st.st_mode;
+         is_dir = S_ISDIR(st.st_mode);
+         if (is_link)
+-            decode_symlink(fd->unlink_name, &is_dir);
++            decode_symlink(fd->unlink_name, NULL, &is_dir);
+ 
+         /* check directory options */
+         if ((options & FILE_DIRECTORY_FILE) && !is_dir)
+-- 
+2.20.1
+

@@ -1,0 +1,114 @@
+From 960250fb1a76a0777ab32d3472184309a5ba124e Mon Sep 17 00:00:00 2001
+From: "Erich E. Hoover" <erich.e.hoover@wine-staging.com>
+Date: Sat, 6 Feb 2021 16:32:44 -0700
+Subject: [PATCH] ntdll: Treat undecoded unix symlinks as NT symlinks.
+
+---
+ dlls/ntdll/unix/file.c | 39 ++++++++++++++++++++++++++++-----------
+ 1 file changed, 28 insertions(+), 11 deletions(-)
+
+diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
+index e16290d5903..dedf93c11f2 100644
+--- a/dlls/ntdll/unix/file.c
++++ b/dlls/ntdll/unix/file.c
+@@ -1614,8 +1614,8 @@ static inline int get_file_xattr( char *hexattr, int attrlen )
+ 
+ NTSTATUS FILE_DecodeSymlink(const char *unix_src, char *unix_dest, int *unix_dest_len,
+                             DWORD *tag, ULONG *flags, BOOL *is_dir);
+-NTSTATUS get_symlink_properties(const char *target, int len, char *unix_dest, int *unix_dest_len,
+-                                DWORD *tag, ULONG *flags, BOOL *is_dir);
++void get_symlink_properties(const char *target, int len, char *unix_dest, int *unix_dest_len,
++                            DWORD *tag, ULONG *flags, BOOL *is_dir);
+ 
+ /* fetch the attributes of a file */
+ static inline ULONG get_file_attributes( const struct stat *st )
+@@ -1663,8 +1663,8 @@ static int fd_get_file_info( int fd, unsigned int options, struct stat *st, ULON
+         *attr |= FILE_ATTRIBUTE_REPARSE_POINT;
+         /* symbolic links always report size 0 */
+         st->st_size = 0;
+-        if (get_symlink_properties(path, len, NULL, NULL, NULL, NULL, &is_dir) == STATUS_SUCCESS)
+-            st->st_mode = (st->st_mode & ~S_IFMT) | (is_dir ? S_IFDIR : S_IFREG);
++        get_symlink_properties(path, len, NULL, NULL, NULL, NULL, &is_dir);
++        st->st_mode = (st->st_mode & ~S_IFMT) | (is_dir ? S_IFDIR : S_IFREG);
+     }
+ 
+ done:
+@@ -6163,10 +6163,11 @@ cleanup:
+ }
+ 
+ 
+-NTSTATUS get_symlink_properties(const char *target, int len, char *unix_dest, int *unix_dest_len,
+-                                DWORD *tag, ULONG *flags, BOOL *is_dir)
++void get_symlink_properties(const char *target, int len, char *unix_dest, int *unix_dest_len,
++                            DWORD *tag, ULONG *flags, BOOL *is_dir)
+ {
+     const char *p = target;
++    int decoded = FALSE;
+     DWORD reparse_tag;
+     BOOL dir_flag;
+     int i;
+@@ -6178,7 +6179,7 @@ NTSTATUS get_symlink_properties(const char *target, int len, char *unix_dest, in
+         p++;
+     }
+     if (*p++ != '/')
+-        return STATUS_NOT_IMPLEMENTED;
++        goto done;
+     reparse_tag = 0;
+     for (i = 0; i < sizeof(ULONG)*8; i++)
+     {
+@@ -6190,7 +6191,7 @@ NTSTATUS get_symlink_properties(const char *target, int len, char *unix_dest, in
+         else if (c == '.' && *p++ == '/')
+             val = 1;
+         else
+-            return STATUS_NOT_IMPLEMENTED;
++            goto done;
+         reparse_tag |= (val << i);
+     }
+     /* skip past the directory/file flag */
+@@ -6203,16 +6204,31 @@ NTSTATUS get_symlink_properties(const char *target, int len, char *unix_dest, in
+         else if (c == '.' && *p++ == '/')
+             dir_flag = TRUE;
+         else
+-            return STATUS_NOT_IMPLEMENTED;
++            goto done;
+     }
+     else
+         dir_flag = TRUE;
++    decoded = TRUE;
++
++done:
++    if (!decoded)
++    {
++        /* treat undecoded unix symlinks as NT symlinks */
++        struct stat st;
++
++        p = target;
++        if (flags && *p != '/') *flags = SYMLINK_FLAG_RELATIVE;
++        reparse_tag = IO_REPARSE_TAG_SYMLINK;
++        if (!stat( target, &st ))
++            dir_flag = S_ISDIR(st.st_mode);
++        else
++            dir_flag = FALSE; /* treat dangling symlinks as files */
++    }
+     len -= (p - target);
+     if (tag) *tag = reparse_tag;
+     if (is_dir) *is_dir = dir_flag;
+     if (unix_dest) memmove(unix_dest, p, len + 1);
+     if (unix_dest_len) *unix_dest_len = len;
+-    return STATUS_SUCCESS;
+ }
+ 
+ 
+@@ -6235,7 +6251,8 @@ NTSTATUS FILE_DecodeSymlink(const char *unix_src, char *unix_dest, int *unix_des
+         goto cleanup;
+     }
+     len = ret;
+-    status = get_symlink_properties(tmp, len, unix_dest, unix_dest_len, tag, flags, is_dir);
++    get_symlink_properties(tmp, len, unix_dest, unix_dest_len, tag, flags, is_dir);
++    status = STATUS_SUCCESS;
+ 
+ cleanup:
+     if (!unix_dest) free( tmp );
+-- 
+2.20.1
+
