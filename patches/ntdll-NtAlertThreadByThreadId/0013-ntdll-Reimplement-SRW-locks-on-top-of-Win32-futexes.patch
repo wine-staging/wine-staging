@@ -1,22 +1,22 @@
-From d90049788ebde3f53bb864cdaae25feecc490ad4 Mon Sep 17 00:00:00 2001
+From 2bc63e7c52262630869ac5a12ecd7225ac533b8d Mon Sep 17 00:00:00 2001
 From: Zebediah Figura <z.figura12@gmail.com>
 Date: Sun, 22 Nov 2020 20:51:10 -0600
 Subject: [PATCH] ntdll: Reimplement SRW locks on top of Win32 futexes.
 
 Signed-off-by: Zebediah Figura <z.figura12@gmail.com>
 ---
- dlls/ntdll/sync.c              | 312 +++++++++++++++------------------
+ dlls/ntdll/sync.c              | 313 +++++++++++++++------------------
  dlls/ntdll/unix/loader.c       |   6 -
  dlls/ntdll/unix/sync.c         | 309 --------------------------------
  dlls/ntdll/unix/unix_private.h |   6 -
  dlls/ntdll/unixlib.h           |  10 +-
- 5 files changed, 141 insertions(+), 502 deletions(-)
+ 5 files changed, 142 insertions(+), 502 deletions(-)
 
 diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
-index 225216cbe2a..950a5047752 100644
+index 1e6afc4cfc8..93a6a5fd7de 100644
 --- a/dlls/ntdll/sync.c
 +++ b/dlls/ntdll/sync.c
-@@ -160,127 +160,23 @@ DWORD WINAPI RtlRunOnceExecuteOnce( RTL_RUN_ONCE *once, PRTL_RUN_ONCE_INIT_FN fu
+@@ -160,127 +160,24 @@ DWORD WINAPI RtlRunOnceExecuteOnce( RTL_RUN_ONCE *once, PRTL_RUN_ONCE_INIT_FN fu
      return RtlRunOnceComplete( once, 0, context ? *context : NULL );
  }
  
@@ -151,15 +151,16 @@ index 225216cbe2a..950a5047752 100644
 +     * RtlAcquireSRWLockShared() needs to know the values of "exclusive_waiters"
 +     * and "owners", but RtlAcquireSRWLockExclusive() only needs to know the
 +     * value of "owners", so the former can wait on the entire structure, and
-+     * the latterwaits only on the "owners" member. Note then that "owners" must be
-+     * not be the first element in the structure. */
++     * the latter waits only on the "owners" member. Note then that "owners"
++     * must not be the first element in the structure.
++     */
 +    short owners;
 +};
 +C_ASSERT( sizeof(struct srw_lock) == 4 );
  
  /***********************************************************************
   *              RtlInitializeSRWLock (NTDLL.@)
-@@ -307,11 +203,36 @@ void WINAPI RtlInitializeSRWLock( RTL_SRWLOCK *lock )
+@@ -307,11 +204,36 @@ void WINAPI RtlInitializeSRWLock( RTL_SRWLOCK *lock )
   */
  void WINAPI RtlAcquireSRWLockExclusive( RTL_SRWLOCK *lock )
  {
@@ -200,7 +201,7 @@ index 225216cbe2a..950a5047752 100644
  }
  
  /***********************************************************************
-@@ -323,34 +244,34 @@ void WINAPI RtlAcquireSRWLockExclusive( RTL_SRWLOCK *lock )
+@@ -323,34 +245,34 @@ void WINAPI RtlAcquireSRWLockExclusive( RTL_SRWLOCK *lock )
   */
  void WINAPI RtlAcquireSRWLockShared( RTL_SRWLOCK *lock )
  {
@@ -259,7 +260,7 @@ index 225216cbe2a..950a5047752 100644
  }
  
  /***********************************************************************
-@@ -358,11 +279,23 @@ void WINAPI RtlAcquireSRWLockShared( RTL_SRWLOCK *lock )
+@@ -358,11 +280,23 @@ void WINAPI RtlAcquireSRWLockShared( RTL_SRWLOCK *lock )
   */
  void WINAPI RtlReleaseSRWLockExclusive( RTL_SRWLOCK *lock )
  {
@@ -272,11 +273,11 @@ index 225216cbe2a..950a5047752 100644
 +    {
 +        old.s = *u.s;
 +        new = old;
-+
-+        if (old.s.owners != -1) ERR("Lock %p is not owned exclusive!\n", lock);
  
 -    srwlock_leave_exclusive( lock, srwlock_unlock_exclusive( (unsigned int *)&lock->Ptr,
 -                             - SRWLOCK_RES_EXCLUSIVE ) - SRWLOCK_RES_EXCLUSIVE );
++        if (old.s.owners != -1) ERR("Lock %p is not owned exclusive!\n", lock);
++
 +        new.s.owners = 0;
 +    } while (InterlockedCompareExchange( u.l, new.l, old.l ) != old.l);
 +
@@ -287,7 +288,7 @@ index 225216cbe2a..950a5047752 100644
  }
  
  /***********************************************************************
-@@ -370,11 +303,22 @@ void WINAPI RtlReleaseSRWLockExclusive( RTL_SRWLOCK *lock )
+@@ -370,11 +304,22 @@ void WINAPI RtlReleaseSRWLockExclusive( RTL_SRWLOCK *lock )
   */
  void WINAPI RtlReleaseSRWLockShared( RTL_SRWLOCK *lock )
  {
@@ -300,12 +301,12 @@ index 225216cbe2a..950a5047752 100644
 +    {
 +        old.s = *u.s;
 +        new = old;
-+
-+        if (old.s.owners == -1) ERR("Lock %p is owned exclusive!\n", lock);
-+        else if (!old.s.owners) ERR("Lock %p is not owned shared!\n", lock);
  
 -    srwlock_leave_shared( lock, srwlock_lock_exclusive( (unsigned int *)&lock->Ptr,
 -                          - SRWLOCK_RES_SHARED ) - SRWLOCK_RES_SHARED );
++        if (old.s.owners == -1) ERR("Lock %p is owned exclusive!\n", lock);
++        else if (!old.s.owners) ERR("Lock %p is not owned shared!\n", lock);
++
 +        --new.s.owners;
 +    } while (InterlockedCompareExchange( u.l, new.l, old.l ) != old.l);
 +
@@ -314,7 +315,7 @@ index 225216cbe2a..950a5047752 100644
  }
  
  /***********************************************************************
-@@ -386,13 +330,28 @@ void WINAPI RtlReleaseSRWLockShared( RTL_SRWLOCK *lock )
+@@ -386,13 +331,28 @@ void WINAPI RtlReleaseSRWLockShared( RTL_SRWLOCK *lock )
   */
  BOOLEAN WINAPI RtlTryAcquireSRWLockExclusive( RTL_SRWLOCK *lock )
  {
@@ -329,9 +330,7 @@ index 225216cbe2a..950a5047752 100644
 +    {
 +        old.s = *u.s;
 +        new.s = old.s;
- 
--    return InterlockedCompareExchange( (int *)&lock->Ptr, SRWLOCK_MASK_IN_EXCLUSIVE |
--                                       SRWLOCK_RES_EXCLUSIVE, 0 ) == 0;
++
 +        if (!old.s.owners)
 +        {
 +            /* Not locked exclusive or shared. We can try to grab it. */
@@ -343,12 +342,14 @@ index 225216cbe2a..950a5047752 100644
 +            ret = FALSE;
 +        }
 +    } while (InterlockedCompareExchange( u.l, new.l, old.l ) != old.l);
-+
+ 
+-    return InterlockedCompareExchange( (int *)&lock->Ptr, SRWLOCK_MASK_IN_EXCLUSIVE |
+-                                       SRWLOCK_RES_EXCLUSIVE, 0 ) == 0;
 +    return ret;
  }
  
  /***********************************************************************
-@@ -400,20 +359,29 @@ BOOLEAN WINAPI RtlTryAcquireSRWLockExclusive( RTL_SRWLOCK *lock )
+@@ -400,20 +360,29 @@ BOOLEAN WINAPI RtlTryAcquireSRWLockExclusive( RTL_SRWLOCK *lock )
   */
  BOOLEAN WINAPI RtlTryAcquireSRWLockShared( RTL_SRWLOCK *lock )
  {
@@ -408,7 +409,7 @@ index ab27626fb6f..f98e33b45fb 100644
      ntdll_ceil,
      ntdll_cos,
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index d4092438644..b67f5fc8f10 100644
+index ca18c1a22b1..11dd6d65fa0 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
 @@ -114,8 +114,6 @@ static inline ULONGLONG monotonic_counter(void)
@@ -746,10 +747,10 @@ index d4092438644..b67f5fc8f10 100644
 -
 -#endif
 diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
-index acbfd6b2a5e..3066dbd325a 100644
+index 504975538cc..55e91f7a0bd 100644
 --- a/dlls/ntdll/unix/unix_private.h
 +++ b/dlls/ntdll/unix/unix_private.h
-@@ -98,12 +98,6 @@ extern void     (WINAPI *pKiUserApcDispatcher)(CONTEXT*,ULONG_PTR,ULONG_PTR,ULON
+@@ -94,12 +94,6 @@ extern void     (WINAPI *pKiUserApcDispatcher)(CONTEXT*,ULONG_PTR,ULONG_PTR,ULON
  extern NTSTATUS (WINAPI *pKiUserExceptionDispatcher)(EXCEPTION_RECORD*,CONTEXT*) DECLSPEC_HIDDEN;
  extern void     (WINAPI *pLdrInitializeThunk)(CONTEXT*,void**,ULONG_PTR,ULONG_PTR) DECLSPEC_HIDDEN;
  extern void     (WINAPI *pRtlUserThreadStart)( PRTL_THREAD_START_ROUTINE entry, void *arg ) DECLSPEC_HIDDEN;
@@ -763,15 +764,15 @@ index acbfd6b2a5e..3066dbd325a 100644
  
  extern USHORT * CDECL get_unix_codepage_data(void) DECLSPEC_HIDDEN;
 diff --git a/dlls/ntdll/unixlib.h b/dlls/ntdll/unixlib.h
-index 44f0c1aa4ea..9d5aca187fa 100644
+index 246fd44a53e..8527f44173b 100644
 --- a/dlls/ntdll/unixlib.h
 +++ b/dlls/ntdll/unixlib.h
 @@ -26,7 +26,7 @@
  struct _DISPATCHER_CONTEXT;
  
  /* increment this when you change the function table */
--#define NTDLL_UNIXLIB_VERSION 113
-+#define NTDLL_UNIXLIB_VERSION 114
+-#define NTDLL_UNIXLIB_VERSION 116
++#define NTDLL_UNIXLIB_VERSION 117
  
  struct unix_funcs
  {

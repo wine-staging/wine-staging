@@ -1,4 +1,4 @@
-From 5e83a08f11243c8aeb90ef324ae1564994c4bb73 Mon Sep 17 00:00:00 2001
+From 66780246e8198c0b83c8955819a8d1a4b497ed8e Mon Sep 17 00:00:00 2001
 From: Zebediah Figura <z.figura12@gmail.com>
 Date: Mon, 31 Aug 2020 23:38:09 -0500
 Subject: [PATCH] ntdll: Reimplement the critical section fast path on top of
@@ -10,14 +10,14 @@ Signed-off-by: Zebediah Figura <z.figura12@gmail.com>
  dlls/ntdll/unix/loader.c       |   3 -
  dlls/ntdll/unix/sync.c         | 109 ---------------------------------
  dlls/ntdll/unix/unix_private.h |   3 -
- dlls/ntdll/unixlib.h           |   3 -
- 5 files changed, 23 insertions(+), 130 deletions(-)
+ dlls/ntdll/unixlib.h           |   5 +-
+ 5 files changed, 24 insertions(+), 131 deletions(-)
 
 diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
-index 66f807636c7..5bd093e42f5 100644
+index 09975ac3d45..97a5ce7fffa 100644
 --- a/dlls/ntdll/sync.c
 +++ b/dlls/ntdll/sync.c
-@@ -766,19 +766,26 @@ static inline HANDLE get_semaphore( RTL_CRITICAL_SECTION *crit )
+@@ -765,19 +765,26 @@ static inline HANDLE get_semaphore( RTL_CRITICAL_SECTION *crit )
  
  static inline NTSTATUS wait_semaphore( RTL_CRITICAL_SECTION *crit, int timeout )
  {
@@ -43,7 +43,7 @@ index 66f807636c7..5bd093e42f5 100644
 +        {
 +            static const int zero;
 +            /* this may wait longer than specified in case of multiple wake-ups */
-+            if (RtlWaitOnAddress( (int *)&crit->LockSemaphore, &zero, sizeof(int), &time ) == STATUS_TIMEOUT)
++            if (RtlWaitOnAddress( lock, &zero, sizeof(int), &time ) == STATUS_TIMEOUT)
 +                return STATUS_TIMEOUT;
 +        }
 +        return STATUS_WAIT_0;
@@ -52,7 +52,7 @@ index 66f807636c7..5bd093e42f5 100644
  }
  
  /******************************************************************************
-@@ -868,8 +875,6 @@ NTSTATUS WINAPI RtlDeleteCriticalSection( RTL_CRITICAL_SECTION *crit )
+@@ -867,8 +874,6 @@ NTSTATUS WINAPI RtlDeleteCriticalSection( RTL_CRITICAL_SECTION *crit )
              RtlFreeHeap( GetProcessHeap(), 0, crit->DebugInfo );
              crit->DebugInfo = NULL;
          }
@@ -61,7 +61,7 @@ index 66f807636c7..5bd093e42f5 100644
      }
      else NtClose( crit->LockSemaphore );
      crit->LockSemaphore = 0;
-@@ -945,12 +950,18 @@ NTSTATUS WINAPI RtlpUnWaitCriticalSection( RTL_CRITICAL_SECTION *crit )
+@@ -944,12 +949,18 @@ NTSTATUS WINAPI RtlpUnWaitCriticalSection( RTL_CRITICAL_SECTION *crit )
      NTSTATUS ret;
  
      /* debug info is cleared by MakeCriticalSectionGlobal */
@@ -75,7 +75,7 @@ index 66f807636c7..5bd093e42f5 100644
 +    else
 +    {
 +        int *lock = (int *)&crit->LockSemaphore;
-+        *lock = 1;
++        InterlockedExchange( lock, 1 );
 +        RtlWakeAddressSingle( lock );
 +        ret = STATUS_SUCCESS;
 +    }
@@ -83,10 +83,10 @@ index 66f807636c7..5bd093e42f5 100644
      return ret;
  }
 diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
-index 465ab427469..2a67f0750a0 100644
+index 9e873d655ca..d2f8202171c 100644
 --- a/dlls/ntdll/unix/loader.c
 +++ b/dlls/ntdll/unix/loader.c
-@@ -1584,9 +1584,6 @@ static struct unix_funcs unix_funcs =
+@@ -1691,9 +1691,6 @@ static struct unix_funcs unix_funcs =
  #endif
      DbgUiIssueRemoteBreakin,
      RtlGetSystemTimePrecise,
@@ -97,10 +97,10 @@ index 465ab427469..2a67f0750a0 100644
      fast_RtlAcquireSRWLockExclusive,
      fast_RtlTryAcquireSRWLockShared,
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index 0ea8e28613c..8e24d7aecd5 100644
+index 0551682979c..7b8bbe737f0 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
-@@ -2468,115 +2468,6 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
+@@ -2409,115 +2409,6 @@ NTSTATUS WINAPI NtWaitForAlertByThreadId( const void *address, const LARGE_INTEG
  }
  
  
@@ -217,10 +217,10 @@ index 0ea8e28613c..8e24d7aecd5 100644
  
  /* Futex-based SRW lock implementation:
 diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
-index cfcf99423c3..bf94dddb212 100644
+index 75a8dc9c85d..3f4b93e42ed 100644
 --- a/dlls/ntdll/unix/unix_private.h
 +++ b/dlls/ntdll/unix/unix_private.h
-@@ -99,9 +99,6 @@ extern void     (WINAPI *pKiUserApcDispatcher)(CONTEXT*,ULONG_PTR,ULONG_PTR,ULON
+@@ -94,9 +94,6 @@ extern void     (WINAPI *pKiUserApcDispatcher)(CONTEXT*,ULONG_PTR,ULONG_PTR,ULON
  extern NTSTATUS (WINAPI *pKiUserExceptionDispatcher)(EXCEPTION_RECORD*,CONTEXT*) DECLSPEC_HIDDEN;
  extern void     (WINAPI *pLdrInitializeThunk)(CONTEXT*,void**,ULONG_PTR,ULONG_PTR) DECLSPEC_HIDDEN;
  extern void     (WINAPI *pRtlUserThreadStart)( PRTL_THREAD_START_ROUTINE entry, void *arg ) DECLSPEC_HIDDEN;
@@ -231,10 +231,19 @@ index cfcf99423c3..bf94dddb212 100644
  extern NTSTATUS CDECL fast_RtlAcquireSRWLockExclusive( RTL_SRWLOCK *lock ) DECLSPEC_HIDDEN;
  extern NTSTATUS CDECL fast_RtlTryAcquireSRWLockShared( RTL_SRWLOCK *lock ) DECLSPEC_HIDDEN;
 diff --git a/dlls/ntdll/unixlib.h b/dlls/ntdll/unixlib.h
-index 20f9a19ff8d..a18526de013 100644
+index 933cd0d33ce..24f5d92b0a8 100644
 --- a/dlls/ntdll/unixlib.h
 +++ b/dlls/ntdll/unixlib.h
-@@ -41,9 +41,6 @@ struct unix_funcs
+@@ -26,7 +26,7 @@
+ struct _DISPATCHER_CONTEXT;
+ 
+ /* increment this when you change the function table */
+-#define NTDLL_UNIXLIB_VERSION 114
++#define NTDLL_UNIXLIB_VERSION 115
+ 
+ struct unix_funcs
+ {
+@@ -40,9 +40,6 @@ struct unix_funcs
      LONGLONG      (WINAPI *RtlGetSystemTimePrecise)(void);
  
      /* fast locks */
@@ -245,5 +254,5 @@ index 20f9a19ff8d..a18526de013 100644
      NTSTATUS      (CDECL *fast_RtlAcquireSRWLockExclusive)( RTL_SRWLOCK *lock );
      NTSTATUS      (CDECL *fast_RtlTryAcquireSRWLockShared)( RTL_SRWLOCK *lock );
 -- 
-2.30.0
+2.20.1
 
