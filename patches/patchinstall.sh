@@ -1652,7 +1652,7 @@ fi
 # Patchset Staging
 # |
 # | Modified files:
-# |   *	Makefile.in, dlls/ntdll/Makefile.in, dlls/ntdll/loader.c
+# |   *	Makefile.in, dlls/ntdll/loader.c
 # |
 if test "$enable_Staging" -eq 1; then
 	patch_apply Staging/0001-kernel32-Add-winediag-message-to-show-warning-that-t.patch
