@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "0f972e2247932f255f131792724e4796b4b2b87a"
+	echo "3c2db20f66806074b047b0b3c76aa86ad79e3175"
 }
 
 # Show version information
@@ -303,7 +303,6 @@ patch_enable_all ()
 	enable_winmm_mciSendCommandA="$1"
 	enable_wintab32_improvements="$1"
 	enable_wintrust_WTHelperGetProvCertFromChain="$1"
-	enable_wow64cpu_Wow64Transition="$1"
 	enable_wpcap_Dynamic_Linking="$1"
 	enable_ws2_32_APC_Performance="$1"
 	enable_ws2_32_Connect_Time="$1"
@@ -981,9 +980,6 @@ patch_enable ()
 			;;
 		wintrust-WTHelperGetProvCertFromChain)
 			enable_wintrust_WTHelperGetProvCertFromChain="$2"
-			;;
-		wow64cpu-Wow64Transition)
-			enable_wow64cpu_Wow64Transition="$2"
 			;;
 		wpcap-Dynamic_Linking)
 			enable_wpcap_Dynamic_Linking="$2"
@@ -4747,20 +4743,6 @@ fi
 # |
 if test "$enable_wintrust_WTHelperGetProvCertFromChain" -eq 1; then
 	patch_apply wintrust-WTHelperGetProvCertFromChain/0001-wintrust-Add-parameter-check-in-WTHelperGetProvCertF.patch
-fi
-
-# Patchset wow64cpu-Wow64Transition
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#45567] League of Legends 8.12+ fails to start a game (anticheat engine, validation of WoW64 syscall dispatcher)
-# |
-# | Modified files:
-# |   *	configure, configure.ac, dlls/ntdll/loader.c, dlls/ntdll/ntdll.spec, dlls/wow64cpu/Makefile.in,
-# | 	dlls/wow64cpu/wow64cpu.spec, dlls/wow64cpu/wow64cpu_main.c
-# |
-if test "$enable_wow64cpu_Wow64Transition" -eq 1; then
-	patch_apply wow64cpu-Wow64Transition/0001-wow64cpu-Add-stub-dll.patch
-	patch_apply wow64cpu-Wow64Transition/0002-ntdll-Add-a-stub-implementation-of-Wow64Transition.patch
 fi
 
 # Patchset wpcap-Dynamic_Linking
