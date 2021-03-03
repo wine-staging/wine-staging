@@ -182,7 +182,6 @@ patch_enable_all ()
 	enable_ntdll_Zero_mod_name="$1"
 	enable_ntdll_aarch_TEB="$1"
 	enable_ntdll_ext4_case_folder="$1"
-	enable_ntdll_set_full_cpu_context="$1"
 	enable_ntdll_x86_64_SegDs="$1"
 	enable_ntoskrnl_Stubs="$1"
 	enable_nvapi_Stub_DLL="$1"
@@ -617,9 +616,6 @@ patch_enable ()
 			;;
 		ntdll-ext4-case-folder)
 			enable_ntdll_ext4_case_folder="$2"
-			;;
-		ntdll-set_full_cpu_context)
-			enable_ntdll_set_full_cpu_context="$2"
 			;;
 		ntdll-x86_64_SegDs)
 			enable_ntdll_x86_64_SegDs="$2"
@@ -3245,15 +3241,6 @@ fi
 # |
 if test "$enable_ntdll_ext4_case_folder" -eq 1; then
 	patch_apply ntdll-ext4-case-folder/0002-ntdll-server-Mark-drive_c-as-case-insensitive-when-c.patch
-fi
-
-# Patchset ntdll-set_full_cpu_context
-# |
-# | Modified files:
-# |   *	dlls/ntdll/unix/signal_i386.c
-# |
-if test "$enable_ntdll_set_full_cpu_context" -eq 1; then
-	patch_apply ntdll-set_full_cpu_context/0001-ntdll-Add-back-SS-segment-prefixes-in-set_full_cpu_c.patch
 fi
 
 # Patchset ntdll-x86_64_SegDs
