@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "6d5659103f49db9e045087dd0093acc3b9a4b919"
+	echo "31af1aeb7895bddf59a73886b89759f76881bc9e"
 }
 
 # Show version information
@@ -3616,11 +3616,9 @@ fi
 # |   *	ntdll-FileDispositionInformation, kernel32-CopyFileEx, shell32-SHFileOperation_Move, shell32-Progress_Dialog
 # |
 # | Modified files:
-# |   *	dlls/aclui/Makefile.in, dlls/aclui/aclui.rc, dlls/aclui/aclui_main.c, dlls/aclui/resource.h, dlls/aclui/user_icons.bmp,
-# | 	dlls/shell32/Makefile.in, dlls/shell32/shell32.rc, dlls/shell32/shlview_cmenu.c, dlls/shell32/shresdef.h
+# |   *	dlls/shell32/Makefile.in, dlls/shell32/shell32.rc, dlls/shell32/shlview_cmenu.c, dlls/shell32/shresdef.h
 # |
 if test "$enable_shell32_ACE_Viewer" -eq 1; then
-	patch_apply shell32-ACE_Viewer/0001-aclui-Add-basic-ACE-viewer.patch
 	patch_apply shell32-ACE_Viewer/0002-shell32-Add-security-property-tab.patch
 fi
 
