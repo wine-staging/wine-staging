@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "31af1aeb7895bddf59a73886b89759f76881bc9e"
+	echo "5bccf6fc3f309207ef4162df335157649f627f50"
 }
 
 # Show version information
@@ -211,7 +211,6 @@ patch_enable_all ()
 	enable_server_Stored_ACLs="$1"
 	enable_server_default_integrity="$1"
 	enable_setupapi_DiskSpaceList="$1"
-	enable_setupapi_SPFILENOTIFY_FILEINCABINET="$1"
 	enable_shdocvw_ParseURLFromOutsideSource_Tests="$1"
 	enable_shell32_ACE_Viewer="$1"
 	enable_shell32_Context_Menu="$1"
@@ -704,9 +703,6 @@ patch_enable ()
 			;;
 		setupapi-DiskSpaceList)
 			enable_setupapi_DiskSpaceList="$2"
-			;;
-		setupapi-SPFILENOTIFY_FILEINCABINET)
-			enable_setupapi_SPFILENOTIFY_FILEINCABINET="$2"
 			;;
 		shdocvw-ParseURLFromOutsideSource_Tests)
 			enable_shdocvw_ParseURLFromOutsideSource_Tests="$2"
@@ -3557,21 +3553,6 @@ if test "$enable_setupapi_DiskSpaceList" -eq 1; then
 	patch_apply setupapi-DiskSpaceList/0004-setupapi-Ignore-deletion-of-added-files-in-SetupAddT.patch
 	patch_apply setupapi-DiskSpaceList/0005-setupapi-ImplementSetupAddSectionToDiskSpaceList.patch
 	patch_apply setupapi-DiskSpaceList/0006-setupapi-Implement-SetupAddInstallSectionToDiskSpace.patch
-fi
-
-# Patchset setupapi-SPFILENOTIFY_FILEINCABINET
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#42827] Fix Param2 in SPFILENOTIFY_FILEINCABINET handler
-# |
-# | Modified files:
-# |   *	dlls/setupapi/setupcab.c, dlls/setupapi/tests/setupcab.c
-# |
-if test "$enable_setupapi_SPFILENOTIFY_FILEINCABINET" -eq 1; then
-	patch_apply setupapi-SPFILENOTIFY_FILEINCABINET/0001-setupapi-tests-Add-more-tests-for-SPFILENOTIFY_FILEI.patch
-	patch_apply setupapi-SPFILENOTIFY_FILEINCABINET/0002-setupapi-Fix-CabinetName-passed-to-SPFILENOTIFY_CABI.patch
-	patch_apply setupapi-SPFILENOTIFY_FILEINCABINET/0003-setupapi-tests-Add-tests-for-cabinet-name-passed-to-.patch
-	patch_apply setupapi-SPFILENOTIFY_FILEINCABINET/0004-setupapi-Fix-parameters-of-SPFILENOTIFY_FILEINCABINE.patch
 fi
 
 # Patchset shdocvw-ParseURLFromOutsideSource_Tests
