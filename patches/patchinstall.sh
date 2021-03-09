@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "5bccf6fc3f309207ef4162df335157649f627f50"
+	echo "9107f591d3d73a3b4040db2e13ef51d9846591c9"
 }
 
 # Show version information
@@ -175,7 +175,6 @@ patch_enable_all ()
 	enable_ntdll_RtlFirstFreeAce="$1"
 	enable_ntdll_RtlQueryPackageIdentity="$1"
 	enable_ntdll_RtlQueryProcessPlaceholderCompatibilityMode="$1"
-	enable_ntdll_RtlQueryRegistryValuesEx="$1"
 	enable_ntdll_Serial_Port_Detection="$1"
 	enable_ntdll_Syscall_Emulation="$1"
 	enable_ntdll_SystemCodeIntegrityInformation="$1"
@@ -595,9 +594,6 @@ patch_enable ()
 			;;
 		ntdll-RtlQueryProcessPlaceholderCompatibilityMode)
 			enable_ntdll_RtlQueryProcessPlaceholderCompatibilityMode="$2"
-			;;
-		ntdll-RtlQueryRegistryValuesEx)
-			enable_ntdll_RtlQueryRegistryValuesEx="$2"
 			;;
 		ntdll-Serial_Port_Detection)
 			enable_ntdll_Serial_Port_Detection="$2"
@@ -3172,18 +3168,6 @@ fi
 # |
 if test "$enable_ntdll_RtlQueryProcessPlaceholderCompatibilityMode" -eq 1; then
 	patch_apply ntdll-RtlQueryProcessPlaceholderCompatibilityMode/0001-ntdll-Add-stub-for-RtlQueryProcessPlaceholderCompati.patch
-fi
-
-# Patchset ntdll-RtlQueryRegistryValuesEx
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#46969] ntdll: Implement RtlQueryRegistryValuesEx
-# |
-# | Modified files:
-# |   *	dlls/ntdll/ntdll.spec, dlls/ntdll/reg.c
-# |
-if test "$enable_ntdll_RtlQueryRegistryValuesEx" -eq 1; then
-	patch_apply ntdll-RtlQueryRegistryValuesEx/0001-ntdll-Implement-RtlQueryRegistryValuesEx.patch
 fi
 
 # Patchset ntdll-Serial_Port_Detection
