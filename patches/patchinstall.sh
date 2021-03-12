@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "0ae1669ec2798193b11fd2d2ac74d51203f673b2"
+	echo "4336ed0b84b3dd3097bbbbf8e4b9de2e4d444ad7"
 }
 
 # Show version information
@@ -110,7 +110,6 @@ patch_enable_all ()
 	enable_dbghelp_Debug_Symbols="$1"
 	enable_ddraw_Device_Caps="$1"
 	enable_ddraw_IDirect3DTexture2_Load="$1"
-	enable_ddraw_Rendering_Targets="$1"
 	enable_ddraw_Silence_FIXMEs="$1"
 	enable_ddraw_Texture_Wrong_Caps="$1"
 	enable_ddraw_version_check="$1"
@@ -399,9 +398,6 @@ patch_enable ()
 			;;
 		ddraw-IDirect3DTexture2_Load)
 			enable_ddraw_IDirect3DTexture2_Load="$2"
-			;;
-		ddraw-Rendering_Targets)
-			enable_ddraw_Rendering_Targets="$2"
 			;;
 		ddraw-Silence_FIXMEs)
 			enable_ddraw_Silence_FIXMEs="$2"
@@ -1578,13 +1574,6 @@ if test "$enable_ddraw_version_check" -eq 1; then
 	enable_ddraw_Device_Caps=1
 fi
 
-if test "$enable_ddraw_Texture_Wrong_Caps" -eq 1; then
-	if test "$enable_ddraw_Rendering_Targets" -gt 1; then
-		abort "Patchset ddraw-Rendering_Targets disabled, but ddraw-Texture_Wrong_Caps depends on that."
-	fi
-	enable_ddraw_Rendering_Targets=1
-fi
-
 if test "$enable_d3d11_Deferred_Context" -eq 1; then
 	if test "$enable_nvapi_Stub_DLL" -gt 1; then
 		abort "Patchset nvapi-Stub_DLL disabled, but d3d11-Deferred_Context depends on that."
@@ -2079,18 +2068,6 @@ if test "$enable_ddraw_IDirect3DTexture2_Load" -eq 1; then
 	patch_apply ddraw-IDirect3DTexture2_Load/0002-ddraw-tests-Add-more-tests-for-IDirect3DTexture2-Loa.patch
 fi
 
-# Patchset ddraw-Rendering_Targets
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#34906] Use video memory for rendering targets if possible
-# |
-# | Modified files:
-# |   *	dlls/ddraw/ddraw.c, dlls/ddraw/ddraw_private.h, dlls/ddraw/device.c, dlls/ddraw/surface.c
-# |
-if test "$enable_ddraw_Rendering_Targets" -eq 1; then
-	patch_apply ddraw-Rendering_Targets/0001-ddraw-Create-rendering-targets-in-video-memory-if-po.patch
-fi
-
 # Patchset ddraw-Silence_FIXMEs
 # |
 # | Modified files:
@@ -2101,9 +2078,6 @@ if test "$enable_ddraw_Silence_FIXMEs" -eq 1; then
 fi
 
 # Patchset ddraw-Texture_Wrong_Caps
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	ddraw-Rendering_Targets
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#46948] Allow setting texture without DDSCAPS_TEXTURE for software device
