@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "4336ed0b84b3dd3097bbbbf8e4b9de2e4d444ad7"
+	echo "23ffd0a7986421958c23cffce138afa389209920"
 }
 
 # Show version information
@@ -192,7 +192,6 @@ patch_enable_all ()
 	enable_oleaut32_OLEPictureImpl_SaveAsFile="$1"
 	enable_oleaut32_OleLoadPicture="$1"
 	enable_oleaut32_OleLoadPictureFile="$1"
-	enable_opencl_version_1_2="$1"
 	enable_packager_DllMain="$1"
 	enable_pdh_PdhLookupPerfNameByIndex_processor="$1"
 	enable_programs_findstr="$1"
@@ -253,7 +252,6 @@ patch_enable_all ()
 	enable_widl_SLTG_Typelib_Support="$1"
 	enable_windows_gaming_input_dll="$1"
 	enable_windows_globalization_dll="$1"
-	enable_windows_media_speech_dll="$1"
 	enable_windowscodecs_GIF_Encoder="$1"
 	enable_windowscodecs_TIFF_Support="$1"
 	enable_wine_inf_Directory_ContextMenuHandlers="$1"
@@ -645,9 +643,6 @@ patch_enable ()
 		oleaut32-OleLoadPictureFile)
 			enable_oleaut32_OleLoadPictureFile="$2"
 			;;
-		opencl-version_1_2)
-			enable_opencl_version_1_2="$2"
-			;;
 		packager-DllMain)
 			enable_packager_DllMain="$2"
 			;;
@@ -827,9 +822,6 @@ patch_enable ()
 			;;
 		windows.globalization-dll)
 			enable_windows_globalization_dll="$2"
-			;;
-		windows.media.speech.dll)
-			enable_windows_media_speech_dll="$2"
 			;;
 		windowscodecs-GIF_Encoder)
 			enable_windowscodecs_GIF_Encoder="$2"
@@ -1373,13 +1365,6 @@ if test "$enable_windows_globalization_dll" -eq 1; then
 		abort "Patchset windows.gaming.input-dll disabled, but windows.globalization-dll depends on that."
 	fi
 	enable_windows_gaming_input_dll=1
-fi
-
-if test "$enable_windows_gaming_input_dll" -eq 1; then
-	if test "$enable_windows_media_speech_dll" -gt 1; then
-		abort "Patchset windows.media.speech.dll disabled, but windows.gaming.input-dll depends on that."
-	fi
-	enable_windows_media_speech_dll=1
 fi
 
 if test "$enable_user32_rawinput_mouse_experimental" -eq 1; then
@@ -3319,22 +3304,6 @@ if test "$enable_oleaut32_OleLoadPictureFile" -eq 1; then
 	patch_apply oleaut32-OleLoadPictureFile/0003-oleaut32-Implement-OleLoadPictureFile.patch
 fi
 
-# Patchset opencl-version_1_2
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#46470] opencl: Add support for OpenCL 1.2.
-# |
-# | Modified files:
-# |   *	configure, configure.ac, dlls/opencl/opencl.c, dlls/opencl/opencl.spec, include/config.h.in
-# |
-if test "$enable_opencl_version_1_2" -eq 1; then
-	patch_apply opencl-version_1_2/0001-opencl-Add-OpenCL-1.0-function-pointer-loader.patch
-	patch_apply opencl-version_1_2/0002-opencl-Use-function-pointer-instead-of-call-the-func.patch
-	patch_apply opencl-version_1_2/0003-opencl-Add-OpenCL-1.1-implementation.patch
-	patch_apply opencl-version_1_2/0004-opencl-Add-OpenCL-1.2-implementation.patch
-	patch_apply opencl-version_1_2/0005-opencl-Expose-all-extensions-list-to-wine.patch
-fi
-
 # Patchset packager-DllMain
 # |
 # | This patchset fixes the following Wine bugs:
@@ -4090,26 +4059,7 @@ if test "$enable_version_VerQueryValue" -eq 1; then
 	patch_apply version-VerQueryValue/0001-version-Test-for-VerQueryValueA-try-2.patch
 fi
 
-# Patchset windows.media.speech.dll
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#49740] windows.media.speech: New DLL
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/windows.media.speech.dll/Makefile.in, dlls/windows.media.speech.dll/windows.media.speech.spec,
-# | 	dlls/windows.media.speech.dll/windows.media.speech_main.c, loader/wine.inf.in
-# |
-if test "$enable_windows_media_speech_dll" -eq 1; then
-	patch_apply windows.media.speech.dll/0001-windows.media.speech-Add-stub-dll.patch
-	patch_apply windows.media.speech.dll/0002-windows.media.speech-Implement-IInstalledVoicesStati.patch
-	patch_apply windows.media.speech.dll/0003-windows.media.speech-Implement-IInstalledVoicesStati.patch
-	patch_apply windows.media.speech.dll/0004-windows.media.speech-Fake-empty-IInstalledVoicesStat.patch
-fi
-
 # Patchset windows.gaming.input-dll
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	windows.media.speech.dll
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#49756] windows.gaming.input: New DLL
@@ -4136,7 +4086,7 @@ fi
 # Patchset windows.globalization-dll
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	windows.media.speech.dll, windows.gaming.input-dll
+# |   *	windows.gaming.input-dll
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#49740] windows.globalization: New DLL
