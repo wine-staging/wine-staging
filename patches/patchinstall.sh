@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "6d26689484070b2c4ad4e0e16812c6eb8176cd40"
+	echo "41df83c50e1c3cfdd6e8ffb65de7838f8503632c"
 }
 
 # Show version information
@@ -2228,7 +2228,7 @@ fi
 # |   *	configure.ac, dlls/dxgkrnl.sys/Makefile.in, dlls/dxgkrnl.sys/dxgkrnl.sys.spec, dlls/dxgkrnl.sys/main.c,
 # | 	dlls/dxgmms1.sys/Makefile.in, dlls/dxgmms1.sys/dxgmms1.sys.spec, dlls/dxgmms1.sys/main.c,
 # | 	dlls/ntoskrnl.exe/tests/driver.c, dlls/win32k.sys/Makefile.in, dlls/win32k.sys/main.c, dlls/win32k.sys/win32k.sys.spec,
-# | 	loader/wine.inf.in, programs/winedevice/device.c, tools/make_specfiles
+# | 	programs/winedevice/device.c, tools/make_specfiles
 # |
 if test "$enable_winedevice_Default_Drivers" -eq 1; then
 	patch_apply winedevice-Default_Drivers/0001-win32k.sys-Add-stub-driver.patch
@@ -2257,7 +2257,7 @@ fi
 # | 	dlls/dxapi.sys/Makefile.in, dlls/dxapi.sys/dxapi.sys.spec, dlls/dxapi.sys/version.rc, dlls/encapi/Makefile.in,
 # | 	dlls/encapi/encapi.spec, dlls/encapi/version.rc, dlls/gcdef/Makefile.in, dlls/gcdef/gcdef.spec, dlls/gcdef/version.rc,
 # | 	dlls/qdv/Makefile.in, dlls/qdv/qdv.spec, dlls/qdv/version.rc, dlls/qedwipes/Makefile.in, dlls/qedwipes/qedwipes.spec,
-# | 	dlls/qedwipes/version.rc, loader/wine.inf.in
+# | 	dlls/qedwipes/version.rc
 # |
 if test "$enable_dxdiag_new_dlls" -eq 1; then
 	patch_apply dxdiag-new-dlls/0001-d3dpmesh-add-stub-dll.patch
