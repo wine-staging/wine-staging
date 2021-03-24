@@ -292,7 +292,6 @@ patch_enable_all ()
 	enable_winex11_drv_Query_server_position="$1"
 	enable_winex11_drv_mouse_coorrds="$1"
 	enable_wininet_Cleanup="$1"
-	enable_winmm_Delay_Import_Depends="$1"
 	enable_winmm_mciSendCommandA="$1"
 	enable_wintab32_improvements="$1"
 	enable_wintrust_WTHelperGetProvCertFromChain="$1"
@@ -940,9 +939,6 @@ patch_enable ()
 			;;
 		wininet-Cleanup)
 			enable_wininet_Cleanup="$2"
-			;;
-		winmm-Delay_Import_Depends)
-			enable_winmm_Delay_Import_Depends="$2"
 			;;
 		winmm-mciSendCommandA)
 			enable_winmm_mciSendCommandA="$2"
@@ -4523,18 +4519,6 @@ if test "$enable_wininet_Cleanup" -eq 1; then
 	patch_apply wininet-Cleanup/0003-wininet-tests-Check-cookie-behaviour-when-overriding.patch
 	patch_apply wininet-Cleanup/0004-wininet-Strip-filename-if-no-path-is-set-in-cookie.patch
 	patch_apply wininet-Cleanup/0005-wininet-Replacing-header-fields-should-fail-if-they-.patch
-fi
-
-# Patchset winmm-Delay_Import_Depends
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#37983] Jedi Knight: Dark Forces II crashes with winmm set to native
-# |
-# | Modified files:
-# |   *	dlls/winmm/Makefile.in
-# |
-if test "$enable_winmm_Delay_Import_Depends" -eq 1; then
-	patch_apply winmm-Delay_Import_Depends/0001-winmm-Delay-import-ole32-msacm32-to-workaround-bug-w.patch
 fi
 
 # Patchset winmm-mciSendCommandA
