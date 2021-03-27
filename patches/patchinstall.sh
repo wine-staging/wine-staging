@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "34652f37e443a9e7698f66d13df3b4811b1c0cc3"
+	echo "71d41b37a1917cdf20cdb171dc73c20dbfdaeefa"
 }
 
 # Show version information
@@ -111,7 +111,6 @@ patch_enable_all ()
 	enable_ddraw_Device_Caps="$1"
 	enable_ddraw_IDirect3DTexture2_Load="$1"
 	enable_ddraw_Silence_FIXMEs="$1"
-	enable_ddraw_Texture_Wrong_Caps="$1"
 	enable_ddraw_version_check="$1"
 	enable_dinput_SetActionMap_genre="$1"
 	enable_dinput_axis_recalc="$1"
@@ -396,9 +395,6 @@ patch_enable ()
 			;;
 		ddraw-Silence_FIXMEs)
 			enable_ddraw_Silence_FIXMEs="$2"
-			;;
-		ddraw-Texture_Wrong_Caps)
-			enable_ddraw_Texture_Wrong_Caps="$2"
 			;;
 		ddraw-version-check)
 			enable_ddraw_version_check="$2"
@@ -2041,18 +2037,6 @@ fi
 # |
 if test "$enable_ddraw_Silence_FIXMEs" -eq 1; then
 	patch_apply ddraw-Silence_FIXMEs/0001-ddraw-Silence-noisy-FIXME-about-unimplemented-D3DPRO.patch
-fi
-
-# Patchset ddraw-Texture_Wrong_Caps
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#46948] Allow setting texture without DDSCAPS_TEXTURE for software device
-# |
-# | Modified files:
-# |   *	dlls/ddraw/device.c, dlls/ddraw/tests/ddraw4.c
-# |
-if test "$enable_ddraw_Texture_Wrong_Caps" -eq 1; then
-	patch_apply ddraw-Texture_Wrong_Caps/0001-ddraw-Allow-setting-texture-without-DDSCAPS_TEXTURE-.patch
 fi
 
 # Patchset ddraw-version-check
