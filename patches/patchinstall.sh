@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "71d41b37a1917cdf20cdb171dc73c20dbfdaeefa"
+	echo "6ca1a92684fcbaa1c569b60411a8036b6d11dc99"
 }
 
 # Show version information
@@ -180,7 +180,6 @@ patch_enable_all ()
 	enable_ntdll_Zero_mod_name="$1"
 	enable_ntdll_aarch_TEB="$1"
 	enable_ntdll_ext4_case_folder="$1"
-	enable_ntdll_x86_64_SegDs="$1"
 	enable_ntoskrnl_Stubs="$1"
 	enable_nvapi_Stub_DLL="$1"
 	enable_nvcuda_CUDA_Support="$1"
@@ -602,9 +601,6 @@ patch_enable ()
 			;;
 		ntdll-ext4-case-folder)
 			enable_ntdll_ext4_case_folder="$2"
-			;;
-		ntdll-x86_64_SegDs)
-			enable_ntdll_x86_64_SegDs="$2"
 			;;
 		ntoskrnl-Stubs)
 			enable_ntoskrnl_Stubs="$2"
@@ -3162,18 +3158,6 @@ fi
 # |
 if test "$enable_ntdll_ext4_case_folder" -eq 1; then
 	patch_apply ntdll-ext4-case-folder/0002-ntdll-server-Mark-drive_c-as-case-insensitive-when-c.patch
-fi
-
-# Patchset ntdll-x86_64_SegDs
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#47970] Legends of Runeterra crashes at launch
-# |
-# | Modified files:
-# |   *	dlls/ntdll/unix/signal_x86_64.c
-# |
-if test "$enable_ntdll_x86_64_SegDs" -eq 1; then
-	patch_apply ntdll-x86_64_SegDs/0001-ntdll-Report-SegDs-to-be-identical-to-SegSs-on-x86_6.patch
 fi
 
 # Patchset nvcuvid-CUDA_Video_Support
