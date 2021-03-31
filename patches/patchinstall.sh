@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "7c62e6b169f18f4a5d5809490f8aebdb5a9375eb"
+	echo "29d9659095fd76e303f204050ab4c85d0a0486e4"
 }
 
 # Show version information
@@ -241,9 +241,6 @@ patch_enable_all ()
 	enable_user32_ScrollWindowEx="$1"
 	enable_user32_message_order="$1"
 	enable_user32_msgbox_Support_WM_COPY_mesg="$1"
-	enable_user32_rawinput_hid="$1"
-	enable_user32_rawinput_mouse="$1"
-	enable_user32_rawinput_mouse_experimental="$1"
 	enable_user32_recursive_activation="$1"
 	enable_uxtheme_CloseThemeClass="$1"
 	enable_version_VerQueryValue="$1"
@@ -288,7 +285,6 @@ patch_enable_all ()
 	enable_winex11_key_translation="$1"
 	enable_winex11_wglShareLists="$1"
 	enable_winex11_drv_Query_server_position="$1"
-	enable_winex11_drv_mouse_coorrds="$1"
 	enable_wininet_Cleanup="$1"
 	enable_winmm_mciSendCommandA="$1"
 	enable_wintab32_improvements="$1"
@@ -785,15 +781,6 @@ patch_enable ()
 		user32-msgbox-Support-WM_COPY-mesg)
 			enable_user32_msgbox_Support_WM_COPY_mesg="$2"
 			;;
-		user32-rawinput-hid)
-			enable_user32_rawinput_hid="$2"
-			;;
-		user32-rawinput-mouse)
-			enable_user32_rawinput_mouse="$2"
-			;;
-		user32-rawinput-mouse-experimental)
-			enable_user32_rawinput_mouse_experimental="$2"
-			;;
 		user32-recursive-activation)
 			enable_user32_recursive_activation="$2"
 			;;
@@ -925,9 +912,6 @@ patch_enable ()
 			;;
 		winex11.drv-Query_server_position)
 			enable_winex11_drv_Query_server_position="$2"
-			;;
-		winex11.drv-mouse-coorrds)
-			enable_winex11_drv_mouse_coorrds="$2"
 			;;
 		wininet-Cleanup)
 			enable_wininet_Cleanup="$2"
@@ -1338,27 +1322,6 @@ if test "$enable_wineboot_ProxySettings" -eq 1; then
 	fi
 	enable_wineboot_DriveSerial=1
 	enable_wineboot_drivers_etc_Stubs=1
-fi
-
-if test "$enable_user32_rawinput_mouse_experimental" -eq 1; then
-	if test "$enable_user32_rawinput_mouse" -gt 1; then
-		abort "Patchset user32-rawinput-mouse disabled, but user32-rawinput-mouse-experimental depends on that."
-	fi
-	enable_user32_rawinput_mouse=1
-fi
-
-if test "$enable_user32_rawinput_hid" -eq 1; then
-	if test "$enable_user32_rawinput_mouse" -gt 1; then
-		abort "Patchset user32-rawinput-mouse disabled, but user32-rawinput-hid depends on that."
-	fi
-	enable_user32_rawinput_mouse=1
-fi
-
-if test "$enable_user32_rawinput_mouse" -eq 1; then
-	if test "$enable_winex11_drv_mouse_coorrds" -gt 1; then
-		abort "Patchset winex11.drv-mouse-coorrds disabled, but user32-rawinput-mouse depends on that."
-	fi
-	enable_winex11_drv_mouse_coorrds=1
 fi
 
 if test "$enable_stdole32_tlb_SLTG_Typelib" -eq 1; then
@@ -3900,78 +3863,6 @@ fi
 if test "$enable_user32_msgbox_Support_WM_COPY_mesg" -eq 1; then
 	patch_apply user32-msgbox-Support-WM_COPY-mesg/0001-user32-msgbox-Support-WM_COPY-Message.patch
 	patch_apply user32-msgbox-Support-WM_COPY-mesg/0002-user32-msgbox-Use-a-windows-hook-to-trap-Ctrl-C.patch
-fi
-
-# Patchset winex11.drv-mouse-coorrds
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#46309] winex11.drv: Use root-relative coordinates for events, if possible.
-# |
-# | Modified files:
-# |   *	dlls/winex11.drv/mouse.c
-# |
-if test "$enable_winex11_drv_mouse_coorrds" -eq 1; then
-	patch_apply winex11.drv-mouse-coorrds/0001-winex11.drv-mouse-Use-root-relative-coordinates-for-ev.patch
-fi
-
-# Patchset user32-rawinput-mouse
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	winex11.drv-mouse-coorrds
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#42631] Mouse drift, jump or don't react to small slow movements in Unity-engine games and Fallout 4 (partly fixed in
-# | 	Unity games, have walkaround in Fallout4 )
-# |   *	[#42675] Overwatch: Phantom mouse input / view pulled up to ceiling
-# |
-# | Modified files:
-# |   *	dlls/user32/input.c, dlls/user32/user32.spec, dlls/wineandroid.drv/keyboard.c, dlls/wineandroid.drv/window.c,
-# | 	dlls/winemac.drv/ime.c, dlls/winemac.drv/keyboard.c, dlls/winemac.drv/mouse.c, dlls/winex11.drv/event.c,
-# | 	dlls/winex11.drv/keyboard.c, dlls/winex11.drv/mouse.c, dlls/winex11.drv/window.c, dlls/winex11.drv/x11drv.h,
-# | 	dlls/winex11.drv/x11drv_main.c, include/winuser.h, server/protocol.def, server/queue.c
-# |
-if test "$enable_user32_rawinput_mouse" -eq 1; then
-	patch_apply user32-rawinput-mouse/0006-server-Add-send_hardware_message-flags-for-rawinput-.patch
-	patch_apply user32-rawinput-mouse/0007-user32-Add-__wine_send_input-flags-to-hint-raw-input.patch
-	patch_apply user32-rawinput-mouse/0008-winex11.drv-Advertise-XInput2-version-2.1-support.patch
-	patch_apply user32-rawinput-mouse/0009-winex11.drv-Keep-track-of-pointer-and-device-button-.patch
-	patch_apply user32-rawinput-mouse/0010-winex11.drv-Listen-to-RawMotion-and-RawButton-events.patch
-	patch_apply user32-rawinput-mouse/0011-winex11.drv-Move-header-order.patch
-fi
-
-# Patchset user32-rawinput-hid
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	winex11.drv-mouse-coorrds, user32-rawinput-mouse
-# |
-# | Modified files:
-# |   *	dlls/hidclass.sys/device.c, dlls/hidclass.sys/hid.h, dlls/hidclass.sys/pnp.c, dlls/user32/message.c,
-# | 	dlls/user32/rawinput.c, dlls/user32/user_private.h, server/protocol.def, server/queue.c, server/trace.c
-# |
-if test "$enable_user32_rawinput_hid" -eq 1; then
-	patch_apply user32-rawinput-hid/0001-server-Add-process-argument-to-find_rawinput_device.patch
-	patch_apply user32-rawinput-hid/0002-server-Allow-extra-data-for-hardware_msg_data-messag.patch
-	patch_apply user32-rawinput-hid/0003-server-Make-it-possible-to-queue-rawinput-message-on.patch
-	patch_apply user32-rawinput-hid/0004-server-Add-HID-input-message-type-to-send_hardware_m.patch
-	patch_apply user32-rawinput-hid/0005-hidclass.sys-Send-input-message-to-server-when-HID-r.patch
-fi
-
-# Patchset user32-rawinput-mouse-experimental
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	winex11.drv-mouse-coorrds, user32-rawinput-mouse
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#45882] - Raw Input should use untransformed mouse values (affects Overwatch, several Source games).
-# |
-# | Modified files:
-# |   *	dlls/user32/rawinput.c, dlls/winex11.drv/mouse.c, dlls/winex11.drv/x11drv.h, dlls/winex11.drv/x11drv_main.c,
-# | 	server/queue.c
-# |
-if test "$enable_user32_rawinput_mouse_experimental" -eq 1; then
-	patch_apply user32-rawinput-mouse-experimental/0001-winex11.drv-Add-support-for-absolute-RawMotion-event.patch
-	patch_apply user32-rawinput-mouse-experimental/0002-winex11.drv-Send-relative-RawMotion-events-unprocess.patch
-	patch_apply user32-rawinput-mouse-experimental/0003-winex11.drv-Accumulate-mouse-movement-to-avoid-round.patch
 fi
 
 # Patchset user32-recursive-activation
