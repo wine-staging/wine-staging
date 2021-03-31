@@ -2783,7 +2783,7 @@ fi
 # Patchset msxml3-FreeThreadedXMLHTTP60
 # |
 # | This patchset fixes the following Wine bugs:
-# |   *	[#49740] msxml3: Implement FreeThreadedXMLHTTP60.
+# |   *	[#50900] msxml3: Implement FreeThreadedXMLHTTP60.
 # |
 # | Modified files:
 # |   *	dlls/msxml3/Makefile.in, dlls/msxml3/factory.c, dlls/msxml3/httprequest.c, dlls/msxml3/msxml_private.h,
