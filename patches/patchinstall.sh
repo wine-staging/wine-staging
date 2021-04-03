@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "97b420224e767b24d89722ff5efeca38a8ecf1e2"
+	echo "2fcc1d0ecdebc55a5f515b1390ce715303f6a6ad"
 }
 
 # Show version information
@@ -1449,6 +1449,13 @@ if test "$enable_eventfd_synchronization" -eq 1; then
 	enable_server_Signal_Thread=1
 fi
 
+if test "$enable_server_PeekMessage" -eq 1; then
+	if test "$enable_server_Key_State" -gt 1; then
+		abort "Patchset server-Key_State disabled, but server-PeekMessage depends on that."
+	fi
+	enable_server_Key_State=1
+fi
+
 if test "$enable_ntdll_Junction_Points" -eq 1; then
 	if test "$enable_ntdll_DOS_Attributes" -gt 1; then
 		abort "Patchset ntdll-DOS_Attributes disabled, but ntdll-Junction_Points depends on that."
@@ -2303,7 +2310,29 @@ if test "$enable_ntdll_Junction_Points" -eq 1; then
 	patch_apply ntdll-Junction_Points/0038-server-Rewrite-absolute-reparse-point-targets-if-the.patch
 fi
 
+# Patchset server-Key_State
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#26269] BioShock 2: Loss of keyboard input on loading screen
+# |   *	[#31899] No keyboard input in La-Mulana remake (GetKeyState should behave similar to GetAsyncKeyState for specific
+# | 	window messages / queue states)
+# |   *	[#35907] Caps Lock state gets confused with multiple processes/threads
+# |   *	[#45385] Wrong state of virtual keys after cycling windows. Usually VK_MENU, VK_SHIFT and VK_CONTROL, but every key can
+# | 	be affected.
+# |
+# | Modified files:
+# |   *	dlls/user32/tests/input.c, server/queue.c
+# |
+if test "$enable_server_Key_State" -eq 1; then
+	patch_apply server-Key_State/0001-server-Create-message-queue-and-thread-input-in-set_.patch
+	patch_apply server-Key_State/0002-server-Lock-thread-input-keystate-whenever-it-is-mod.patch
+	patch_apply server-Key_State/0003-server-Create-message-queue-and-thread-input-in-get_.patch
+fi
+
 # Patchset server-PeekMessage
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	server-Key_State
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#28884] GetMessage should remove already seen messages with higher priority
@@ -2336,8 +2365,8 @@ fi
 # Patchset eventfd_synchronization
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-DOS_Attributes, ntdll-NtQueryEaFile, ntdll-Junction_Points, server-PeekMessage, server-Realtime_Priority, server-
-# | 	Signal_Thread
+# |   *	ntdll-DOS_Attributes, ntdll-NtQueryEaFile, ntdll-Junction_Points, server-Key_State, server-PeekMessage, server-
+# | 	Realtime_Priority, server-Signal_Thread
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#36692] Many multi-threaded applications have poor performance due to heavy use of synchronization primitives
@@ -3322,20 +3351,6 @@ if test "$enable_server_File_Permissions" -eq 1; then
 	patch_apply server-File_Permissions/0006-ntdll-tests-Added-tests-for-open-behaviour-on-readon.patch
 	patch_apply server-File_Permissions/0007-server-FILE_WRITE_ATTRIBUTES-should-succeed-for-read.patch
 	patch_apply server-File_Permissions/0008-server-Improve-mapping-of-DACL-to-file-permissions.patch
-fi
-
-# Patchset server-Key_State
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#31899] Implement locking and synchronization of key states
-# |   *	[#35907] Fix caps lock state issues with multiple processes
-# |
-# | Modified files:
-# |   *	server/queue.c
-# |
-if test "$enable_server_Key_State" -eq 1; then
-	patch_apply server-Key_State/0001-server-Introduce-a-helper-function-to-update-the-thr.patch
-	patch_apply server-Key_State/0002-server-Implement-locking-and-synchronization-of-keys.patch
 fi
 
 # Patchset server-Stored_ACLs
