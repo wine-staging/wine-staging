@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "ac65e1540960e64ce29e40ec19e4eade8369d520"
+	echo "3269da9b46eaec8e3ea263fc8ecfcd24d3d8b6e6"
 }
 
 # Show version information
@@ -175,7 +175,6 @@ patch_enable_all ()
 	enable_ntdll_RtlQueryProcessPlaceholderCompatibilityMode="$1"
 	enable_ntdll_Serial_Port_Detection="$1"
 	enable_ntdll_Syscall_Emulation="$1"
-	enable_ntdll_SystemCodeIntegrityInformation="$1"
 	enable_ntdll_WRITECOPY="$1"
 	enable_ntdll_Zero_mod_name="$1"
 	enable_ntdll_aarch_TEB="$1"
@@ -582,9 +581,6 @@ patch_enable ()
 			;;
 		ntdll-Syscall_Emulation)
 			enable_ntdll_Syscall_Emulation="$2"
-			;;
-		ntdll-SystemCodeIntegrityInformation)
-			enable_ntdll_SystemCodeIntegrityInformation="$2"
 			;;
 		ntdll-WRITECOPY)
 			enable_ntdll_WRITECOPY="$2"
@@ -3104,18 +3100,6 @@ fi
 # |
 if test "$enable_ntdll_Syscall_Emulation" -eq 1; then
 	patch_apply ntdll-Syscall_Emulation/0001-ntdll-Support-x86_64-syscall-emulation.patch
-fi
-
-# Patchset ntdll-SystemCodeIntegrityInformation
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#49192] ntdll: NtQuerySystemInformation support SystemCodeIntegrityInformation
-# |
-# | Modified files:
-# |   *	dlls/ntdll/unix/system.c, include/winternl.h
-# |
-if test "$enable_ntdll_SystemCodeIntegrityInformation" -eq 1; then
-	patch_apply ntdll-SystemCodeIntegrityInformation/0001-ntdll-NtQuerySystemInformation-support-SystemCodeInt.patch
 fi
 
 # Patchset ntdll-Zero_mod_name
