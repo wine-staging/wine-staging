@@ -1,0 +1,185 @@
+From d394cc092108c710ad2cccbcec1919a084037910 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Tue, 23 Mar 2021 10:42:07 +0100
+Subject: [PATCH] server: Implement WM_INPUT / RIM_TYPEHID message dispatch.
+
+The messages are of variable size and carry the corresponding HID report
+data after each RAWINPUT struct.
+
+Wine-Bug: https://bugs.winehq.org/show_bug.cgi?id=50506
+---
+ dlls/user32/message.c  |  1 +
+ dlls/user32/rawinput.c | 23 +++++++++++++++++++++--
+ server/protocol.def    |  2 +-
+ server/queue.c         | 25 ++++++++++++++++++-------
+ server/trace.c         |  1 +
+ 5 files changed, 42 insertions(+), 10 deletions(-)
+
+diff --git a/dlls/user32/message.c b/dlls/user32/message.c
+index 54fcdc4588c..f986b71953a 100644
+--- a/dlls/user32/message.c
++++ b/dlls/user32/message.c
+@@ -3272,6 +3272,7 @@ NTSTATUS send_hardware_message( HWND hwnd, const INPUT *input, const RAWINPUT *r
+             req->input.hw.lparam = MAKELONG( input->u.hi.wParamL, input->u.hi.wParamH );
+             switch (input->u.hi.uMsg)
+             {
++            case WM_INPUT:
+             case WM_INPUT_DEVICE_CHANGE:
+                 req->input.hw.data.rawinput.type = rawinput->header.dwType;
+                 switch (rawinput->header.dwType)
+diff --git a/dlls/user32/rawinput.c b/dlls/user32/rawinput.c
+index 99481ffae3d..c69393d9ed2 100644
+--- a/dlls/user32/rawinput.c
++++ b/dlls/user32/rawinput.c
+@@ -326,6 +326,22 @@ BOOL rawinput_from_hardware_message(RAWINPUT *rawinput, const struct hardware_ms
+         rawinput->data.keyboard.Message          = msg_data->rawinput.kbd.message;
+         rawinput->data.keyboard.ExtraInformation = msg_data->info;
+     }
++    else if (msg_data->rawinput.type == RIM_TYPEHID)
++    {
++        if (sizeof(*rawinput) + msg_data->rawinput.hid.length > RAWINPUT_BUFFER_SIZE)
++        {
++            ERR( "unexpectedly large hardware message dropped\n" );
++            return FALSE;
++        }
++
++        rawinput->header.dwSize  = FIELD_OFFSET( RAWINPUT, data.hid.bRawData ) + msg_data->rawinput.hid.length;
++        rawinput->header.hDevice = ULongToHandle( msg_data->rawinput.hid.device );
++        rawinput->header.wParam  = 0;
++
++        rawinput->data.hid.dwSizeHid = msg_data->rawinput.hid.length;
++        rawinput->data.hid.dwCount = 1;
++        memcpy( rawinput->data.hid.bRawData, msg_data + 1, msg_data->rawinput.hid.length );
++    }
+     else
+     {
+         FIXME("Unhandled rawinput type %#x.\n", msg_data->rawinput.type);
+@@ -524,7 +540,7 @@ UINT WINAPI DECLSPEC_HOTPATCH GetRawInputBuffer(RAWINPUT *data, UINT *data_size,
+     struct hardware_msg_data *msg_data;
+     struct rawinput_thread_data *thread_data;
+     RAWINPUT *rawinput;
+-    UINT count = 0, rawinput_size, next_size, overhead;
++    UINT count = 0, rawinput_size, msg_size, next_size, overhead;
+     BOOL is_wow64;
+     int i;
+ 
+@@ -584,7 +600,9 @@ UINT WINAPI DECLSPEC_HOTPATCH GetRawInputBuffer(RAWINPUT *data, UINT *data_size,
+                               data->header.dwSize - sizeof(RAWINPUTHEADER));
+         data->header.dwSize += overhead;
+         data = NEXTRAWINPUTBLOCK(data);
+-        msg_data++;
++        msg_size = sizeof(*msg_data);
++        if (msg_data->rawinput.type == RIM_TYPEHID) msg_size += msg_data->rawinput.hid.length;
++        msg_data = (struct hardware_msg_data *)((char *)msg_data + msg_size);
+     }
+ 
+     if (count == 0 && next_size == 0) *data_size = 0;
+@@ -657,6 +675,7 @@ UINT WINAPI GetRawInputDeviceInfoW(HANDLE handle, UINT command, void *data, UINT
+             handle, command, data, data_size);
+ 
+     if (!data_size) return ~0U;
++    if (!device) return ~0U;
+ 
+     /* each case below must set:
+      *     *data_size: length (meaning defined by command) of data we want to copy
+diff --git a/server/protocol.def b/server/protocol.def
+index f97b966719c..829216b58c1 100644
+--- a/server/protocol.def
++++ b/server/protocol.def
+@@ -369,7 +369,7 @@ typedef union
+         lparam_t       lparam;  /* message param */
+         union
+         {
+-            union rawinput rawinput; /* WM_INPUT_DEVICE_CHANGE msg */
++            union rawinput rawinput; /* WM_INPUT and WM_INPUT_DEVICE_CHANGE msg */
+         } data;
+     } hw;
+ } hw_input_t;
+diff --git a/server/queue.c b/server/queue.c
+index 248157ca7da..a411d0af8d2 100644
+--- a/server/queue.c
++++ b/server/queue.c
+@@ -2044,6 +2044,7 @@ static void queue_custom_hardware_message( struct desktop *desktop, user_handle_
+ 
+     switch (input->hw.msg)
+     {
++    case WM_INPUT:
+     case WM_INPUT_DEVICE_CHANGE:
+         raw_msg.foreground = get_foreground_thread( desktop, win );
+         raw_msg.desktop    = desktop;
+@@ -2053,18 +2054,26 @@ static void queue_custom_hardware_message( struct desktop *desktop, user_handle_
+         raw_msg.extra      = NULL;
+         raw_msg.extra_len  = 0;
+ 
++        if (input->hw.msg == WM_INPUT)
++        {
++            raw_msg.extra     = get_req_data();
++            raw_msg.extra_len = get_req_data_size();
++        }
++
+         msg_data = &raw_msg.data;
+         msg_data->info     = 0;
+         msg_data->flags    = 0;
+         msg_data->rawinput = input->hw.data.rawinput;
+ 
+-        if (input->hw.data.rawinput.type == RIM_TYPEHID &&
++        if (input->hw.msg == WM_INPUT_DEVICE_CHANGE &&
++            input->hw.data.rawinput.type == RIM_TYPEHID &&
+             input->hw.data.rawinput.hid.param == GIDC_ARRIVAL)
+             insert_hid_rawinput_device( input->hw.data.rawinput.hid.device, get_req_data(), get_req_data_size() );
+ 
+         enum_processes( queue_rawinput_message, &raw_msg );
+ 
+-        if (input->hw.data.rawinput.type == RIM_TYPEHID &&
++        if (input->hw.msg == WM_INPUT_DEVICE_CHANGE &&
++            input->hw.data.rawinput.type == RIM_TYPEHID &&
+             input->hw.data.rawinput.hid.param == GIDC_REMOVAL)
+             remove_hid_rawinput_device( input->hw.data.rawinput.hid.device );
+ 
+@@ -3371,16 +3380,18 @@ DECL_HANDLER(get_rawinput_buffer)
+     {
+         struct message *msg = LIST_ENTRY( ptr, struct message, entry );
+         struct hardware_msg_data *data = msg->data;
++        data_size_t hid_size = data->rawinput.type != RIM_TYPEHID ? 0 : data->rawinput.hid.length;
++        data_size_t data_size = sizeof(*data) + hid_size;
+ 
+         ptr = list_next( &input->msg_list, ptr );
+         if (msg->msg != WM_INPUT) continue;
+ 
+-        next_size = req->rawinput_size;
++        next_size = req->rawinput_size + hid_size;
+         if (size + next_size > req->buffer_size) break;
+-        if (cur + sizeof(*data) > buf + get_reply_max_size()) break;
+-        if (cur + sizeof(*data) > buf + buf_size)
++        if (cur + data_size > buf + get_reply_max_size()) break;
++        if (cur + data_size > buf + buf_size)
+         {
+-            buf_size += buf_size / 2;
++            buf_size += buf_size / 2 + hid_size;
+             if (!(tmp = realloc( buf, buf_size )))
+             {
+                 set_error( STATUS_NO_MEMORY );
+@@ -3390,7 +3401,7 @@ DECL_HANDLER(get_rawinput_buffer)
+             buf = tmp;
+         }
+ 
+-        memcpy(cur, data, sizeof(*data));
++        memcpy( cur, data, data_size );
+         list_remove( &msg->entry );
+         free_message( msg );
+ 
+diff --git a/server/trace.c b/server/trace.c
+index 3d24cec0133..f50a0367683 100644
+--- a/server/trace.c
++++ b/server/trace.c
+@@ -471,6 +471,7 @@ static void dump_hw_input( const char *prefix, const hw_input_t *input )
+         dump_uint64( ",lparam=", &input->hw.lparam );
+         switch (input->hw.msg)
+         {
++        case WM_INPUT:
+         case WM_INPUT_DEVICE_CHANGE:
+             dump_rawinput( ",rawinput=", &input->hw.data.rawinput );
+         }
+-- 
+2.30.2
+

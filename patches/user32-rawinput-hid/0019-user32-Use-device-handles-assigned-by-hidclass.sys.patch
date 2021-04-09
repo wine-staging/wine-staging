@@ -1,0 +1,153 @@
+From f7bb329873ec91a2ed7adbca8b5fac5f774e324d Mon Sep 17 00:00:00 2001
+From: Arkadiusz Hiler <ahiler@codeweavers.com>
+Date: Mon, 22 Feb 2021 15:41:46 +0200
+Subject: [PATCH] user32: Use device handles assigned by hidclass.sys.
+
+This allows us to avoid racy handle mapping for messages from the WM_INPUT
+family.
+---
+ dlls/user32/rawinput.c | 61 +++++++++++++++++++++++++++++++++++-------
+ 1 file changed, 51 insertions(+), 10 deletions(-)
+
+diff --git a/dlls/user32/rawinput.c b/dlls/user32/rawinput.c
+index ea8d15ac97b..91315692ac5 100644
+--- a/dlls/user32/rawinput.c
++++ b/dlls/user32/rawinput.c
+@@ -38,14 +38,18 @@
+ #include "user_private.h"
+ 
+ #include "initguid.h"
++#include "devpkey.h"
+ #include "ntddmou.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(rawinput);
+ 
++DEFINE_DEVPROPKEY(DEVPROPKEY_HID_HANDLE, 0xbc62e415, 0xf4fe, 0x405c, 0x8e, 0xda, 0x63, 0x6f, 0xb5, 0x9f, 0x08, 0x98, 2);
++
+ struct device
+ {
+     WCHAR *path;
+     HANDLE file;
++    HANDLE handle;
+     RID_DEVICE_INFO info;
+     PHIDP_PREPARSED_DATA data;
+ };
+@@ -91,11 +95,13 @@ static BOOL array_reserve(void **elements, unsigned int *capacity, unsigned int
+ 
+ static struct device *add_device(HDEVINFO set, SP_DEVICE_INTERFACE_DATA *iface)
+ {
++    SP_DEVINFO_DATA device_data = {sizeof(device_data)};
+     SP_DEVICE_INTERFACE_DETAIL_DATA_W *detail;
++    UINT32 handle;
+     struct device *device;
+     HANDLE file;
+     WCHAR *path;
+-    DWORD size;
++    DWORD idx, size, type;
+ 
+     SetupDiGetDeviceInterfaceDetailW(set, iface, NULL, 0, &size, NULL);
+     if (GetLastError() != ERROR_INSUFFICIENT_BUFFER)
+@@ -109,7 +115,27 @@ static struct device *add_device(HDEVINFO set, SP_DEVICE_INTERFACE_DATA *iface)
+         return FALSE;
+     }
+     detail->cbSize = sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W);
+-    SetupDiGetDeviceInterfaceDetailW(set, iface, detail, size, NULL, NULL);
++    SetupDiGetDeviceInterfaceDetailW(set, iface, detail, size, NULL, &device_data);
++
++    if (!SetupDiGetDevicePropertyW(set, &device_data, &DEVPROPKEY_HID_HANDLE, &type, (BYTE *)&handle, sizeof(handle), NULL, 0))
++    {
++        ERR("Failed to get handle for %s, skipping HID device.\n", debugstr_w(detail->DevicePath));
++        heap_free(detail);
++        return NULL;
++    }
++
++    if (type != DEVPROP_TYPE_UINT32)
++        ERR("Wrong prop type for HANDLE.\n");
++
++    for (idx = 0; idx < rawinput_devices_count; ++idx)
++    {
++        if (rawinput_devices[idx].handle == ULongToHandle(handle))
++        {
++            TRACE("Discarding %s as it's a duplicate of %s.\n", debugstr_w(detail->DevicePath), debugstr_w(rawinput_devices[idx].path));
++            heap_free(detail);
++            return NULL;
++        }
++    }
+ 
+     TRACE("Found HID device %s.\n", debugstr_w(detail->DevicePath));
+ 
+@@ -143,14 +169,13 @@ static struct device *add_device(HDEVINFO set, SP_DEVICE_INTERFACE_DATA *iface)
+     device->path = path;
+     device->file = file;
+     device->info.cbSize = sizeof(RID_DEVICE_INFO);
++    device->handle = ULongToHandle(handle);
+ 
+     return device;
+ }
+ 
+ static void find_devices(void)
+ {
+-    static ULONGLONG last_check;
+-
+     SP_DEVICE_INTERFACE_DATA iface = { sizeof(iface) };
+     struct device *device;
+     HIDD_ATTRIBUTES attr;
+@@ -159,10 +184,6 @@ static void find_devices(void)
+     HDEVINFO set;
+     DWORD idx;
+ 
+-    if (GetTickCount64() - last_check < 2000)
+-        return;
+-    last_check = GetTickCount64();
+-
+     HidD_GetHidGuid(&hid_guid);
+ 
+     EnterCriticalSection(&rawinput_devices_cs);
+@@ -223,6 +244,26 @@ static void find_devices(void)
+ }
+ 
+ 
++static struct device *rawinput_device_from_handle(HANDLE handle)
++{
++    unsigned int i;
++
++    if (!handle) return NULL;
++
++    for (i = 0; i < rawinput_devices_count; ++i)
++        if (rawinput_devices[i].handle == handle)
++            return &rawinput_devices[i];
++
++    find_devices();
++
++    for (i = 0; i < rawinput_devices_count; ++i)
++        if (rawinput_devices[i].handle == handle)
++            return &rawinput_devices[i];
++
++    return NULL;
++}
++
++
+ struct rawinput_thread_data *rawinput_thread_data(void)
+ {
+     struct user_thread_info *thread_info = get_user_thread_info();
+@@ -396,7 +437,7 @@ UINT WINAPI GetRawInputDeviceList(RAWINPUTDEVICELIST *devices, UINT *device_coun
+ 
+     for (i = 0; i < rawinput_devices_count; ++i)
+     {
+-        devices[2 + i].hDevice = &rawinput_devices[i];
++        devices[2 + i].hDevice = rawinput_devices[i].handle;
+         devices[2 + i].dwType = rawinput_devices[i].info.dwType;
+     }
+ 
+@@ -668,7 +709,7 @@ UINT WINAPI GetRawInputDeviceInfoW(HANDLE handle, UINT command, void *data, UINT
+     static const RID_DEVICE_INFO_MOUSE mouse_info = {1, 5, 0, FALSE};
+ 
+     RID_DEVICE_INFO info;
+-    struct device *device = handle;
++    struct device *device = rawinput_device_from_handle(handle);
+     const void *to_copy;
+     UINT to_copy_bytes, avail_bytes;
+ 
+-- 
+2.30.2
+

@@ -240,6 +240,9 @@ patch_enable_all ()
 	enable_user32_ScrollWindowEx="$1"
 	enable_user32_message_order="$1"
 	enable_user32_msgbox_Support_WM_COPY_mesg="$1"
+	enable_user32_rawinput_hid="$1"
+	enable_user32_rawinput_mouse="$1"
+	enable_user32_rawinput_mouse_experimental="$1"
 	enable_user32_recursive_activation="$1"
 	enable_uxtheme_CloseThemeClass="$1"
 	enable_version_VerQueryValue="$1"
@@ -776,6 +779,15 @@ patch_enable ()
 			;;
 		user32-msgbox-Support-WM_COPY-mesg)
 			enable_user32_msgbox_Support_WM_COPY_mesg="$2"
+			;;
+		user32-rawinput-hid)
+			enable_user32_rawinput_hid="$2"
+			;;
+		user32-rawinput-mouse)
+			enable_user32_rawinput_mouse="$2"
+			;;
+		user32-rawinput-mouse-experimental)
+			enable_user32_rawinput_mouse_experimental="$2"
 			;;
 		user32-recursive-activation)
 			enable_user32_recursive_activation="$2"
@@ -1318,6 +1330,27 @@ if test "$enable_wineboot_ProxySettings" -eq 1; then
 	fi
 	enable_wineboot_DriveSerial=1
 	enable_wineboot_drivers_etc_Stubs=1
+fi
+
+if test "$enable_user32_rawinput_mouse_experimental" -eq 1; then
+	if test "$enable_user32_rawinput_mouse" -gt 1; then
+		abort "Patchset user32-rawinput-mouse disabled, but user32-rawinput-mouse-experimental depends on that."
+	fi
+	enable_user32_rawinput_mouse=1
+fi
+
+if test "$enable_user32_rawinput_mouse" -eq 1; then
+	if test "$enable_user32_rawinput_hid" -gt 1; then
+		abort "Patchset user32-rawinput-hid disabled, but user32-rawinput-mouse depends on that."
+	fi
+	enable_user32_rawinput_hid=1
+fi
+
+if test "$enable_user32_rawinput_hid" -eq 1; then
+	if test "$enable_loader_KeyboardLayouts" -gt 1; then
+		abort "Patchset loader-KeyboardLayouts disabled, but user32-rawinput-hid depends on that."
+	fi
+	enable_loader_KeyboardLayouts=1
 fi
 
 if test "$enable_stdole32_tlb_SLTG_Typelib" -eq 1; then
@@ -3862,6 +3895,89 @@ fi
 if test "$enable_user32_msgbox_Support_WM_COPY_mesg" -eq 1; then
 	patch_apply user32-msgbox-Support-WM_COPY-mesg/0001-user32-msgbox-Support-WM_COPY-Message.patch
 	patch_apply user32-msgbox-Support-WM_COPY-mesg/0002-user32-msgbox-Use-a-windows-hook-to-trap-Ctrl-C.patch
+fi
+
+# Patchset user32-rawinput-hid
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	loader-KeyboardLayouts
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#50506] WM_INPUT messages are not received for HID devices registered with RegisterRawInputDevices
+# |
+# | Modified files:
+# |   *	dlls/hidclass.sys/Makefile.in, dlls/hidclass.sys/device.c, dlls/hidclass.sys/hid.h, dlls/hidclass.sys/pnp.c,
+# | 	dlls/ntoskrnl.exe/ntoskrnl.exe.spec, dlls/ntoskrnl.exe/pnp.c, dlls/user32/input.c, dlls/user32/message.c,
+# | 	dlls/user32/rawinput.c, dlls/user32/tests/input.c, dlls/user32/user32.spec, dlls/user32/user_private.h,
+# | 	dlls/wineandroid.drv/keyboard.c, dlls/wineandroid.drv/window.c, dlls/winemac.drv/ime.c, dlls/winemac.drv/keyboard.c,
+# | 	dlls/winemac.drv/mouse.c, dlls/winex11.drv/keyboard.c, dlls/winex11.drv/mouse.c, include/ddk/wdm.h, include/winuser.h,
+# | 	server/protocol.def, server/queue.c, server/trace.c
+# |
+if test "$enable_user32_rawinput_hid" -eq 1; then
+	patch_apply user32-rawinput-hid/0001-user32-tests-Add-more-SendInput-tests.patch
+	patch_apply user32-rawinput-hid/0002-user32-Implement-SendInput-INPUT_HARDWARE-check.patch
+	patch_apply user32-rawinput-hid/0003-user32-Add-RAWINPUT-parameter-to-__wine_send_input.patch
+	patch_apply user32-rawinput-hid/0004-hidclass.sys-Assign-rawinput-device-handle-in-HID_Li.patch
+	patch_apply user32-rawinput-hid/0005-hidclass.sys-Use-__wine_send_input-to-send-device-no.patch
+	patch_apply user32-rawinput-hid/0006-server-Implement-desktop-broadcast-in-queue_rawinput.patch
+	patch_apply user32-rawinput-hid/0007-server-Add-rawinput-union-to-hw_input_t-INPUT_HARDWA.patch
+	patch_apply user32-rawinput-hid/0008-server-Add-RIM_TYPEHID-type-hid-member-to-rawinput-u.patch
+	patch_apply user32-rawinput-hid/0009-user32-Send-WM_INPUT_DEVICE_CHANGE-RAWINPUT-to-the-s.patch
+	patch_apply user32-rawinput-hid/0010-server-Track-known-HID-rawinput-devices-on-addition-.patch
+	patch_apply user32-rawinput-hid/0011-server-Add-process-argument-to-find_rawinput_device.patch
+	patch_apply user32-rawinput-hid/0012-server-Implement-WM_INPUT_DEVICE_CHANGE-message-disp.patch
+	patch_apply user32-rawinput-hid/0013-hidclass.sys-Send-rawinput-messages-with-HID-report.patch
+	patch_apply user32-rawinput-hid/0014-server-Add-extra-data-to-hardware_msg_data.patch
+	patch_apply user32-rawinput-hid/0015-server-Implement-WM_INPUT-RIM_TYPEHID-message-dispat.patch
+	patch_apply user32-rawinput-hid/0016-ntoskrnl-Implement-IoSetDevicePropertyData.patch
+	patch_apply user32-rawinput-hid/0017-hidclass.sys-Assign-rawinput-handles-through-device-.patch
+	patch_apply user32-rawinput-hid/0018-user32-Enumerate-mouse-rawinput-device-before-HID-de.patch
+	patch_apply user32-rawinput-hid/0019-user32-Use-device-handles-assigned-by-hidclass.sys.patch
+fi
+
+# Patchset user32-rawinput-mouse
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	loader-KeyboardLayouts, user32-rawinput-hid
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#42631] Mouse drift, jump or don't react to small slow movements in Unity-engine games and Fallout 4 (partly fixed in
+# | 	Unity games, have walkaround in Fallout4 )
+# |   *	[#42675] Overwatch: Phantom mouse input / view pulled up to ceiling
+# |
+# | Modified files:
+# |   *	dlls/user32/input.c, dlls/user32/message.c, dlls/wineandroid.drv/keyboard.c, dlls/wineandroid.drv/window.c,
+# | 	dlls/winemac.drv/ime.c, dlls/winemac.drv/keyboard.c, dlls/winemac.drv/mouse.c, dlls/winex11.drv/desktop.c,
+# | 	dlls/winex11.drv/event.c, dlls/winex11.drv/keyboard.c, dlls/winex11.drv/mouse.c, dlls/winex11.drv/window.c,
+# | 	dlls/winex11.drv/x11drv.h, dlls/winex11.drv/x11drv_main.c, server/protocol.def, server/queue.c
+# |
+if test "$enable_user32_rawinput_mouse" -eq 1; then
+	patch_apply user32-rawinput-mouse/0001-winex11.drv-Split-XInput2-thread-initialization.patch
+	patch_apply user32-rawinput-mouse/0002-winex11.drv-Support-XInput2-events-for-individual-wi.patch
+	patch_apply user32-rawinput-mouse/0003-winex11.drv-Advertise-XInput2-version-2.1-support.patch
+	patch_apply user32-rawinput-mouse/0004-winex11.drv-Keep-track-of-pointer-and-device-button-.patch
+	patch_apply user32-rawinput-mouse/0005-server-Add-send_hardware_message-flags-for-rawinput-.patch
+	patch_apply user32-rawinput-mouse/0006-user32-Set-SEND_HWMSG_RAWINPUT-flags-only-when-RAWIN.patch
+	patch_apply user32-rawinput-mouse/0007-user32-Support-sending-RIM_TYPEMOUSE-through-__wine_.patch
+	patch_apply user32-rawinput-mouse/0008-winex11.drv-Listen-to-RawMotion-and-RawButton-events.patch
+fi
+
+# Patchset user32-rawinput-mouse-experimental
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	loader-KeyboardLayouts, user32-rawinput-hid, user32-rawinput-mouse
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#45882] - Raw Input should use untransformed mouse values (affects Overwatch, several Source games).
+# |
+# | Modified files:
+# |   *	dlls/user32/rawinput.c, dlls/winex11.drv/mouse.c, dlls/winex11.drv/window.c, dlls/winex11.drv/x11drv.h,
+# | 	dlls/winex11.drv/x11drv_main.c, server/queue.c
+# |
+if test "$enable_user32_rawinput_mouse_experimental" -eq 1; then
+	patch_apply user32-rawinput-mouse-experimental/0001-winex11.drv-Add-support-for-absolute-RawMotion-event.patch
+	patch_apply user32-rawinput-mouse-experimental/0002-winex11.drv-Send-relative-RawMotion-events-unprocess.patch
+	patch_apply user32-rawinput-mouse-experimental/0003-winex11.drv-Accumulate-mouse-movement-to-avoid-round.patch
 fi
 
 # Patchset user32-recursive-activation

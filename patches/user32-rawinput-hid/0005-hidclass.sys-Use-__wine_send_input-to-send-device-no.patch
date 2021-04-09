@@ -1,0 +1,118 @@
+From 4b24ceb11c3b77ecd1e00d7145be370f7192bbbb Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Fri, 19 Mar 2021 14:16:16 +0100
+Subject: [PATCH] hidclass.sys: Use __wine_send_input to send device
+ notifications.
+
+This currently does nothing, because winedevice.exe isn't associated
+with any desktop, and the INPUT_HARDWARE messages are dropped.
+
+In this specific case, when INPUT type is INPUT_HARDWARE and hi.uMsg is
+WM_INPUT_DEVICE_CHANGE, the RAWINPUT structure usage is a non-standard
+extension for Wine internal usage:
+
+* header.wParam contains the message GIDC_ARRIVAL / GIDC_REMOVAL wparam,
+
+* hid.bRawData contains two bytes, which are the HID device UsagePage
+  and Usage bytes, instead of a real HID report.
+
+This will let us use the same entry point and structures to send device
+notifications as for the HID reports in the future (which will be sent
+with INPUT_HARDWARE type / WM_INPUT uMsg instead).
+
+Wine-Bug: https://bugs.winehq.org/show_bug.cgi?id=50506
+---
+ dlls/hidclass.sys/Makefile.in |  2 +-
+ dlls/hidclass.sys/pnp.c       | 36 +++++++++++++++++++++++++++++++++++
+ 2 files changed, 37 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/hidclass.sys/Makefile.in b/dlls/hidclass.sys/Makefile.in
+index be4af747853..2f9f30f8bef 100644
+--- a/dlls/hidclass.sys/Makefile.in
++++ b/dlls/hidclass.sys/Makefile.in
+@@ -1,6 +1,6 @@
+ MODULE    = hidclass.sys
+ IMPORTLIB = hidclass
+-IMPORTS   = hal ntoskrnl
++IMPORTS   = hal ntoskrnl user32
+ DELAYIMPORTS = setupapi hid
+ 
+ EXTRADLLFLAGS = -mno-cygwin
+diff --git a/dlls/hidclass.sys/pnp.c b/dlls/hidclass.sys/pnp.c
+index a499aec93bb..8e539dfe6b7 100644
+--- a/dlls/hidclass.sys/pnp.c
++++ b/dlls/hidclass.sys/pnp.c
+@@ -25,6 +25,7 @@
+ #include "ddk/hidtypes.h"
+ #include "ddk/wdm.h"
+ #include "regstr.h"
++#include "winuser.h"
+ #include "wine/debug.h"
+ #include "wine/list.h"
+ 
+@@ -69,6 +70,9 @@ static NTSTATUS get_device_id(DEVICE_OBJECT *device, BUS_QUERY_ID_TYPE type, WCH
+     return status;
+ }
+ 
++/* make sure bRawData can hold two bytes without requiring additional allocation */
++C_ASSERT(offsetof(RAWINPUT, data.hid.bRawData[2]) < sizeof(RAWINPUT));
++
+ NTSTATUS WINAPI PNP_AddDevice(DRIVER_OBJECT *driver, DEVICE_OBJECT *PDO)
+ {
+     WCHAR device_id[MAX_DEVICE_ID_LEN], instance_id[MAX_DEVICE_ID_LEN];
+@@ -79,6 +83,8 @@ NTSTATUS WINAPI PNP_AddDevice(DRIVER_OBJECT *driver, DEVICE_OBJECT *PDO)
+     BASE_DEVICE_EXTENSION *ext = NULL;
+     HID_DESCRIPTOR descriptor;
+     BYTE *reportDescriptor;
++    RAWINPUT rawinput;
++    INPUT input;
+     INT i;
+ 
+     if ((status = get_device_id(PDO, BusQueryDeviceID, device_id)))
+@@ -187,6 +193,21 @@ NTSTATUS WINAPI PNP_AddDevice(DRIVER_OBJECT *driver, DEVICE_OBJECT *PDO)
+ 
+     HID_StartDeviceThread(device);
+ 
++    rawinput.header.dwType = RIM_TYPEHID;
++    rawinput.header.dwSize = offsetof(RAWINPUT, data.hid.bRawData[2]);
++    rawinput.header.hDevice = ULongToHandle(ext->rawinput_handle);
++    rawinput.header.wParam = GIDC_ARRIVAL;
++    rawinput.data.hid.dwCount = 1;
++    rawinput.data.hid.dwSizeHid = 2;
++    rawinput.data.hid.bRawData[0] = ext->preparseData->caps.UsagePage;
++    rawinput.data.hid.bRawData[1] = ext->preparseData->caps.Usage;
++
++    input.type = INPUT_HARDWARE;
++    input.u.hi.uMsg = WM_INPUT_DEVICE_CHANGE;
++    input.u.hi.wParamH = (WORD)(rawinput.header.dwSize >> 16);
++    input.u.hi.wParamL = (WORD)(rawinput.header.dwSize >> 0);
++    __wine_send_input(0, &input, &rawinput);
++
+     return STATUS_SUCCESS;
+ }
+ 
+@@ -194,6 +215,21 @@ static NTSTATUS remove_device(minidriver *minidriver, DEVICE_OBJECT *device, IRP
+ {
+     BASE_DEVICE_EXTENSION *ext = device->DeviceExtension;
+     NTSTATUS rc = STATUS_NOT_SUPPORTED;
++    RAWINPUT rawinput;
++    INPUT input;
++
++    rawinput.header.dwType = RIM_TYPEHID;
++    rawinput.header.dwSize = offsetof(RAWINPUT, data.hid.bRawData[0]);
++    rawinput.header.hDevice = ULongToHandle(ext->rawinput_handle);
++    rawinput.header.wParam = GIDC_REMOVAL;
++    rawinput.data.hid.dwCount = 0;
++    rawinput.data.hid.dwSizeHid = 0;
++
++    input.type = INPUT_HARDWARE;
++    input.u.hi.uMsg = WM_INPUT_DEVICE_CHANGE;
++    input.u.hi.wParamH = (WORD)(rawinput.header.dwSize >> 16);
++    input.u.hi.wParamL = (WORD)(rawinput.header.dwSize >> 0);
++    __wine_send_input(0, &input, &rawinput);
+ 
+     rc = IoSetDeviceInterfaceState(&ext->link_name, FALSE);
+     if (rc)
+-- 
+2.30.2
+
