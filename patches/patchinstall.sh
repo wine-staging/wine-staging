@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "a24bdfc2c69c5648cbb3df762149b2647e209a09"
+	echo "4904d90870a716fda971fc12240ddbc23323475c"
 }
 
 # Show version information
@@ -2653,9 +2653,7 @@ fi
 # |   *	api-ms-win-Stub_DLLs
 # |
 # | Modified files:
-# |   *	dlls/api-ms-win-core-kernel32-legacy-l1-1-0/api-ms-win-core-kernel32-legacy-l1-1-0.spec, dlls/api-ms-win-core-
-# | 	kernel32-legacy-l1-1-1/api-ms-win-core-kernel32-legacy-l1-1-1.spec, dlls/kernel32/kernel32.spec,
-# | 	dlls/kernel32/process.c, dlls/kernel32/tests/process.c, dlls/kernelbase/thread.c
+# |   *	dlls/kernel32/process.c, dlls/kernel32/tests/process.c, dlls/kernelbase/thread.c
 # |
 if test "$enable_kernel32_Processor_Group" -eq 1; then
 	patch_apply kernel32-Processor_Group/0001-kernel32-Implement-some-processor-group-functions.patch
