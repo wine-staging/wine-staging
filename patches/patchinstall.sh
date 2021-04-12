@@ -1438,13 +1438,6 @@ if test "$enable_ntdll_WRITECOPY" -eq 1; then
 	enable_ntdll_ForceBottomUpAlloc=1
 fi
 
-if test "$enable_kernel32_Processor_Group" -eq 1; then
-	if test "$enable_api_ms_win_Stub_DLLs" -gt 1; then
-		abort "Patchset api-ms-win-Stub_DLLs disabled, but kernel32-Processor_Group depends on that."
-	fi
-	enable_api_ms_win_Stub_DLLs=1
-fi
-
 if test "$enable_kernel32_CopyFileEx" -eq 1; then
 	if test "$enable_ntdll_FileDispositionInformation" -gt 1; then
 		abort "Patchset ntdll-FileDispositionInformation disabled, but kernel32-CopyFileEx depends on that."
@@ -2649,14 +2642,10 @@ fi
 
 # Patchset kernel32-Processor_Group
 # |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	api-ms-win-Stub_DLLs
-# |
 # | Modified files:
-# |   *	dlls/kernel32/process.c, dlls/kernel32/tests/process.c, dlls/kernelbase/thread.c
+# |   *	dlls/kernelbase/thread.c
 # |
 if test "$enable_kernel32_Processor_Group" -eq 1; then
-	patch_apply kernel32-Processor_Group/0001-kernel32-Implement-some-processor-group-functions.patch
 	patch_apply kernel32-Processor_Group/0002-kernel32-Add-stub-for-SetThreadIdealProcessorEx.patch
 fi
 
