@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "4904d90870a716fda971fc12240ddbc23323475c"
+	echo "c6393968754d64189f111e9277fb9060ec415fae"
 }
 
 # Show version information
@@ -164,11 +164,9 @@ patch_enable_all ()
 	enable_ntdll_Junction_Points="$1"
 	enable_ntdll_Manifest_Range="$1"
 	enable_ntdll_NtAlertThreadByThreadId="$1"
-	enable_ntdll_NtDevicePath="$1"
 	enable_ntdll_NtQueryEaFile="$1"
 	enable_ntdll_NtQuerySection="$1"
 	enable_ntdll_NtSetLdtEntries="$1"
-	enable_ntdll_Pipe_SpecialCharacters="$1"
 	enable_ntdll_ProcessQuotaLimits="$1"
 	enable_ntdll_RtlFirstFreeAce="$1"
 	enable_ntdll_RtlQueryPackageIdentity="$1"
@@ -552,9 +550,6 @@ patch_enable ()
 		ntdll-NtAlertThreadByThreadId)
 			enable_ntdll_NtAlertThreadByThreadId="$2"
 			;;
-		ntdll-NtDevicePath)
-			enable_ntdll_NtDevicePath="$2"
-			;;
 		ntdll-NtQueryEaFile)
 			enable_ntdll_NtQueryEaFile="$2"
 			;;
@@ -563,9 +558,6 @@ patch_enable ()
 			;;
 		ntdll-NtSetLdtEntries)
 			enable_ntdll_NtSetLdtEntries="$2"
-			;;
-		ntdll-Pipe_SpecialCharacters)
-			enable_ntdll_Pipe_SpecialCharacters="$2"
 			;;
 		ntdll-ProcessQuotaLimits)
 			enable_ntdll_ProcessQuotaLimits="$2"
@@ -1415,13 +1407,6 @@ if test "$enable_nvcuvid_CUDA_Video_Support" -eq 1; then
 		abort "Patchset nvapi-Stub_DLL disabled, but nvcuvid-CUDA_Video_Support depends on that."
 	fi
 	enable_nvapi_Stub_DLL=1
-fi
-
-if test "$enable_ntdll_NtDevicePath" -eq 1; then
-	if test "$enable_ntdll_Pipe_SpecialCharacters" -gt 1; then
-		abort "Patchset ntdll-Pipe_SpecialCharacters disabled, but ntdll-NtDevicePath depends on that."
-	fi
-	enable_ntdll_Pipe_SpecialCharacters=1
 fi
 
 if test "$enable_ntdll_Builtin_Prot" -eq 1; then
@@ -3003,33 +2988,6 @@ if test "$enable_ntdll_NtAlertThreadByThreadId" -eq 1; then
 	patch_apply ntdll-NtAlertThreadByThreadId/0011-ntdll-Reimplement-the-critical-section-fast-path-on-.patch
 	patch_apply ntdll-NtAlertThreadByThreadId/0012-ntdll-Get-rid-of-the-direct-futex-path-for-condition.patch
 	patch_apply ntdll-NtAlertThreadByThreadId/0013-ntdll-Reimplement-SRW-locks-on-top-of-Win32-futexes.patch
-fi
-
-# Patchset ntdll-Pipe_SpecialCharacters
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#28995] Allow special characters in pipe names
-# |
-# | Modified files:
-# |   *	dlls/kernel32/tests/pipe.c, dlls/ntdll/unix/file.c
-# |
-if test "$enable_ntdll_Pipe_SpecialCharacters" -eq 1; then
-	patch_apply ntdll-Pipe_SpecialCharacters/0001-ntdll-Allow-special-characters-in-pipe-names.patch
-fi
-
-# Patchset ntdll-NtDevicePath
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-Pipe_SpecialCharacters
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#37487] Resolve \\SystemRoot\\ prefix when opening files
-# |
-# | Modified files:
-# |   *	dlls/ntdll/tests/file.c, dlls/ntdll/unix/file.c
-# |
-if test "$enable_ntdll_NtDevicePath" -eq 1; then
-	patch_apply ntdll-NtDevicePath/0001-ntdll-Implement-opening-files-through-nt-device-path.patch
 fi
 
 # Patchset ntdll-NtQuerySection
