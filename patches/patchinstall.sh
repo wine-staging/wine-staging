@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "c6393968754d64189f111e9277fb9060ec415fae"
+	echo "092c7a09a5afde3f11b71b1816388e80d062e8ec"
 }
 
 # Show version information
@@ -3853,14 +3853,12 @@ fi
 # | Modified files:
 # |   *	dlls/hidclass.sys/Makefile.in, dlls/hidclass.sys/device.c, dlls/hidclass.sys/hid.h, dlls/hidclass.sys/pnp.c,
 # | 	dlls/ntoskrnl.exe/ntoskrnl.exe.spec, dlls/ntoskrnl.exe/pnp.c, dlls/user32/input.c, dlls/user32/message.c,
-# | 	dlls/user32/rawinput.c, dlls/user32/tests/input.c, dlls/user32/user32.spec, dlls/user32/user_private.h,
-# | 	dlls/wineandroid.drv/keyboard.c, dlls/wineandroid.drv/window.c, dlls/winemac.drv/ime.c, dlls/winemac.drv/keyboard.c,
-# | 	dlls/winemac.drv/mouse.c, dlls/winex11.drv/keyboard.c, dlls/winex11.drv/mouse.c, include/ddk/wdm.h, include/winuser.h,
-# | 	server/protocol.def, server/queue.c, server/trace.c
+# | 	dlls/user32/rawinput.c, dlls/user32/user32.spec, dlls/user32/user_private.h, dlls/wineandroid.drv/keyboard.c,
+# | 	dlls/wineandroid.drv/window.c, dlls/winemac.drv/ime.c, dlls/winemac.drv/keyboard.c, dlls/winemac.drv/mouse.c,
+# | 	dlls/winex11.drv/keyboard.c, dlls/winex11.drv/mouse.c, include/ddk/wdm.h, include/winuser.h, server/protocol.def,
+# | 	server/queue.c, server/trace.c
 # |
 if test "$enable_user32_rawinput_hid" -eq 1; then
-	patch_apply user32-rawinput-hid/0001-user32-tests-Add-more-SendInput-tests.patch
-	patch_apply user32-rawinput-hid/0002-user32-Implement-SendInput-INPUT_HARDWARE-check.patch
 	patch_apply user32-rawinput-hid/0003-user32-Add-RAWINPUT-parameter-to-__wine_send_input.patch
 	patch_apply user32-rawinput-hid/0004-hidclass.sys-Assign-rawinput-device-handle-in-HID_Li.patch
 	patch_apply user32-rawinput-hid/0005-hidclass.sys-Use-__wine_send_input-to-send-device-no.patch
