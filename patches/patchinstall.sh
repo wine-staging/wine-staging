@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "092c7a09a5afde3f11b71b1816388e80d062e8ec"
+	echo "39263558a2088940aaacd6eda19ca23d40b63495"
 }
 
 # Show version information
@@ -253,7 +253,6 @@ patch_enable_all ()
 	enable_wineboot_DriveSerial="$1"
 	enable_wineboot_HKEY_DYN_DATA="$1"
 	enable_wineboot_ProxySettings="$1"
-	enable_wineboot_drivers_etc_Stubs="$1"
 	enable_winecfg_Libraries="$1"
 	enable_winecfg_Staging="$1"
 	enable_wined3d_Accounting="$1"
@@ -817,9 +816,6 @@ patch_enable ()
 		wineboot-ProxySettings)
 			enable_wineboot_ProxySettings="$2"
 			;;
-		wineboot-drivers_etc_Stubs)
-			enable_wineboot_drivers_etc_Stubs="$2"
-			;;
 		winecfg-Libraries)
 			enable_winecfg_Libraries="$2"
 			;;
@@ -1317,11 +1313,7 @@ if test "$enable_wineboot_ProxySettings" -eq 1; then
 	if test "$enable_wineboot_DriveSerial" -gt 1; then
 		abort "Patchset wineboot-DriveSerial disabled, but wineboot-ProxySettings depends on that."
 	fi
-	if test "$enable_wineboot_drivers_etc_Stubs" -gt 1; then
-		abort "Patchset wineboot-drivers_etc_Stubs disabled, but wineboot-ProxySettings depends on that."
-	fi
 	enable_wineboot_DriveSerial=1
-	enable_wineboot_drivers_etc_Stubs=1
 fi
 
 if test "$enable_user32_rawinput_mouse_experimental" -eq 1; then
@@ -3851,16 +3843,11 @@ fi
 # |   *	[#50506] WM_INPUT messages are not received for HID devices registered with RegisterRawInputDevices
 # |
 # | Modified files:
-# |   *	dlls/hidclass.sys/Makefile.in, dlls/hidclass.sys/device.c, dlls/hidclass.sys/hid.h, dlls/hidclass.sys/pnp.c,
-# | 	dlls/ntoskrnl.exe/ntoskrnl.exe.spec, dlls/ntoskrnl.exe/pnp.c, dlls/user32/input.c, dlls/user32/message.c,
-# | 	dlls/user32/rawinput.c, dlls/user32/user32.spec, dlls/user32/user_private.h, dlls/wineandroid.drv/keyboard.c,
-# | 	dlls/wineandroid.drv/window.c, dlls/winemac.drv/ime.c, dlls/winemac.drv/keyboard.c, dlls/winemac.drv/mouse.c,
-# | 	dlls/winex11.drv/keyboard.c, dlls/winex11.drv/mouse.c, include/ddk/wdm.h, include/winuser.h, server/protocol.def,
+# |   *	dlls/hidclass.sys/Makefile.in, dlls/hidclass.sys/device.c, dlls/hidclass.sys/pnp.c, dlls/ntoskrnl.exe/ntoskrnl.exe.spec,
+# | 	dlls/ntoskrnl.exe/pnp.c, dlls/user32/message.c, dlls/user32/rawinput.c, include/ddk/wdm.h, server/protocol.def,
 # | 	server/queue.c, server/trace.c
 # |
 if test "$enable_user32_rawinput_hid" -eq 1; then
-	patch_apply user32-rawinput-hid/0003-user32-Add-RAWINPUT-parameter-to-__wine_send_input.patch
-	patch_apply user32-rawinput-hid/0004-hidclass.sys-Assign-rawinput-device-handle-in-HID_Li.patch
 	patch_apply user32-rawinput-hid/0005-hidclass.sys-Use-__wine_send_input-to-send-device-no.patch
 	patch_apply user32-rawinput-hid/0006-server-Implement-desktop-broadcast-in-queue_rawinput.patch
 	patch_apply user32-rawinput-hid/0007-server-Add-rawinput-union-to-hw_input_t-INPUT_HARDWA.patch
@@ -4037,22 +4024,10 @@ if test "$enable_wineboot_HKEY_DYN_DATA" -eq 1; then
 	patch_apply wineboot-HKEY_DYN_DATA/0001-wineboot-Add-some-generic-hardware-in-HKEY_DYN_DATA-.patch
 fi
 
-# Patchset wineboot-drivers_etc_Stubs
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#12076] Create stub files for system32/drivers/etc/{services,hosts,networks,protocol}
-# |
-# | Modified files:
-# |   *	programs/wineboot/wineboot.c
-# |
-if test "$enable_wineboot_drivers_etc_Stubs" -eq 1; then
-	patch_apply wineboot-drivers_etc_Stubs/0001-wineboot-Init-system32-drivers-etc-host-networks-pro.patch
-fi
-
 # Patchset wineboot-ProxySettings
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	wineboot-DriveSerial, wineboot-drivers_etc_Stubs
+# |   *	wineboot-DriveSerial
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#42024] Create ProxyEnable key on wineprefix update
