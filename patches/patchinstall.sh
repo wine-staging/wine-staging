@@ -148,7 +148,6 @@ patch_enable_all ()
 	enable_msvcrt_Math_Precision="$1"
 	enable_msxml3_FreeThreadedXMLHTTP60="$1"
 	enable_ntdll_APC_Performance="$1"
-	enable_ntdll_Activation_Context="$1"
 	enable_ntdll_ApiSetMap="$1"
 	enable_ntdll_Builtin_Prot="$1"
 	enable_ntdll_CriticalSection="$1"
@@ -500,9 +499,6 @@ patch_enable ()
 			;;
 		ntdll-APC_Performance)
 			enable_ntdll_APC_Performance="$2"
-			;;
-		ntdll-Activation_Context)
-			enable_ntdll_Activation_Context="$2"
 			;;
 		ntdll-ApiSetMap)
 			enable_ntdll_ApiSetMap="$2"
@@ -2788,15 +2784,6 @@ fi
 # |
 if test "$enable_ntdll_APC_Performance" -eq 1; then
 	patch_apply ntdll-APC_Performance/0001-ntdll-Reuse-old-async-fileio-structures-if-possible.patch
-fi
-
-# Patchset ntdll-Activation_Context
-# |
-# | Modified files:
-# |   *	dlls/kernel32/tests/actctx.c, dlls/ntdll/actctx.c
-# |
-if test "$enable_ntdll_Activation_Context" -eq 1; then
-	patch_apply ntdll-Activation_Context/0001-ntdll-Fix-return-value-for-missing-ACTIVATION_CONTEX.patch
 fi
 
 # Patchset ntdll-ApiSetMap
