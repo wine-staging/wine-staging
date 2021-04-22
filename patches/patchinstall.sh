@@ -249,7 +249,6 @@ patch_enable_all ()
 	enable_wine_inf_Directory_ContextMenuHandlers="$1"
 	enable_wine_inf_Dummy_CA_Certificate="$1"
 	enable_wine_inf_Performance="$1"
-	enable_wineboot_DriveSerial="$1"
 	enable_wineboot_HKEY_DYN_DATA="$1"
 	enable_wineboot_ProxySettings="$1"
 	enable_winecfg_Libraries="$1"
@@ -802,9 +801,6 @@ patch_enable ()
 		wine.inf-Performance)
 			enable_wine_inf_Performance="$2"
 			;;
-		wineboot-DriveSerial)
-			enable_wineboot_DriveSerial="$2"
-			;;
 		wineboot-HKEY_DYN_DATA)
 			enable_wineboot_HKEY_DYN_DATA="$2"
 			;;
@@ -1299,13 +1295,6 @@ if test "$enable_wined3d_Indexed_Vertex_Blending" -eq 1; then
 		abort "Patchset wined3d-SWVP-shaders disabled, but wined3d-Indexed_Vertex_Blending depends on that."
 	fi
 	enable_wined3d_SWVP_shaders=1
-fi
-
-if test "$enable_wineboot_ProxySettings" -eq 1; then
-	if test "$enable_wineboot_DriveSerial" -gt 1; then
-		abort "Patchset wineboot-DriveSerial disabled, but wineboot-ProxySettings depends on that."
-	fi
-	enable_wineboot_DriveSerial=1
 fi
 
 if test "$enable_user32_rawinput_mouse_experimental" -eq 1; then
@@ -3983,18 +3972,6 @@ if test "$enable_wine_inf_Performance" -eq 1; then
 	patch_apply wine.inf-Performance/0003-advapi32-tests-Add-test-for-perflib-registry-key.patch
 fi
 
-# Patchset wineboot-DriveSerial
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#17823] Assign a drive serial number during prefix creation/update
-# |
-# | Modified files:
-# |   *	programs/wineboot/wineboot.c
-# |
-if test "$enable_wineboot_DriveSerial" -eq 1; then
-	patch_apply wineboot-DriveSerial/0001-wineboot-Assign-a-drive-serial-number-during-prefix-.patch
-fi
-
 # Patchset wineboot-HKEY_DYN_DATA
 # |
 # | This patchset fixes the following Wine bugs:
@@ -4008,9 +3985,6 @@ if test "$enable_wineboot_HKEY_DYN_DATA" -eq 1; then
 fi
 
 # Patchset wineboot-ProxySettings
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	wineboot-DriveSerial
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#42024] Create ProxyEnable key on wineprefix update
