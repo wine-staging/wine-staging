@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "08c6114fbbdabe1873731356c51716e513a26348"
+	echo "5a1d836def24043b4e7afcdc8cf1342223957edf"
 }
 
 # Show version information
@@ -3262,11 +3262,8 @@ fi
 # | This patchset has the following (direct or indirect) dependencies:
 # |   *	ntdll-DOS_Attributes, ntdll-NtQueryEaFile, ntdll-Junction_Points
 # |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#44691] Improve mapping of DACL to file permissions
-# |
 # | Modified files:
-# |   *	dlls/advapi32/tests/security.c, dlls/ntdll/tests/file.c, server/fd.c, server/file.c
+# |   *	dlls/advapi32/tests/security.c, dlls/ntdll/tests/file.c, server/fd.c
 # |
 if test "$enable_server_File_Permissions" -eq 1; then
 	patch_apply server-File_Permissions/0001-server-Improve-STATUS_CANNOT_DELETE-checks-for-direc.patch
@@ -3276,7 +3273,6 @@ if test "$enable_server_File_Permissions" -eq 1; then
 	patch_apply server-File_Permissions/0005-advapi32-tests-Add-ACL-inheritance-tests-for-creatin.patch
 	patch_apply server-File_Permissions/0006-ntdll-tests-Added-tests-for-open-behaviour-on-readon.patch
 	patch_apply server-File_Permissions/0007-server-FILE_WRITE_ATTRIBUTES-should-succeed-for-read.patch
-	patch_apply server-File_Permissions/0008-server-Improve-mapping-of-DACL-to-file-permissions.patch
 fi
 
 # Patchset server-Stored_ACLs
