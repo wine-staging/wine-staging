@@ -4509,9 +4509,10 @@ fi
 # |   *	[#50546] xactengine3_7: Send Notification after the Wavebank is created.
 # |
 # | Modified files:
-# |   *	dlls/xactengine3_7/xact_dll.c
+# |   *	dlls/xactengine3_7/xact_dll.c, include/xact3.h, include/xact3wb.h
 # |
 if test "$enable_xactengine3_7_Notification" -eq 1; then
+	patch_apply xactengine3_7-Notification/0000-xactengine-Use-nameless-unions.patch
 	patch_apply xactengine3_7-Notification/0001-xactengine3.7-Delay-Notication-for-WAVEBANKPREPARED.patch
 	patch_apply xactengine3_7-Notification/0002-xactengine3_7-Record-context-for-each-notications.patch
 fi
