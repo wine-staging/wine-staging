@@ -193,6 +193,7 @@ patch_enable_all ()
 	enable_quartz_MediaSeeking_Positions="$1"
 	enable_riched20_Class_Tests="$1"
 	enable_riched20_IText_Interface="$1"
+	enable_secur32_InitializeSecurityContextW="$1"
 	enable_server_FileEndOfFileInformation="$1"
 	enable_server_File_Permissions="$1"
 	enable_server_Key_State="$1"
@@ -632,6 +633,9 @@ patch_enable ()
 			;;
 		riched20-IText_Interface)
 			enable_riched20_IText_Interface="$2"
+			;;
+		secur32-InitializeSecurityContextW)
+			enable_secur32_InitializeSecurityContextW="$2"
 			;;
 		server-FileEndOfFileInformation)
 			enable_server_FileEndOfFileInformation="$2"
@@ -3245,6 +3249,18 @@ fi
 if test "$enable_riched20_IText_Interface" -eq 1; then
 	patch_apply riched20-IText_Interface/0003-riched20-Stub-for-ITextPara-interface-and-implement-.patch
 	patch_apply riched20-IText_Interface/0010-riched20-Silence-repeated-FIXMEs-triggered-by-Adobe-.patch
+fi
+
+# Patchset secur32-InitializeSecurityContextW
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#51049] Create a new Context when the input object is NULL.
+# |
+# | Modified files:
+# |   *	dlls/secur32/schannel.c, dlls/secur32/tests/schannel.c
+# |
+if test "$enable_secur32_InitializeSecurityContextW" -eq 1; then
+	patch_apply secur32-InitializeSecurityContextW/0001-secur32-Input-Parameter-should-be-NULL-on-first-call.patch
 fi
 
 # Patchset server-FileEndOfFileInformation
