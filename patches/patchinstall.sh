@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "5a1d836def24043b4e7afcdc8cf1342223957edf"
+	echo "c0af8b73725d2670c9b018a255c503dee6912cf5"
 }
 
 # Show version information
@@ -4479,10 +4479,9 @@ fi
 # |   *	[#50546] xactengine3_7: Send Notification after the Wavebank is created.
 # |
 # | Modified files:
-# |   *	dlls/xactengine3_7/xact_dll.c, include/xact3.h, include/xact3wb.h
+# |   *	dlls/xactengine3_7/xact_dll.c
 # |
 if test "$enable_xactengine3_7_Notification" -eq 1; then
-	patch_apply xactengine3_7-Notification/0000-xactengine-Use-nameless-unions.patch
 	patch_apply xactengine3_7-Notification/0001-xactengine3.7-Delay-Notication-for-WAVEBANKPREPARED.patch
 	patch_apply xactengine3_7-Notification/0002-xactengine3_7-Record-context-for-each-notications.patch
 fi
