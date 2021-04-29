@@ -2158,7 +2158,7 @@ fi
 # |   *	configure.ac, dlls/dxgkrnl.sys/Makefile.in, dlls/dxgkrnl.sys/dxgkrnl.sys.spec, dlls/dxgkrnl.sys/main.c,
 # | 	dlls/dxgmms1.sys/Makefile.in, dlls/dxgmms1.sys/dxgmms1.sys.spec, dlls/dxgmms1.sys/main.c,
 # | 	dlls/ntoskrnl.exe/tests/driver.c, dlls/win32k.sys/Makefile.in, dlls/win32k.sys/main.c, dlls/win32k.sys/win32k.sys.spec,
-# | 	programs/winedevice/device.c, tools/make_specfiles
+# | 	loader/wine.inf.in, programs/winedevice/device.c, tools/make_specfiles
 # |
 if test "$enable_winedevice_Default_Drivers" -eq 1; then
 	patch_apply winedevice-Default_Drivers/0001-win32k.sys-Add-stub-driver.patch
