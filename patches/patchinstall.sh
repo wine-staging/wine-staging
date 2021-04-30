@@ -187,7 +187,6 @@ patch_enable_all ()
 	enable_oleaut32_OleLoadPicture="$1"
 	enable_oleaut32_OleLoadPictureFile="$1"
 	enable_packager_DllMain="$1"
-	enable_pdh_PdhLookupPerfNameByIndex_processor="$1"
 	enable_programs_findstr="$1"
 	enable_programs_systeminfo="$1"
 	enable_quartz_MediaSeeking_Positions="$1"
@@ -615,9 +614,6 @@ patch_enable ()
 			;;
 		packager-DllMain)
 			enable_packager_DllMain="$2"
-			;;
-		pdh-PdhLookupPerfNameByIndex-processor)
-			enable_pdh_PdhLookupPerfNameByIndex_processor="$2"
 			;;
 		programs-findstr)
 			enable_programs_findstr="$2"
@@ -3183,18 +3179,6 @@ fi
 # |
 if test "$enable_packager_DllMain" -eq 1; then
 	patch_apply packager-DllMain/0001-packager-Prefer-native-version.patch
-fi
-
-# Patchset pdh-PdhLookupPerfNameByIndex-processor
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#33018] pdh: Support the 'Processor' object string.
-# |
-# | Modified files:
-# |   *	dlls/pdh/pdh_main.c, dlls/pdh/tests/pdh.c
-# |
-if test "$enable_pdh_PdhLookupPerfNameByIndex_processor" -eq 1; then
-	patch_apply pdh-PdhLookupPerfNameByIndex-processor/0001-pdh-Support-the-Processor-object-string.patch
 fi
 
 # Patchset programs-findstr
