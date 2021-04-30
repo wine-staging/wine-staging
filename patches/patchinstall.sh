@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "ca03802a456e7cf4efd834edfeddc483ac72e4b5"
+	echo "2deb8c2825afcb88a9f106b73aa1f4da9253fb87"
 }
 
 # Show version information
@@ -2661,7 +2661,7 @@ fi
 # |   *	[#47439] loader: Add Keyboard Layouts registry enteries.
 # |
 # | Modified files:
-# |   *	dlls/user32/driver.c, dlls/user32/tests/input.c, loader/wine.inf.in
+# |   *	dlls/user32/input.c, dlls/user32/tests/input.c, loader/wine.inf.in
 # |
 if test "$enable_loader_KeyboardLayouts" -eq 1; then
 	patch_apply loader-KeyboardLayouts/0001-loader-Add-Keyboard-Layouts-registry-enteries.patch
