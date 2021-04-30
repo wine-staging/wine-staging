@@ -1,33 +1,18 @@
-From b41fc553cecc9ba5c81cda41bb85e2ee1937586e Mon Sep 17 00:00:00 2001
+From 4c99070bbd7dd897a6e27bd94e8f50206b3ad49c Mon Sep 17 00:00:00 2001
 From: Zebediah Figura <z.figura12@gmail.com>
 Date: Mon, 2 Nov 2020 20:24:07 -0600
 Subject: [PATCH] ntdll: Reimplement Win32 futexes on top of thread-ID alerts.
 
 Signed-off-by: Zebediah Figura <z.figura12@gmail.com>
 ---
- dlls/ntdll/ntdll_misc.h  |   2 +
- dlls/ntdll/sync.c        | 185 ++++++++++++++++++++++++++++++++++++++-
- dlls/ntdll/thread.c      |   2 +
+ dlls/ntdll/sync.c        | 158 +++++++++++++++++++++++++++++++++++++-
  dlls/ntdll/unix/loader.c |   3 -
- dlls/ntdll/unix/sync.c   | 162 ----------------------------------
+ dlls/ntdll/unix/sync.c   | 162 ---------------------------------------
  dlls/ntdll/unixlib.h     |   6 +-
- 6 files changed, 187 insertions(+), 173 deletions(-)
+ 4 files changed, 156 insertions(+), 173 deletions(-)
 
-diff --git a/dlls/ntdll/ntdll_misc.h b/dlls/ntdll/ntdll_misc.h
-index b8f9dc28e63..eab3b5e5248 100644
---- a/dlls/ntdll/ntdll_misc.h
-+++ b/dlls/ntdll/ntdll_misc.h
-@@ -85,6 +85,8 @@ extern const struct unix_funcs *unix_funcs DECLSPEC_HIDDEN;
- 
- extern struct _KUSER_SHARED_DATA *user_shared_data DECLSPEC_HIDDEN;
- 
-+extern void addr_wait_free_entry(void) DECLSPEC_HIDDEN;
-+
- extern int CDECL NTDLL__vsnprintf( char *str, SIZE_T len, const char *format, __ms_va_list args ) DECLSPEC_HIDDEN;
- extern int CDECL NTDLL__vsnwprintf( WCHAR *str, SIZE_T len, const WCHAR *format, __ms_va_list args ) DECLSPEC_HIDDEN;
- 
 diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
-index f1263ae33fd..d652f55b630 100644
+index f1263ae33fd..348f260c3b0 100644
 --- a/dlls/ntdll/sync.c
 +++ b/dlls/ntdll/sync.c
 @@ -36,6 +36,13 @@
@@ -44,75 +29,48 @@ index f1263ae33fd..d652f55b630 100644
  
  /******************************************************************
   *              RtlRunOnceInitialize (NTDLL.@)
-@@ -530,13 +537,143 @@ NTSTATUS WINAPI RtlSleepConditionVariableSRW( RTL_CONDITION_VARIABLE *variable,
+@@ -530,13 +537,111 @@ NTSTATUS WINAPI RtlSleepConditionVariableSRW( RTL_CONDITION_VARIABLE *variable,
      return status;
  }
  
-+/* The following functions define a lock-free array mapping thread IDs to
-+ * values, which can be grown but not shrunk. We do this by allocating one slice
-+ * of the array at a time, and storing a pointer to the next slice at the end.
-+ *
-+ * This is both for efficiency (we want this function to be as fast as possible)
-+ * and because locking the TEB list is hard otherwise—we need to safely access
-+ * the TEB list, but cannot do so using any of these synchronization primitives,
-+ * and we may need to access the TEB list before being inserted into it (e.g.
-+ * from heap locks, or the TEB list lock itself.)
-+ */
 +
-+struct addr_wait_entry
++#define FUTEX_ADDR_BLOCK_SIZE (65536 / sizeof(void *))
++static void **futex_addr_blocks[4096];
++
++static unsigned int tid_to_index( DWORD tid, unsigned int *block_idx )
 +{
-+    void *addr;
-+    HANDLE tid;
-+};
-+
-+struct addr_wait_array
-+{
-+    struct addr_wait_entry entries[(0x1000 - sizeof(struct addr_wait_entry *)) / sizeof(struct addr_wait_entry)];
-+    struct addr_wait_array *next;
-+};
-+
-+static struct addr_wait_array first_addr_wait_array;
-+
-+static struct addr_wait_entry *addr_wait_allocate_entry( HANDLE tid )
-+{
-+    struct addr_wait_array *array = &first_addr_wait_array;
-+
-+    for (;;)
-+    {
-+        struct addr_wait_array *new_array = NULL;
-+        SIZE_T size = sizeof(*new_array);
-+        unsigned int i;
-+
-+        for (;;)
-+        {
-+            for (i = 0; i < ARRAY_SIZE(array->entries); ++i)
-+            {
-+                if (!array->entries[i].tid && !InterlockedCompareExchangePointer( &array->entries[i].tid, tid, NULL ))
-+                    return &array->entries[i];
-+            }
-+
-+            if (!array->next) break;
-+            array = array->next;
-+        }
-+
-+        if (NtAllocateVirtualMemory( NtCurrentProcess(), (void **)&new_array, 0, &size, MEM_COMMIT, PAGE_READWRITE ))
-+            return NULL;
-+
-+        if (InterlockedCompareExchangePointer( (void **)&array->next, new_array, NULL ))
-+        {
-+            /* another thread beat us to it */
-+            NtFreeVirtualMemory( NtCurrentProcess(), (void **)&new_array, &size, MEM_RELEASE );
-+        }
-+        /* start searching again from the new array */
-+        array = array->next;
-+    }
++    unsigned int idx = (tid >> 2) - 1;
++    *block_idx = idx / FUTEX_ADDR_BLOCK_SIZE;
++    return idx % FUTEX_ADDR_BLOCK_SIZE;
 +}
 +
-+void addr_wait_free_entry(void)
++static HANDLE index_to_tid( unsigned int block_idx, unsigned int idx )
 +{
-+    struct addr_wait_entry *entry = NtCurrentTeb()->ReservedForPerf;
-+    if (entry)
-+        InterlockedExchangePointer( &entry->tid, NULL );
++    return (HANDLE)((((block_idx * FUTEX_ADDR_BLOCK_SIZE) + idx) + 1) << 2);
++}
++
++static void **get_futex_entry( DWORD tid )
++{
++    unsigned int block_idx, idx = tid_to_index( tid, &block_idx );
++
++    if (block_idx > ARRAY_SIZE(futex_addr_blocks))
++    {
++        FIXME( "tid %#x is too high\n", tid );
++        return NULL;
++    }
++
++    if (!futex_addr_blocks[block_idx])
++    {
++        SIZE_T size = FUTEX_ADDR_BLOCK_SIZE * sizeof(void *);
++        void *ptr = NULL;
++
++        if (NtAllocateVirtualMemory( NtCurrentProcess(), &ptr, 0, &size, MEM_COMMIT, PAGE_READWRITE ))
++            return NULL;
++        if (InterlockedCompareExchangePointer( (void **)&futex_addr_blocks[block_idx], ptr, NULL ))
++            NtFreeVirtualMemory( NtCurrentProcess(), &ptr, &size, MEM_RELEASE ); /* someone beat us to it */
++    }
++
++    return &futex_addr_blocks[block_idx][idx % FUTEX_ADDR_BLOCK_SIZE];
 +}
 +
 +static BOOL compare_addr( const void *addr, const void *cmp, SIZE_T size )
@@ -139,7 +97,7 @@ index f1263ae33fd..d652f55b630 100644
                                    const LARGE_INTEGER *timeout )
  {
 -    return unix_funcs->RtlWaitOnAddress( addr, cmp, size, timeout );
-+    struct addr_wait_entry *entry = NtCurrentTeb()->ReservedForPerf;
++    void **entry = get_futex_entry( GetCurrentThreadId() );
 +    NTSTATUS ret;
 +
 +    TRACE("addr %p cmp %p size %#Ix timeout %s\n", addr, cmp, size, debugstr_timeout( timeout ));
@@ -147,14 +105,9 @@ index f1263ae33fd..d652f55b630 100644
 +    if (size != 1 && size != 2 && size != 4 && size != 8)
 +        return STATUS_INVALID_PARAMETER;
 +
-+    if (!entry)
-+    {
-+        if (!(entry = addr_wait_allocate_entry( NtCurrentTeb()->ClientId.UniqueThread )))
-+            return STATUS_NO_MEMORY;
-+        NtCurrentTeb()->ReservedForPerf = entry;
-+    }
++    if (!entry) return STATUS_NO_MEMORY;
 +
-+    InterlockedExchangePointer( &entry->addr, (void *)addr );
++    InterlockedExchangePointer( entry, (void *)addr );
 +
 +    /* Ensure that the compare-and-swap above is ordered before the comparison
 +     * below. This barrier is paired with another in RtlWakeByAddress*().
@@ -178,24 +131,24 @@ index f1263ae33fd..d652f55b630 100644
 +
 +    if (!compare_addr( addr, cmp, size ))
 +    {
-+        InterlockedExchangePointer( &entry->addr, NULL );
++        InterlockedExchangePointer( entry, NULL );
 +        return STATUS_SUCCESS;
 +    }
 +
 +    ret = NtWaitForAlertByThreadId( NULL, timeout );
-+    InterlockedExchangePointer( &entry->addr, NULL );
++    InterlockedExchangePointer( entry, NULL );
 +    if (ret == STATUS_ALERTED) ret = STATUS_SUCCESS;
 +    return ret;
  }
  
  /***********************************************************************
-@@ -544,7 +681,26 @@ NTSTATUS WINAPI RtlWaitOnAddress( const void *addr, const void *cmp, SIZE_T size
+@@ -544,7 +649,29 @@ NTSTATUS WINAPI RtlWaitOnAddress( const void *addr, const void *cmp, SIZE_T size
   */
  void WINAPI RtlWakeAddressAll( const void *addr )
  {
 -    return unix_funcs->RtlWakeAddressAll( addr );
-+    struct addr_wait_array *array;
-+    unsigned int i;
++    unsigned int i, j;
++    void **block;
 +
 +    TRACE("%p\n", addr);
 +
@@ -206,24 +159,27 @@ index f1263ae33fd..d652f55b630 100644
 +     */
 +    MemoryBarrier();
 +
-+    for (array = &first_addr_wait_array; array != NULL; array = array->next)
++    for (i = 0; i < ARRAY_SIZE(futex_addr_blocks); ++i)
 +    {
-+        for (i = 0; i < ARRAY_SIZE(array->entries); ++i)
++        block = futex_addr_blocks[i];
++        if (!block) continue;
++
++        for (j = 0; j < FUTEX_ADDR_BLOCK_SIZE; ++j)
 +        {
-+            if (array->entries[i].addr == addr)
-+                NtAlertThreadByThreadId( array->entries[i].tid );
++            if (block[j] == addr)
++                NtAlertThreadByThreadId( index_to_tid( i, j ) );
 +        }
 +    }
  }
  
  /***********************************************************************
-@@ -552,5 +708,28 @@ void WINAPI RtlWakeAddressAll( const void *addr )
+@@ -552,5 +679,30 @@ void WINAPI RtlWakeAddressAll( const void *addr )
   */
  void WINAPI RtlWakeAddressSingle( const void *addr )
  {
 -    return unix_funcs->RtlWakeAddressSingle( addr );
-+    struct addr_wait_array *array;
-+    unsigned int i;
++    unsigned int i, j;
++    void **block;
 +
 +    TRACE("%p\n", addr);
 +
@@ -234,37 +190,26 @@ index f1263ae33fd..d652f55b630 100644
 +     */
 +    MemoryBarrier();
 +
-+    for (array = &first_addr_wait_array; array != NULL; array = array->next)
++    for (i = 0; i < ARRAY_SIZE(futex_addr_blocks); ++i)
 +    {
-+        for (i = 0; i < ARRAY_SIZE(array->entries); ++i)
++        block = futex_addr_blocks[i];
++        if (!block) continue;
++
++        for (j = 0; j < FUTEX_ADDR_BLOCK_SIZE; ++j)
 +        {
-+            if (array->entries[i].addr == addr
-+                    && InterlockedCompareExchangePointer( &array->entries[i].addr, NULL, (void *)addr ) == addr)
++            if (block[j] == addr && InterlockedCompareExchangePointer( &block[j], NULL, (void *)addr ) == addr)
 +            {
-+                NtAlertThreadByThreadId( array->entries[i].tid );
++                NtAlertThreadByThreadId( index_to_tid( i, j ) );
 +                return;
 +            }
 +        }
 +    }
  }
-diff --git a/dlls/ntdll/thread.c b/dlls/ntdll/thread.c
-index 25496609f08..4f395336428 100644
---- a/dlls/ntdll/thread.c
-+++ b/dlls/ntdll/thread.c
-@@ -84,6 +84,8 @@ void WINAPI RtlExitUserThread( ULONG status )
-     NtQueryInformationThread( GetCurrentThread(), ThreadAmILastThread, &last, sizeof(last), NULL );
-     if (last) RtlExitUserProcess( status );
-     LdrShutdownThread();
-+    /* must be done last, in particular after any heap allocations */
-+    addr_wait_free_entry();
-     for (;;) NtTerminateThread( GetCurrentThread(), status );
- }
- 
 diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
-index 4c76865019b..d7fc60cad2f 100644
+index e4c062cea98..3a4a943c65f 100644
 --- a/dlls/ntdll/unix/loader.c
 +++ b/dlls/ntdll/unix/loader.c
-@@ -1753,9 +1753,6 @@ static struct unix_funcs unix_funcs =
+@@ -1816,9 +1816,6 @@ static struct unix_funcs unix_funcs =
  #endif
      DbgUiIssueRemoteBreakin,
      RtlGetSystemTimePrecise,
@@ -275,10 +220,10 @@ index 4c76865019b..d7fc60cad2f 100644
      fast_RtlpUnWaitCriticalSection,
      fast_RtlDeleteCriticalSection,
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index 7d6423083e1..41005425a90 100644
+index 4fa890e5acc..8394a1b8601 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
-@@ -77,10 +77,6 @@ WINE_DEFAULT_DEBUG_CHANNEL(sync);
+@@ -80,10 +80,6 @@ WINE_DEFAULT_DEBUG_CHANNEL(sync);
  
  HANDLE keyed_event = 0;
  
@@ -289,7 +234,7 @@ index 7d6423083e1..41005425a90 100644
  static const char *debugstr_timeout( const LARGE_INTEGER *timeout )
  {
      if (!timeout) return "(infinite)";
-@@ -190,24 +186,6 @@ static void timespec_from_timeout( struct timespec *timespec, const LARGE_INTEGE
+@@ -193,24 +189,6 @@ static void timespec_from_timeout( struct timespec *timespec, const LARGE_INTEGE
  #endif
  
  
@@ -314,7 +259,7 @@ index 7d6423083e1..41005425a90 100644
  /* create a struct security_descriptor and contained information in one contiguous piece of memory */
  NTSTATUS alloc_object_attributes( const OBJECT_ATTRIBUTES *attr, struct object_attributes **ret,
                                    data_size_t *ret_len )
-@@ -2836,71 +2814,6 @@ NTSTATUS CDECL fast_RtlWakeConditionVariable( RTL_CONDITION_VARIABLE *variable,
+@@ -2911,71 +2889,6 @@ NTSTATUS CDECL fast_RtlWakeConditionVariable( RTL_CONDITION_VARIABLE *variable,
      return STATUS_SUCCESS;
  }
  
@@ -386,7 +331,7 @@ index 7d6423083e1..41005425a90 100644
  #else
  
  NTSTATUS CDECL fast_RtlTryAcquireSRWLockExclusive( RTL_SRWLOCK *lock )
-@@ -2943,79 +2856,4 @@ NTSTATUS CDECL fast_wait_cv( RTL_CONDITION_VARIABLE *variable, const void *value
+@@ -3018,79 +2931,4 @@ NTSTATUS CDECL fast_wait_cv( RTL_CONDITION_VARIABLE *variable, const void *value
      return STATUS_NOT_IMPLEMENTED;
  }
  
