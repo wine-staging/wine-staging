@@ -90,7 +90,6 @@ patch_enable_all ()
 	enable_atl_AtlAxDialogBox="$1"
 	enable_bcrypt_ECDHSecretAgreement="$1"
 	enable_cmd_launch_association="$1"
-	enable_comctl32_Listview_DrawItem="$1"
 	enable_comctl32_rebar_capture="$1"
 	enable_comctl32_version_6="$1"
 	enable_comdlg32_lpstrFileTitle="$1"
@@ -323,9 +322,6 @@ patch_enable ()
 			;;
 		cmd-launch-association)
 			enable_cmd_launch_association="$2"
-			;;
-		comctl32-Listview_DrawItem)
-			enable_comctl32_Listview_DrawItem="$2"
 			;;
 		comctl32-rebar-capture)
 			enable_comctl32_rebar_capture="$2"
@@ -1611,18 +1607,6 @@ fi
 if test "$enable_cmd_launch_association" -eq 1; then
 	patch_apply cmd-launch-association/0001-cmd-Support-for-launching-programs-based-on-file-ass.patch
 	patch_apply cmd-launch-association/0002-cmd-ftype-failed-to-clear-file-associations.patch
-fi
-
-# Patchset comctl32-Listview_DrawItem
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#38941] Preserve custom colors between subitems for listview control
-# |
-# | Modified files:
-# |   *	dlls/comctl32/listview.c
-# |
-if test "$enable_comctl32_Listview_DrawItem" -eq 1; then
-	patch_apply comctl32-Listview_DrawItem/0001-comctl32-Preserve-custom-colors-between-subitems.patch
 fi
 
 # Patchset comctl32-rebar-capture
