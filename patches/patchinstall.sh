@@ -87,7 +87,6 @@ patch_enable_all ()
 	enable_Staging="$1"
 	enable_advapi32_LsaLookupPrivilegeName="$1"
 	enable_api_ms_win_Stub_DLLs="$1"
-	enable_atl_AtlAxDialogBox="$1"
 	enable_bcrypt_ECDHSecretAgreement="$1"
 	enable_cmd_launch_association="$1"
 	enable_comctl32_rebar_capture="$1"
@@ -311,9 +310,6 @@ patch_enable ()
 			;;
 		api-ms-win-Stub_DLLs)
 			enable_api_ms_win_Stub_DLLs="$2"
-			;;
-		atl-AtlAxDialogBox)
-			enable_atl_AtlAxDialogBox="$2"
 			;;
 		bcrypt-ECDHSecretAgreement)
 			enable_bcrypt_ECDHSecretAgreement="$2"
@@ -1550,18 +1546,6 @@ if test "$enable_api_ms_win_Stub_DLLs" -eq 1; then
 	patch_apply api-ms-win-Stub_DLLs/0010-ext-ms-win-appmodel-usercontext-l1-1-0-Add-dll-and-a.patch
 	patch_apply api-ms-win-Stub_DLLs/0012-ext-ms-win-xaml-pal-l1-1-0-Add-stub-for-GetThemeServ.patch
 	patch_apply api-ms-win-Stub_DLLs/0027-uiautomationcore-Add-dll-and-stub-some-functions.patch
-fi
-
-# Patchset atl-AtlAxDialogBox
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#32749] atl: Implemented AtlAxDialogBox[A,W]
-# |
-# | Modified files:
-# |   *	dlls/atl/atl_ax.c
-# |
-if test "$enable_atl_AtlAxDialogBox" -eq 1; then
-	patch_apply atl-AtlAxDialogBox/0001-atl-Implement-AtlAxDialogBox-A-W.patch
 fi
 
 # Patchset bcrypt-ECDHSecretAgreement
