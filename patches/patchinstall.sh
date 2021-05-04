@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "2deb8c2825afcb88a9f106b73aa1f4da9253fb87"
+	echo "3ba4412be60dafee310b5d3c71aa762aa8846564"
 }
 
 # Show version information
@@ -168,7 +168,6 @@ patch_enable_all ()
 	enable_ntdll_ProcessQuotaLimits="$1"
 	enable_ntdll_RtlFirstFreeAce="$1"
 	enable_ntdll_RtlQueryPackageIdentity="$1"
-	enable_ntdll_RtlQueryProcessPlaceholderCompatibilityMode="$1"
 	enable_ntdll_Serial_Port_Detection="$1"
 	enable_ntdll_Syscall_Emulation="$1"
 	enable_ntdll_WRITECOPY="$1"
@@ -556,9 +555,6 @@ patch_enable ()
 			;;
 		ntdll-RtlQueryPackageIdentity)
 			enable_ntdll_RtlQueryPackageIdentity="$2"
-			;;
-		ntdll-RtlQueryProcessPlaceholderCompatibilityMode)
-			enable_ntdll_RtlQueryProcessPlaceholderCompatibilityMode="$2"
 			;;
 		ntdll-Serial_Port_Detection)
 			enable_ntdll_Serial_Port_Detection="$2"
@@ -2990,18 +2986,6 @@ if test "$enable_ntdll_RtlQueryPackageIdentity" -eq 1; then
 	patch_apply ntdll-RtlQueryPackageIdentity/0003-ntdll-tests-Add-basic-tests-for-RtlQueryPackageIdent.patch
 fi
 
-# Patchset ntdll-RtlQueryProcessPlaceholderCompatibilityMode
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#50026] : ntdll: Add stub for RtlQueryProcessPlaceholderCompatibilityMode
-# |
-# | Modified files:
-# |   *	dlls/ntdll/ntdll.spec, dlls/ntdll/rtl.c, dlls/ntoskrnl.exe/ntoskrnl.exe.spec, include/ddk/ntifs.h
-# |
-if test "$enable_ntdll_RtlQueryProcessPlaceholderCompatibilityMode" -eq 1; then
-	patch_apply ntdll-RtlQueryProcessPlaceholderCompatibilityMode/0001-ntdll-Add-stub-for-RtlQueryProcessPlaceholderCompati.patch
-fi
-
 # Patchset ntdll-Serial_Port_Detection
 # |
 # | This patchset fixes the following Wine bugs:
@@ -3375,7 +3359,6 @@ fi
 # |
 if test "$enable_shell32_Context_Menu" -eq 1; then
 	patch_apply shell32-Context_Menu/0001-shell32-Fix-copying-of-files-when-using-a-context-me.patch
-	patch_apply shell32-Context_Menu/0002-shell32-Set-return-value-correctly-in-DoPaste.patch
 	patch_apply shell32-Context_Menu/0003-shell32-Implement-insert-paste-for-item-context-menu.patch
 	patch_apply shell32-Context_Menu/0005-shell32-Add-support-for-setting-getting-PREFERREDDRO.patch
 	patch_apply shell32-Context_Menu/0006-shell32-Add-parameter-to-ISFHelper-DeleteItems-to-al.patch
@@ -3793,9 +3776,8 @@ fi
 # |   *	[#50506] WM_INPUT messages are not received for HID devices registered with RegisterRawInputDevices
 # |
 # | Modified files:
-# |   *	dlls/hidclass.sys/Makefile.in, dlls/hidclass.sys/device.c, dlls/hidclass.sys/pnp.c, dlls/ntoskrnl.exe/ntoskrnl.exe.spec,
-# | 	dlls/ntoskrnl.exe/pnp.c, dlls/user32/message.c, dlls/user32/rawinput.c, include/ddk/wdm.h, server/protocol.def,
-# | 	server/queue.c, server/trace.c
+# |   *	dlls/hidclass.sys/Makefile.in, dlls/hidclass.sys/device.c, dlls/hidclass.sys/pnp.c, dlls/user32/message.c,
+# | 	dlls/user32/rawinput.c, server/protocol.def, server/queue.c, server/trace.c
 # |
 if test "$enable_user32_rawinput_hid" -eq 1; then
 	patch_apply user32-rawinput-hid/0005-hidclass.sys-Use-__wine_send_input-to-send-device-no.patch
@@ -3809,10 +3791,7 @@ if test "$enable_user32_rawinput_hid" -eq 1; then
 	patch_apply user32-rawinput-hid/0013-hidclass.sys-Send-rawinput-messages-with-HID-report.patch
 	patch_apply user32-rawinput-hid/0014-server-Add-extra-data-to-hardware_msg_data.patch
 	patch_apply user32-rawinput-hid/0015-server-Implement-WM_INPUT-RIM_TYPEHID-message-dispat.patch
-	patch_apply user32-rawinput-hid/0016-ntoskrnl-Implement-IoSetDevicePropertyData.patch
-	patch_apply user32-rawinput-hid/0017-hidclass.sys-Assign-rawinput-handles-through-device-.patch
 	patch_apply user32-rawinput-hid/0018-user32-Enumerate-mouse-rawinput-device-before-HID-de.patch
-	patch_apply user32-rawinput-hid/0019-user32-Use-device-handles-assigned-by-hidclass.sys.patch
 fi
 
 # Patchset user32-rawinput-mouse
