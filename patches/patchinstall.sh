@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "cda4abac9859ed42c29e8cb2746201a578431a5e"
+	echo "e2aa30f21def839866b09e74b5ddd843f7e70c87"
 }
 
 # Show version information
@@ -1670,7 +1670,7 @@ fi
 # | Modified files:
 # |   *	configure.ac, dlls/d3d11/device.c, dlls/nvapi/Makefile.in, dlls/nvapi/nvapi.c, dlls/nvapi/nvapi.spec,
 # | 	dlls/nvapi/tests/Makefile.in, dlls/nvapi/tests/nvapi.c, dlls/nvapi64/Makefile.in, dlls/nvapi64/nvapi64.spec,
-# | 	include/Makefile.in, include/nvapi.h, include/wine/wined3d.h
+# | 	dlls/wined3d/device.c, dlls/wined3d/wined3d.spec, include/Makefile.in, include/nvapi.h, include/wine/wined3d.h
 # |
 if test "$enable_nvapi_Stub_DLL" -eq 1; then
 	patch_apply nvapi-Stub_DLL/0001-nvapi-First-implementation.patch
@@ -1693,6 +1693,7 @@ if test "$enable_nvapi_Stub_DLL" -eq 1; then
 	patch_apply nvapi-Stub_DLL/0018-nvapi-Add-stub-for-NvAPI_GPU_GetGpuCoreCount.patch
 	patch_apply nvapi-Stub_DLL/0019-nvapi-Implement-NvAPI_D3D11_SetDepthBoundsTest.patch
 	patch_apply nvapi-Stub_DLL/0020-nvapi-Implement-NvAPI_D3D11_CreateDevice-and-NvAPI_D.patch
+	patch_apply nvapi-Stub_DLL/0021-Revert-wined3d-No-longer-export-wined3d_device_set_r.patch
 fi
 
 # Patchset d3d11-Deferred_Context
