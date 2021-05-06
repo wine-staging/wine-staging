@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "e2aa30f21def839866b09e74b5ddd843f7e70c87"
+	echo "a64861fb66be722f3a93ab73152c5d477ba3bd3e"
 }
 
 # Show version information
@@ -3903,7 +3903,7 @@ fi
 # Patchset wined3d-CSMT_Main
 # |
 # | Modified files:
-# |   *	dlls/wined3d/cs.c, dlls/wined3d/device.c, dlls/wined3d/wined3d_private.h
+# |   *	dlls/wined3d/cs.c, dlls/wined3d/wined3d_private.h
 # |
 if test "$enable_wined3d_CSMT_Main" -eq 1; then
 	patch_apply wined3d-CSMT_Main/0045-wined3d-Improve-wined3d_cs_emit_update_sub_resource.patch
