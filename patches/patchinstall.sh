@@ -2131,8 +2131,8 @@ fi
 # | Modified files:
 # |   *	configure.ac, dlls/kernel32/path.c, dlls/kernel32/tests/path.c, dlls/kernelbase/file.c, dlls/mountmgr.sys/device.c,
 # | 	dlls/msvcp120/tests/msvcp120.c, dlls/msvcp140/tests/msvcp140.c, dlls/ntdll/tests/file.c, dlls/ntdll/unix/file.c,
-# | 	include/Makefile.in, include/ntifs.h, include/winternl.h, programs/cmd/builtins.c, programs/cmd/directory.c,
-# | 	server/fd.c, server/file.c, server/protocol.def
+# | 	include/Makefile.in, include/ntifs.h, include/winnt.h, include/winternl.h, programs/cmd/builtins.c,
+# | 	programs/cmd/directory.c, server/fd.c, server/file.c, server/protocol.def
 # |
 if test "$enable_ntdll_Junction_Points" -eq 1; then
 	patch_apply ntdll-Junction_Points/0001-ntdll-Add-support-for-junction-point-creation.patch
@@ -2157,22 +2157,23 @@ if test "$enable_ntdll_Junction_Points" -eq 1; then
 	patch_apply ntdll-Junction_Points/0020-kernelbase-Use-FILE_OPEN_REPARSE_POINT-in-RemoveDire.patch
 	patch_apply ntdll-Junction_Points/0021-ntdll-Always-report-symbolic-links-as-containing-zer.patch
 	patch_apply ntdll-Junction_Points/0022-ntdll-Find-dangling-symlinks-quickly.patch
-	patch_apply ntdll-Junction_Points/0023-kernel32-Implement-CreateSymbolicLink-A-W-with-ntdll.patch
-	patch_apply ntdll-Junction_Points/0024-kernel32-Add-reparse-support-to-FindNextFile.patch
-	patch_apply ntdll-Junction_Points/0025-wcmd-Display-reparse-point-type-in-directory-listing.patch
-	patch_apply ntdll-Junction_Points/0026-wcmd-Show-reparse-point-target-in-directory-listing.patch
-	patch_apply ntdll-Junction_Points/0027-wcmd-Add-junction-point-support-to-mklink.patch
-	patch_apply ntdll-Junction_Points/0028-server-Fix-obtaining-information-about-a-symlink.patch
-	patch_apply ntdll-Junction_Points/0029-ntdll-Succeed-with-no-data-for-NtReadFile-on-reparse.patch
-	patch_apply ntdll-Junction_Points/0030-ntdll-Support-reparse-point-properties-in-fd_get_fil.patch
-	patch_apply ntdll-Junction_Points/0031-ntdll-Add-support-for-FileAttributeTagInformation.patch
+	patch_apply ntdll-Junction_Points/0023-server-Fix-obtaining-information-about-a-symlink.patch
+	patch_apply ntdll-Junction_Points/0024-ntdll-Succeed-with-no-data-for-NtReadFile-on-reparse.patch
+	patch_apply ntdll-Junction_Points/0025-ntdll-Support-reparse-point-properties-in-fd_get_fil.patch
+	patch_apply ntdll-Junction_Points/0026-ntdll-Add-support-for-FileAttributeTagInformation.patch
+	patch_apply ntdll-Junction_Points/0027-kernel32-Implement-CreateSymbolicLink-A-W-with-ntdll.patch
+	patch_apply ntdll-Junction_Points/0028-kernel32-Add-reparse-support-to-FindNextFile.patch
+	patch_apply ntdll-Junction_Points/0029-wcmd-Display-reparse-point-type-in-directory-listing.patch
+	patch_apply ntdll-Junction_Points/0030-wcmd-Show-reparse-point-target-in-directory-listing.patch
+	patch_apply ntdll-Junction_Points/0031-wcmd-Add-junction-point-support-to-mklink.patch
 	patch_apply ntdll-Junction_Points/0032-server-Properly-handle-renames-involving-symlinks.patch
 	patch_apply ntdll-Junction_Points/0033-kernelbase-Use-FILE_OPEN_REPARSE_POINT-in-MoveFileWi.patch
 	patch_apply ntdll-Junction_Points/0034-kernelbase-Use-FILE_OPEN_REPARSE_POINT-in-DeleteFile.patch
-	patch_apply ntdll-Junction_Points/0035-ntdll-Treat-undecoded-unix-symlinks-as-NT-symlinks.patch
-	patch_apply ntdll-Junction_Points/0036-ntdll-Strip-the-wine-prefix-from-reparse-point-paths.patch
-	patch_apply ntdll-Junction_Points/0037-ntdll-Add-a-marker-to-reparse-point-paths-to-indicat.patch
-	patch_apply ntdll-Junction_Points/0038-server-Rewrite-absolute-reparse-point-targets-if-the.patch
+	patch_apply ntdll-Junction_Points/0035-ntdll-Treat-undecoded-unix-symlinks-as-WSL-Linux-Uni.patch
+	patch_apply ntdll-Junction_Points/0036-ntdll-Add-support-for-creating-Unix-Linux-symlinks.patch
+	patch_apply ntdll-Junction_Points/0037-ntdll-Strip-the-wine-prefix-from-reparse-point-paths.patch
+	patch_apply ntdll-Junction_Points/0038-ntdll-Add-a-marker-to-reparse-point-paths-to-indicat.patch
+	patch_apply ntdll-Junction_Points/0039-server-Rewrite-absolute-reparse-point-targets-if-the.patch
 fi
 
 # Patchset server-Key_State

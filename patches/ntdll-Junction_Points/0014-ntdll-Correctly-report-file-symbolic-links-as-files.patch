@@ -1,28 +1,28 @@
-From 30353100c8647bd85bdf53fe95ccc039ca3ee867 Mon Sep 17 00:00:00 2001
+From 99f1cef882a3f8098c76cf0918b99882533d1bbd Mon Sep 17 00:00:00 2001
 From: "Erich E. Hoover" <erich.e.hoover@gmail.com>
 Date: Sat, 30 Mar 2019 12:00:51 -0600
 Subject: [PATCH] ntdll: Correctly report file symbolic links as files.
 
 Signed-off-by: Erich E. Hoover <erich.e.hoover@gmail.com>
 ---
- dlls/ntdll/unix/file.c | 115 +++++++++++++++++++++++++++--------------
- 1 file changed, 77 insertions(+), 38 deletions(-)
+ dlls/ntdll/unix/file.c | 116 +++++++++++++++++++++++++++--------------
+ 1 file changed, 78 insertions(+), 38 deletions(-)
 
 diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
-index a9fcf6cc444..5d41919267e 100644
+index be57865f6b3..94be474a0ff 100644
 --- a/dlls/ntdll/unix/file.c
 +++ b/dlls/ntdll/unix/file.c
-@@ -1612,6 +1612,9 @@ static inline int get_file_xattr( char *hexattr, int attrlen )
+@@ -1606,6 +1606,9 @@ static inline int get_file_xattr( char *hexattr, int attrlen )
      return 0;
  }
  
-+NTSTATUS FILE_DecodeSymlink(const char *unix_src, char *unix_dest, int *unix_dest_len,
-+                            DWORD *tag, ULONG *flags, BOOL *is_dir);
++NTSTATUS get_symlink_properties(const char *unix_src, char *unix_dest, int *unix_dest_len,
++                                DWORD *tag, ULONG *flags, BOOL *is_dir);
 +
  /* fetch the attributes of a file */
  static inline ULONG get_file_attributes( const struct stat *st )
  {
-@@ -1696,10 +1699,15 @@ static int get_file_info( const char *path, struct stat *st, ULONG *attr )
+@@ -1690,10 +1693,15 @@ static int get_file_info( const char *path, struct stat *st, ULONG *attr )
      if (ret == -1) return ret;
      if (S_ISLNK( st->st_mode ))
      {
@@ -37,12 +37,12 @@ index a9fcf6cc444..5d41919267e 100644
 +        /* symbolic links (either junction points or NT symlinks) are "reparse points" */
 +        *attr |= FILE_ATTRIBUTE_REPARSE_POINT;
 +        /* whether a reparse point is a file or a directory is stored inside the link target */
-+        if (FILE_DecodeSymlink( path, NULL, NULL, NULL, NULL, &is_dir ) == STATUS_SUCCESS)
++        if (get_symlink_properties( path, NULL, NULL, NULL, NULL, &is_dir ) == STATUS_SUCCESS)
 +            st->st_mode = (st->st_mode & ~S_IFMT) | (is_dir ? S_IFDIR : S_IFREG);
      }
      else if (S_ISDIR( st->st_mode ) && (parent_path = malloc( strlen(path) + 4 )))
      {
-@@ -6070,46 +6078,35 @@ cleanup:
+@@ -6219,46 +6227,35 @@ cleanup:
  }
  
  
@@ -50,11 +50,12 @@ index a9fcf6cc444..5d41919267e 100644
 - * Retrieve the unix name corresponding to a file handle and use that to find the destination of the
 - * symlink corresponding to that file handle.
 - */
--NTSTATUS FILE_GetSymlink(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out_size)
-+NTSTATUS FILE_DecodeSymlink(const char *unix_src, char *unix_dest, int *unix_dest_len,
-+                            DWORD *tag, ULONG *flags, BOOL *is_dir)
+-NTSTATUS get_reparse_point(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out_size)
++NTSTATUS get_symlink_properties(const char *unix_src, char *unix_dest, int *unix_dest_len,
++                                DWORD *tag, ULONG *flags, BOOL *is_dir)
  {
 -    char *unix_src, unix_dest[PATH_MAX];
+-    INT prefix_len, path_len, total_len;
 -    VOID *subst_name, *print_name;
 -    SIZE_T nt_dest_len = PATH_MAX;
 -    BOOL dest_allocated = FALSE;
@@ -66,7 +67,6 @@ index a9fcf6cc444..5d41919267e 100644
      NTSTATUS status;
 -    ULONG flags = 0;
 -    WCHAR *nt_dest;
--    INT prefix_len;
 +    BOOL dir_flag;
 +    char *p, *tmp;
      ssize_t ret;
@@ -105,7 +105,7 @@ index a9fcf6cc444..5d41919267e 100644
          p++;
      }
      if (*p++ != '/')
-@@ -6117,7 +6114,7 @@ NTSTATUS FILE_GetSymlink(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out_s
+@@ -6266,7 +6263,7 @@ NTSTATUS get_reparse_point(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out
          status = STATUS_NOT_IMPLEMENTED;
          goto cleanup;
      }
@@ -114,7 +114,7 @@ index a9fcf6cc444..5d41919267e 100644
      for (i = 0; i < sizeof(ULONG)*8; i++)
      {
          char c = *p++;
-@@ -6132,22 +6129,64 @@ NTSTATUS FILE_GetSymlink(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out_s
+@@ -6281,22 +6278,65 @@ NTSTATUS get_reparse_point(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out
              status = STATUS_NOT_IMPLEMENTED;
              goto cleanup;
          }
@@ -160,8 +160,9 @@ index a9fcf6cc444..5d41919267e 100644
 + * Retrieve the unix name corresponding to a file handle and use that to find the destination of the
 + * symlink corresponding to that file handle.
 + */
-+NTSTATUS FILE_GetSymlink(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out_size)
++NTSTATUS get_reparse_point(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out_size)
 +{
++    INT prefix_len, path_len, total_len;
 +    char *unix_src, unix_dest[PATH_MAX];
 +    VOID *subst_name, *print_name;
 +    SIZE_T nt_dest_len = PATH_MAX;
@@ -172,7 +173,6 @@ index a9fcf6cc444..5d41919267e 100644
 +    NTSTATUS status;
 +    ULONG flags = 0;
 +    WCHAR *nt_dest;
-+    INT prefix_len;
 +
 +    if ((status = server_get_unix_fd( handle, FILE_ANY_ACCESS, &dest_fd, &needs_close, NULL, NULL )))
 +        return status;
@@ -180,11 +180,12 @@ index a9fcf6cc444..5d41919267e 100644
 +    if ((status = server_get_unix_name( handle, &unix_src )))
 +        goto cleanup;
 +
-+    if ((status = FILE_DecodeSymlink( unix_src, unix_dest, &unix_dest_len, &buffer->ReparseTag, &flags, NULL )))
++    if ((status = get_symlink_properties( unix_src, unix_dest, &unix_dest_len, &buffer->ReparseTag,
++                                          &flags, NULL )))
 +        goto cleanup;
  
      /* convert the relative path into an absolute path */
      if (flags == SYMLINK_FLAG_RELATIVE)
 -- 
-2.20.1
+2.30.2
 

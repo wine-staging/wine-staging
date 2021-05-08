@@ -1,23 +1,28 @@
-From ba7660d29357412b0a12475dacd1d96da9d5679c Mon Sep 17 00:00:00 2001
+From 49ed938003d970383e684d7db56bf570d0d94b2a Mon Sep 17 00:00:00 2001
 From: "Erich E. Hoover" <erich.e.hoover@gmail.com>
 Date: Thu, 16 Jan 2014 20:57:57 -0700
 Subject: [PATCH] ntdll: Add support for reading junction points.
 
 Signed-off-by: Erich E. Hoover <erich.e.hoover@gmail.com>
 ---
- dlls/ntdll/tests/file.c |  14 ++++-
- dlls/ntdll/unix/file.c  | 120 ++++++++++++++++++++++++++++++++++++++++
- 2 files changed, 133 insertions(+), 1 deletion(-)
+ dlls/ntdll/tests/file.c |  20 ++++++-
+ dlls/ntdll/unix/file.c  | 125 ++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 144 insertions(+), 1 deletion(-)
 
 diff --git a/dlls/ntdll/tests/file.c b/dlls/ntdll/tests/file.c
-index 792c07b0d8e..88e114ab7a2 100644
+index 54e06a3f126..a3f3485ce46 100644
 --- a/dlls/ntdll/tests/file.c
 +++ b/dlls/ntdll/tests/file.c
-@@ -5189,9 +5189,10 @@ static void test_reparse_points(void)
+@@ -5265,14 +5265,15 @@ static void test_reparse_points(void)
+     static const WCHAR reparseW[] = {'\\','r','e','p','a','r','s','e',0};
+     WCHAR path[MAX_PATH], reparse_path[MAX_PATH], target_path[MAX_PATH];
+     static const WCHAR targetW[] = {'\\','t','a','r','g','e','t',0};
++    INT buffer_len, string_len, path_len, total_len;
+     static const WCHAR fooW[] = {'f','o','o',0};
+     static WCHAR volW[] = {'c',':','\\',0};
      static const WCHAR dotW[] = {'.',0};
      REPARSE_DATA_BUFFER *buffer = NULL;
      DWORD dwret, dwLen, dwFlags;
-+    INT buffer_len, string_len;
      UNICODE_STRING nameW;
 -    INT buffer_len;
      HANDLE handle;
@@ -25,7 +30,7 @@ index 792c07b0d8e..88e114ab7a2 100644
      BOOL bret;
  
      /* Create a temporary folder for the junction point tests */
-@@ -5239,6 +5240,17 @@ static void test_reparse_points(void)
+@@ -5320,6 +5321,23 @@ static void test_reparse_points(void)
      buffer_len = build_reparse_buffer(nameW.Buffer, &buffer);
      bret = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, (LPVOID)buffer, buffer_len, NULL, 0, &dwret, 0);
      ok(bret, "Failed to create junction point! (0x%x)\n", GetLastError());
@@ -40,14 +45,20 @@ index 792c07b0d8e..88e114ab7a2 100644
 +    dest = &buffer->MountPointReparseBuffer.PathBuffer[buffer->MountPointReparseBuffer.SubstituteNameOffset/sizeof(WCHAR)];
 +    ok((memcmp(dest, nameW.Buffer, string_len) == 0), "Junction point destination does not match ('%s' != '%s')!\n",
 +                                                      wine_dbgstr_w(dest), wine_dbgstr_w(nameW.Buffer));
++    path_len = buffer->MountPointReparseBuffer.PrintNameOffset/sizeof(WCHAR);
++    path_len += buffer->MountPointReparseBuffer.PrintNameLength/sizeof(WCHAR);
++    total_len = FIELD_OFFSET(typeof(*buffer), MountPointReparseBuffer.PathBuffer[path_len+1])
++                - FIELD_OFFSET(typeof(*buffer), GenericReparseBuffer);
++    ok(buffer->ReparseDataLength == total_len, "ReparseDataLength has unexpected value (%d != %d)\n",
++                                               buffer->ReparseDataLength, total_len);
      CloseHandle(handle);
  
  cleanup:
 diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
-index ea9c0d811f5..6389e7c8f20 100644
+index 492838d9031..5289c0eec71 100644
 --- a/dlls/ntdll/unix/file.c
 +++ b/dlls/ntdll/unix/file.c
-@@ -5948,6 +5948,120 @@ cleanup:
+@@ -6092,6 +6092,125 @@ cleanup:
  }
  
  
@@ -55,9 +66,10 @@ index ea9c0d811f5..6389e7c8f20 100644
 + * Retrieve the unix name corresponding to a file handle and use that to find the destination of the
 + * symlink corresponding to that file handle.
 + */
-+NTSTATUS FILE_GetSymlink(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out_size)
++NTSTATUS get_reparse_point(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out_size)
 +{
 +    char *unix_src, unix_dest[PATH_MAX];
++    INT prefix_len, path_len, total_len;
 +    VOID *subst_name, *print_name;
 +    SIZE_T nt_dest_len = PATH_MAX;
 +    BOOL dest_allocated = FALSE;
@@ -66,7 +78,6 @@ index ea9c0d811f5..6389e7c8f20 100644
 +    DWORD max_length;
 +    NTSTATUS status;
 +    WCHAR *nt_dest;
-+    INT prefix_len;
 +    ssize_t ret;
 +    char *p;
 +    int i;
@@ -135,12 +146,16 @@ index ea9c0d811f5..6389e7c8f20 100644
 +    {
 +    case IO_REPARSE_TAG_MOUNT_POINT:
 +        max_length = out_size-FIELD_OFFSET(typeof(*buffer), MountPointReparseBuffer.PathBuffer[1]);
-+        buffer->MountPointReparseBuffer.SubstituteNameOffset = 0;
++        path_len = 0;
++        buffer->MountPointReparseBuffer.SubstituteNameOffset = path_len;
 +        buffer->MountPointReparseBuffer.SubstituteNameLength = nt_dest_len;
++        path_len += nt_dest_len + sizeof(WCHAR);
 +        subst_name = &buffer->MountPointReparseBuffer.PathBuffer[buffer->MountPointReparseBuffer.SubstituteNameOffset/sizeof(WCHAR)];
-+        buffer->MountPointReparseBuffer.PrintNameOffset = nt_dest_len + sizeof(WCHAR);
++        buffer->MountPointReparseBuffer.PrintNameOffset = path_len;
 +        buffer->MountPointReparseBuffer.PrintNameLength = nt_dest_len - prefix_len*sizeof(WCHAR);
 +        print_name = &buffer->MountPointReparseBuffer.PathBuffer[buffer->MountPointReparseBuffer.PrintNameOffset/sizeof(WCHAR)];
++        path_len += (nt_dest_len - prefix_len*sizeof(WCHAR)) + sizeof(WCHAR);
++        total_len = FIELD_OFFSET(typeof(*buffer), MountPointReparseBuffer.PathBuffer[path_len/sizeof(WCHAR)]);
 +        break;
 +    default:
 +        /* unrecognized (regular) files should probably be treated as symlinks */
@@ -156,6 +171,7 @@ index ea9c0d811f5..6389e7c8f20 100644
 +
 +    memcpy( subst_name, nt_dest, nt_dest_len );
 +    memcpy( print_name, &nt_dest[prefix_len], nt_dest_len - prefix_len*sizeof(WCHAR) );
++    buffer->ReparseDataLength = total_len - FIELD_OFFSET(typeof(*buffer), GenericReparseBuffer);
 +    status = STATUS_SUCCESS;
 +
 +cleanup:
@@ -168,19 +184,19 @@ index ea9c0d811f5..6389e7c8f20 100644
  /******************************************************************************
   *              NtFsControlFile   (NTDLL.@)
   */
-@@ -6030,6 +6144,12 @@ NTSTATUS WINAPI NtFsControlFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE ap
+@@ -6174,6 +6293,12 @@ NTSTATUS WINAPI NtFsControlFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE ap
          break;
      }
  
 +    case FSCTL_GET_REPARSE_POINT:
 +    {
 +        REPARSE_DATA_BUFFER *buffer = (REPARSE_DATA_BUFFER *)out_buffer;
-+        status = FILE_GetSymlink( handle, buffer, out_size );
++        status = get_reparse_point( handle, buffer, out_size );
 +        break;
 +    }
      case FSCTL_SET_REPARSE_POINT:
      {
          REPARSE_DATA_BUFFER *buffer = (REPARSE_DATA_BUFFER *)in_buffer;
 -- 
-2.20.1
+2.30.2
 

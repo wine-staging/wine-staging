@@ -1,19 +1,19 @@
-From 59ba8b3a0f29945da7e1f082b197ce398bf442f2 Mon Sep 17 00:00:00 2001
+From 5859da2b48592d1a13f471a6932a2529aa1e0395 Mon Sep 17 00:00:00 2001
 From: "Erich E. Hoover" <erich.e.hoover@gmail.com>
 Date: Wed, 13 Mar 2019 12:55:20 -0600
 Subject: [PATCH] ntdll: Add support for reading absolute symlinks.
 
 Signed-off-by: Erich E. Hoover <erich.e.hoover@gmail.com>
 ---
- dlls/ntdll/tests/file.c | 13 ++++++++++++-
- dlls/ntdll/unix/file.c  | 22 ++++++++++++++++++++++
- 2 files changed, 34 insertions(+), 1 deletion(-)
+ dlls/ntdll/tests/file.c | 19 ++++++++++++++++++-
+ dlls/ntdll/unix/file.c  | 26 ++++++++++++++++++++++++++
+ 2 files changed, 44 insertions(+), 1 deletion(-)
 
 diff --git a/dlls/ntdll/tests/file.c b/dlls/ntdll/tests/file.c
-index 53a24574eec..9a6f72cb783 100644
+index e0fa36ea64f..cfc0d176b53 100644
 --- a/dlls/ntdll/tests/file.c
 +++ b/dlls/ntdll/tests/file.c
-@@ -5393,7 +5393,6 @@ static void test_reparse_points(void)
+@@ -5480,7 +5480,6 @@ static void test_reparse_points(void)
      ok(dwret == STATUS_SUCCESS, "Failed to get symlink folder's attributes (0x%x).\n", dwret);
      buffer_len = build_reparse_buffer(nameW.Buffer, IO_REPARSE_TAG_SYMLINK, &buffer);
      bret = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, (LPVOID)buffer, buffer_len, NULL, 0, &dwret, 0);
@@ -21,7 +21,7 @@ index 53a24574eec..9a6f72cb783 100644
      ok(bret, "Failed to create symlink! (0x%x)\n", GetLastError());
  
      /* Check the file attributes of the symlink */
-@@ -5401,6 +5400,18 @@ static void test_reparse_points(void)
+@@ -5488,6 +5487,24 @@ static void test_reparse_points(void)
      ok(dwret != (DWORD)~0, "Symlink doesn't exist (attributes: 0x%x)!\n", dwret);
      ok(dwret & FILE_ATTRIBUTE_REPARSE_POINT, "File is not a symlink! (attributes: %d)\n", dwret);
  
@@ -35,24 +35,30 @@ index 53a24574eec..9a6f72cb783 100644
 +    ok(bret, "Failed to read symlink!\n");
 +    ok((memcmp(dest, nameW.Buffer, string_len) == 0), "Symlink destination does not match ('%s' != '%s')!\n",
 +                                                      wine_dbgstr_w(dest), wine_dbgstr_w(nameW.Buffer));
++    path_len = buffer->SymbolicLinkReparseBuffer.PrintNameOffset/sizeof(WCHAR);
++    path_len += buffer->SymbolicLinkReparseBuffer.PrintNameLength/sizeof(WCHAR);
++    total_len = FIELD_OFFSET(typeof(*buffer), MountPointReparseBuffer.PathBuffer[path_len+1])
++                - FIELD_OFFSET(typeof(*buffer), GenericReparseBuffer);
++    ok(buffer->ReparseDataLength == total_len, "ReparseDataLength has unexpected value (%d != %d)\n",
++                                               buffer->ReparseDataLength, total_len);
 +    CloseHandle(handle);
 +
  cleanup:
      /* Cleanup */
      pRtlFreeUnicodeString(&nameW);
 diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
-index 11a7269c09e..19a2d0ae471 100644
+index da5136db68c..668f4fe2c80 100644
 --- a/dlls/ntdll/unix/file.c
 +++ b/dlls/ntdll/unix/file.c
-@@ -5988,6 +5988,7 @@ NTSTATUS FILE_GetSymlink(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out_s
+@@ -6138,6 +6138,7 @@ NTSTATUS get_reparse_point(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out
      int unix_dest_len;
      DWORD max_length;
      NTSTATUS status;
 +    ULONG flags = 0;
      WCHAR *nt_dest;
-     INT prefix_len;
      ssize_t ret;
-@@ -6032,6 +6033,17 @@ NTSTATUS FILE_GetSymlink(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out_s
+     char *p;
+@@ -6181,6 +6182,17 @@ NTSTATUS get_reparse_point(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out
          }
          buffer->ReparseTag |= (val << i);
      }
@@ -70,23 +76,27 @@ index 11a7269c09e..19a2d0ae471 100644
      unix_dest_len -= (p - unix_dest);
      memmove(unix_dest, p, unix_dest_len);
      unix_dest[unix_dest_len] = 0;
-@@ -6065,6 +6077,16 @@ NTSTATUS FILE_GetSymlink(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out_s
-         buffer->MountPointReparseBuffer.PrintNameLength = nt_dest_len - prefix_len*sizeof(WCHAR);
-         print_name = &buffer->MountPointReparseBuffer.PathBuffer[buffer->MountPointReparseBuffer.PrintNameOffset/sizeof(WCHAR)];
+@@ -6218,6 +6230,20 @@ NTSTATUS get_reparse_point(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG out
+         path_len += (nt_dest_len - prefix_len*sizeof(WCHAR)) + sizeof(WCHAR);
+         total_len = FIELD_OFFSET(typeof(*buffer), MountPointReparseBuffer.PathBuffer[path_len/sizeof(WCHAR)]);
          break;
 +    case IO_REPARSE_TAG_SYMLINK:
 +        max_length = out_size-FIELD_OFFSET(typeof(*buffer), SymbolicLinkReparseBuffer.PathBuffer[1]);
-+        buffer->SymbolicLinkReparseBuffer.SubstituteNameOffset = 0;
++        path_len = 0;
++        buffer->SymbolicLinkReparseBuffer.SubstituteNameOffset = path_len;
 +        buffer->SymbolicLinkReparseBuffer.SubstituteNameLength = nt_dest_len;
++        path_len += nt_dest_len + sizeof(WCHAR);
 +        subst_name = &buffer->SymbolicLinkReparseBuffer.PathBuffer[buffer->SymbolicLinkReparseBuffer.SubstituteNameOffset/sizeof(WCHAR)];
-+        buffer->SymbolicLinkReparseBuffer.PrintNameOffset = nt_dest_len + sizeof(WCHAR);
++        buffer->SymbolicLinkReparseBuffer.PrintNameOffset = path_len;
 +        buffer->SymbolicLinkReparseBuffer.PrintNameLength = nt_dest_len - prefix_len*sizeof(WCHAR);
 +        print_name = &buffer->SymbolicLinkReparseBuffer.PathBuffer[buffer->SymbolicLinkReparseBuffer.PrintNameOffset/sizeof(WCHAR)];
++        path_len += (nt_dest_len - prefix_len*sizeof(WCHAR)) + sizeof(WCHAR);
++        total_len = FIELD_OFFSET(typeof(*buffer), MountPointReparseBuffer.PathBuffer[path_len/sizeof(WCHAR)]);
 +        buffer->SymbolicLinkReparseBuffer.Flags = flags;
 +        break;
      default:
          /* unrecognized (regular) files should probably be treated as symlinks */
          WARN("unrecognized symbolic link\n");
 -- 
-2.20.1
+2.30.2
 
