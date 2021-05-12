@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "44cb53bb37d3c40ea90aec6e35a9c08326b6e848"
+	echo "c74508d22528548940db3c8ac6a350064ca445e9"
 }
 
 # Show version information
@@ -94,7 +94,6 @@ patch_enable_all ()
 	enable_comdlg32_lpstrFileTitle="$1"
 	enable_crypt32_CMS_Certificates="$1"
 	enable_cryptext_CryptExtOpenCER="$1"
-	enable_d3d11_Deferred_Context="$1"
 	enable_d3drm_IDirect3D3_support="$1"
 	enable_d3dx9_36_BumpLuminance="$1"
 	enable_d3dx9_36_CloneEffect="$1"
@@ -327,9 +326,6 @@ patch_enable ()
 			;;
 		cryptext-CryptExtOpenCER)
 			enable_cryptext_CryptExtOpenCER="$2"
-			;;
-		d3d11-Deferred_Context)
-			enable_d3d11_Deferred_Context="$2"
 			;;
 		d3drm-IDirect3D3-support)
 			enable_d3drm_IDirect3D3_support="$2"
@@ -1336,6 +1332,13 @@ if test "$enable_nvcuvid_CUDA_Video_Support" -eq 1; then
 	enable_nvapi_Stub_DLL=1
 fi
 
+if test "$enable_nvapi_Stub_DLL" -eq 1; then
+	if test "$enable_nvcuda_CUDA_Support" -gt 1; then
+		abort "Patchset nvcuda-CUDA_Support disabled, but nvapi-Stub_DLL depends on that."
+	fi
+	enable_nvcuda_CUDA_Support=1
+fi
+
 if test "$enable_ntdll_Builtin_Prot" -eq 1; then
 	if test "$enable_ntdll_WRITECOPY" -gt 1; then
 		abort "Patchset ntdll-WRITECOPY disabled, but ntdll-Builtin_Prot depends on that."
@@ -1420,20 +1423,6 @@ if test "$enable_ddraw_version_check" -eq 1; then
 		abort "Patchset ddraw-Device_Caps disabled, but ddraw-version-check depends on that."
 	fi
 	enable_ddraw_Device_Caps=1
-fi
-
-if test "$enable_d3d11_Deferred_Context" -eq 1; then
-	if test "$enable_nvapi_Stub_DLL" -gt 1; then
-		abort "Patchset nvapi-Stub_DLL disabled, but d3d11-Deferred_Context depends on that."
-	fi
-	enable_nvapi_Stub_DLL=1
-fi
-
-if test "$enable_nvapi_Stub_DLL" -eq 1; then
-	if test "$enable_nvcuda_CUDA_Support" -gt 1; then
-		abort "Patchset nvcuda-CUDA_Support disabled, but nvapi-Stub_DLL depends on that."
-	fi
-	enable_nvcuda_CUDA_Support=1
 fi
 
 
@@ -1595,131 +1584,6 @@ fi
 # |
 if test "$enable_cryptext_CryptExtOpenCER" -eq 1; then
 	patch_apply cryptext-CryptExtOpenCER/0001-cryptext-Implement-CryptExtOpenCER.patch
-fi
-
-# Patchset nvcuda-CUDA_Support
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#37664] MediaCoder needs CUDA for video encoding
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/nvcuda/Makefile.in, dlls/nvcuda/internal.c, dlls/nvcuda/nvcuda.c, dlls/nvcuda/nvcuda.h,
-# | 	dlls/nvcuda/nvcuda.rc, dlls/nvcuda/nvcuda.spec, dlls/nvcuda/tests/Makefile.in, dlls/nvcuda/tests/nvcuda.c,
-# | 	include/Makefile.in, include/cuda.h
-# |
-if test "$enable_nvcuda_CUDA_Support" -eq 1; then
-	patch_apply nvcuda-CUDA_Support/0001-include-Add-cuda.h.h.patch
-	patch_apply nvcuda-CUDA_Support/0002-nvcuda-Add-stub-dll.patch
-	patch_apply nvcuda-CUDA_Support/0003-nvcuda-First-implementation.patch
-	patch_apply nvcuda-CUDA_Support/0004-nvcuda-Implement-new-functions-added-in-CUDA-6.5.patch
-	patch_apply nvcuda-CUDA_Support/0005-nvcuda-Properly-wrap-undocumented-ContextStorage-int.patch
-	patch_apply nvcuda-CUDA_Support/0006-nvcuda-Emulate-two-d3d9-initialization-functions.patch
-	patch_apply nvcuda-CUDA_Support/0007-nvcuda-Properly-wrap-stream-callbacks-by-forwarding-.patch
-	patch_apply nvcuda-CUDA_Support/0008-nvcuda-Add-support-for-CUDA-7.0.patch
-	patch_apply nvcuda-CUDA_Support/0009-nvcuda-Implement-cuModuleLoad-wrapper-function.patch
-	patch_apply nvcuda-CUDA_Support/0010-nvcuda-Search-for-dylib-library-on-Mac-OS-X.patch
-	patch_apply nvcuda-CUDA_Support/0011-nvcuda-Add-semi-stub-for-cuD3D10GetDevice.patch
-fi
-
-# Patchset nvapi-Stub_DLL
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	nvcuda-CUDA_Support
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#35062] Fix graphical corruption in FarCry 3 with NVIDIA drivers
-# |   *	[#43862] CS:GO fails to start when nvapi cannot be initialized
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/d3d11/device.c, dlls/nvapi/Makefile.in, dlls/nvapi/nvapi.c, dlls/nvapi/nvapi.spec,
-# | 	dlls/nvapi/tests/Makefile.in, dlls/nvapi/tests/nvapi.c, dlls/nvapi64/Makefile.in, dlls/nvapi64/nvapi64.spec,
-# | 	dlls/wined3d/device.c, dlls/wined3d/wined3d.spec, include/Makefile.in, include/nvapi.h, include/wine/wined3d.h
-# |
-if test "$enable_nvapi_Stub_DLL" -eq 1; then
-	patch_apply nvapi-Stub_DLL/0001-nvapi-First-implementation.patch
-	patch_apply nvapi-Stub_DLL/0002-nvapi-Add-stubs-for-NvAPI_EnumLogicalGPUs-and-undocu.patch
-	patch_apply nvapi-Stub_DLL/0003-nvapi-Add-NvAPI_GetPhysicalGPUsFromLogicalGPU.patch
-	patch_apply nvapi-Stub_DLL/0004-nvapi-Add-stub-for-NvAPI_EnumPhysicalGPUs.patch
-	patch_apply nvapi-Stub_DLL/0005-nvapi-Add-stubs-for-NvAPI_GPU_GetFullName.patch
-	patch_apply nvapi-Stub_DLL/0006-nvapi-Explicity-return-NULL-for-0x33c7358c-and-0x593.patch
-	patch_apply nvapi-Stub_DLL/0007-nvapi-Add-stub-for-NvAPI_DISP_GetGDIPrimaryDisplayId.patch
-	patch_apply nvapi-Stub_DLL/0008-nvapi-Add-stub-for-EnumNvidiaDisplayHandle.patch
-	patch_apply nvapi-Stub_DLL/0009-nvapi-Add-stub-for-NvAPI_SYS_GetDriverAndBranchVersi.patch
-	patch_apply nvapi-Stub_DLL/0010-nvapi-Add-stub-for-NvAPI_Unload.patch
-	patch_apply nvapi-Stub_DLL/0011-nvapi-Add-stub-for-NvAPI_D3D_GetCurrentSLIState.patch
-	patch_apply nvapi-Stub_DLL/0012-nvapi-tests-Use-structure-to-list-imports.patch
-	patch_apply nvapi-Stub_DLL/0013-nvapi-Add-stub-for-NvAPI_GetLogicalGPUFromDisplay.patch
-	patch_apply nvapi-Stub_DLL/0014-nvapi-Add-stub-for-NvAPI_D3D_GetObjectHandleForResou.patch
-	patch_apply nvapi-Stub_DLL/0015-nvapi-Add-stub-for-NvAPI_D3D9_RegisterResource.patch
-	patch_apply nvapi-Stub_DLL/0016-nvapi-Improve-NvAPI_D3D_GetCurrentSLIState.patch
-	patch_apply nvapi-Stub_DLL/0017-nvapi-Implement-NvAPI_GPU_Get-Physical-Virtual-Frame.patch
-	patch_apply nvapi-Stub_DLL/0018-nvapi-Add-stub-for-NvAPI_GPU_GetGpuCoreCount.patch
-	patch_apply nvapi-Stub_DLL/0019-nvapi-Implement-NvAPI_D3D11_SetDepthBoundsTest.patch
-	patch_apply nvapi-Stub_DLL/0020-nvapi-Implement-NvAPI_D3D11_CreateDevice-and-NvAPI_D.patch
-	patch_apply nvapi-Stub_DLL/0021-Revert-wined3d-No-longer-export-wined3d_device_set_r.patch
-fi
-
-# Patchset d3d11-Deferred_Context
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	nvcuda-CUDA_Support, nvapi-Stub_DLL
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#42191] Add semi-stub for D3D11 deferred context implementation
-# |   *	[#43743] No 3D graphics in Wolcen: Lords of Mayhem
-# |   *	[#44089] Correcly align the mapinfo buffer.
-# |   *	[#41636] d3d11: Implement ID3D11Device2 GetImmediateContext1
-# |
-# | Modified files:
-# |   *	dlls/d3d11/device.c, dlls/d3d11/tests/d3d11.c, dlls/wined3d/buffer.c, dlls/wined3d/resource.c, dlls/wined3d/texture.c,
-# | 	dlls/wined3d/wined3d.spec, dlls/wined3d/wined3d_private.h, include/wine/wined3d.h
-# |
-if test "$enable_d3d11_Deferred_Context" -eq 1; then
-	patch_apply d3d11-Deferred_Context/0001-d3d11-Add-stub-deferred-rendering-context.patch
-	patch_apply d3d11-Deferred_Context/0002-wined3d-Add-wined3d_resource_map_info-function.patch
-	patch_apply d3d11-Deferred_Context/0003-d3d11-Initial-implementation-for-deferred-contexts.patch
-	patch_apply d3d11-Deferred_Context/0004-d3d11-Implement-CSSetShader-for-deferred-contexts.patch
-	patch_apply d3d11-Deferred_Context/0005-d3d11-Implement-CSSetConstantBuffers-for-deferred-co.patch
-	patch_apply d3d11-Deferred_Context/0006-d3d11-Implement-Dispatch-for-deferred-contexts.patch
-	patch_apply d3d11-Deferred_Context/0007-d3d11-Implement-CSSetUnorderedAccessViews-for-deferr.patch
-	patch_apply d3d11-Deferred_Context/0008-d3d11-Implement-ClearRenderTargetView-for-deferred-c.patch
-	patch_apply d3d11-Deferred_Context/0009-d3d11-Implement-Draw-for-deferred-contexts.patch
-	patch_apply d3d11-Deferred_Context/0010-d3d11-Implement-ClearDepthStencilView-for-deferred-c.patch
-	patch_apply d3d11-Deferred_Context/0011-d3d11-Implement-GSSetShader-for-deferred-contexts.patch
-	patch_apply d3d11-Deferred_Context/0012-d3d11-Implement-GSSetConstantBuffers-for-deferred-co.patch
-	patch_apply d3d11-Deferred_Context/0013-d3d11-Implement-CSSetShaderResources-for-deferred-co.patch
-	patch_apply d3d11-Deferred_Context/0014-d3d11-Implement-GSSetShaderResources-for-deferred-co.patch
-	patch_apply d3d11-Deferred_Context/0015-d3d11-Implement-HSSetShaderResources-for-deferred-co.patch
-	patch_apply d3d11-Deferred_Context/0016-d3d11-Implement-VSSetShaderResources-for-deferred-co.patch
-	patch_apply d3d11-Deferred_Context/0017-d3d11-Implement-CSSetSamplers-for-deferred-contexts.patch
-	patch_apply d3d11-Deferred_Context/0018-d3d11-Implement-GSSetSamplers-for-deferred-contexts.patch
-	patch_apply d3d11-Deferred_Context/0019-d3d11-Implement-HSSetSamplers-for-deferred-contexts.patch
-	patch_apply d3d11-Deferred_Context/0020-d3d11-Implement-VSSetSamplers-for-deferred-contexts.patch
-	patch_apply d3d11-Deferred_Context/0021-d3d11-Implement-Begin-and-End-for-deferred-contexts.patch
-	patch_apply d3d11-Deferred_Context/0022-d3d11-Implement-CopyResource-for-deferred-contexts.patch
-	patch_apply d3d11-Deferred_Context/0023-d3d11-Implement-SetResourceMinLOD-for-deferred-conte.patch
-	patch_apply d3d11-Deferred_Context/0024-d3d11-Implement-CopySubresourceRegion-for-deferred-c.patch
-	patch_apply d3d11-Deferred_Context/0025-d3d11-Implement-ResolveSubresource-for-deferred-cont.patch
-	patch_apply d3d11-Deferred_Context/0026-d3d11-Implement-CopyStructureCount-for-deferred-cont.patch
-	patch_apply d3d11-Deferred_Context/0027-d3d11-Implement-DrawAuto-for-deferred-contexts.patch
-	patch_apply d3d11-Deferred_Context/0028-d3d11-Implement-DrawInstanced-for-deferred-contexts.patch
-	patch_apply d3d11-Deferred_Context/0029-d3d11-Implement-DrawInstancedIndirect-for-deferred-c.patch
-	patch_apply d3d11-Deferred_Context/0030-d3d11-Implement-DrawIndexedInstancedIndirect-for-def.patch
-	patch_apply d3d11-Deferred_Context/0031-d3d11-Implement-ClearUnorderedAccessViewUint-for-def.patch
-	patch_apply d3d11-Deferred_Context/0032-d3d11-Implement-ClearUnorderedAccessViewFloat-for-de.patch
-	patch_apply d3d11-Deferred_Context/0033-d3d11-Implement-RsSetScissorRects-for-deferred-conte.patch
-	patch_apply d3d11-Deferred_Context/0034-d3d11-Implement-OMSetRenderTargetsAndUnorderedAccess.patch
-	patch_apply d3d11-Deferred_Context/0035-d3d11-Implement-SOSetTargets-for-deferred-contexts.patch
-	patch_apply d3d11-Deferred_Context/0036-d3d11-Implement-GenerateMips-for-deferred-contexts.patch
-	patch_apply d3d11-Deferred_Context/0037-d3d11-Implement-DispatchIndirect-for-deferred-contex.patch
-	patch_apply d3d11-Deferred_Context/0038-d3d11-Implement-SetPredication-for-deferred-contexts.patch
-	patch_apply d3d11-Deferred_Context/0039-d3d11-Implement-d3d11_deferred_context_UpdateSubreso.patch
-	patch_apply d3d11-Deferred_Context/0040-d3d11-Implement-restoring-of-state-after-executing-a.patch
-	patch_apply d3d11-Deferred_Context/0041-d3d11-Allow-NULL-pointer-for-initial-count-in-d3d11_.patch
-	patch_apply d3d11-Deferred_Context/0042-d3d11-Correctly-align-map-info-buffer.patch
-	patch_apply d3d11-Deferred_Context/0043-d3d11-tests-Add-a-basic-test-for-drawing-with-deferr.patch
-	patch_apply d3d11-Deferred_Context/0044-d3d11-Support-ID3D11DeviceContext1-for-deferred-cont.patch
-	patch_apply d3d11-Deferred_Context/0045-d3d11-Implement-ID3D11Device2-GetImmediateContext1.patch
 fi
 
 # Patchset d3drm-IDirect3D3-support
@@ -2921,6 +2785,68 @@ fi
 if test "$enable_ntoskrnl_Stubs" -eq 1; then
 	patch_apply ntoskrnl-Stubs/0009-ntoskrnl.exe-Implement-MmMapLockedPages-and-MmUnmapL.patch
 	patch_apply ntoskrnl-Stubs/0011-ntoskrnl.exe-Add-IoGetDeviceAttachmentBaseRef-stub.patch
+fi
+
+# Patchset nvcuda-CUDA_Support
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#37664] MediaCoder needs CUDA for video encoding
+# |
+# | Modified files:
+# |   *	configure.ac, dlls/nvcuda/Makefile.in, dlls/nvcuda/internal.c, dlls/nvcuda/nvcuda.c, dlls/nvcuda/nvcuda.h,
+# | 	dlls/nvcuda/nvcuda.rc, dlls/nvcuda/nvcuda.spec, dlls/nvcuda/tests/Makefile.in, dlls/nvcuda/tests/nvcuda.c,
+# | 	include/Makefile.in, include/cuda.h
+# |
+if test "$enable_nvcuda_CUDA_Support" -eq 1; then
+	patch_apply nvcuda-CUDA_Support/0001-include-Add-cuda.h.h.patch
+	patch_apply nvcuda-CUDA_Support/0002-nvcuda-Add-stub-dll.patch
+	patch_apply nvcuda-CUDA_Support/0003-nvcuda-First-implementation.patch
+	patch_apply nvcuda-CUDA_Support/0004-nvcuda-Implement-new-functions-added-in-CUDA-6.5.patch
+	patch_apply nvcuda-CUDA_Support/0005-nvcuda-Properly-wrap-undocumented-ContextStorage-int.patch
+	patch_apply nvcuda-CUDA_Support/0006-nvcuda-Emulate-two-d3d9-initialization-functions.patch
+	patch_apply nvcuda-CUDA_Support/0007-nvcuda-Properly-wrap-stream-callbacks-by-forwarding-.patch
+	patch_apply nvcuda-CUDA_Support/0008-nvcuda-Add-support-for-CUDA-7.0.patch
+	patch_apply nvcuda-CUDA_Support/0009-nvcuda-Implement-cuModuleLoad-wrapper-function.patch
+	patch_apply nvcuda-CUDA_Support/0010-nvcuda-Search-for-dylib-library-on-Mac-OS-X.patch
+	patch_apply nvcuda-CUDA_Support/0011-nvcuda-Add-semi-stub-for-cuD3D10GetDevice.patch
+fi
+
+# Patchset nvapi-Stub_DLL
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	nvcuda-CUDA_Support
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#35062] Fix graphical corruption in FarCry 3 with NVIDIA drivers
+# |   *	[#43862] CS:GO fails to start when nvapi cannot be initialized
+# |
+# | Modified files:
+# |   *	configure.ac, dlls/d3d11/device.c, dlls/nvapi/Makefile.in, dlls/nvapi/nvapi.c, dlls/nvapi/nvapi.spec,
+# | 	dlls/nvapi/tests/Makefile.in, dlls/nvapi/tests/nvapi.c, dlls/nvapi64/Makefile.in, dlls/nvapi64/nvapi64.spec,
+# | 	dlls/wined3d/device.c, dlls/wined3d/wined3d.spec, include/Makefile.in, include/nvapi.h, include/wine/wined3d.h
+# |
+if test "$enable_nvapi_Stub_DLL" -eq 1; then
+	patch_apply nvapi-Stub_DLL/0001-nvapi-First-implementation.patch
+	patch_apply nvapi-Stub_DLL/0002-nvapi-Add-stubs-for-NvAPI_EnumLogicalGPUs-and-undocu.patch
+	patch_apply nvapi-Stub_DLL/0003-nvapi-Add-NvAPI_GetPhysicalGPUsFromLogicalGPU.patch
+	patch_apply nvapi-Stub_DLL/0004-nvapi-Add-stub-for-NvAPI_EnumPhysicalGPUs.patch
+	patch_apply nvapi-Stub_DLL/0005-nvapi-Add-stubs-for-NvAPI_GPU_GetFullName.patch
+	patch_apply nvapi-Stub_DLL/0006-nvapi-Explicity-return-NULL-for-0x33c7358c-and-0x593.patch
+	patch_apply nvapi-Stub_DLL/0007-nvapi-Add-stub-for-NvAPI_DISP_GetGDIPrimaryDisplayId.patch
+	patch_apply nvapi-Stub_DLL/0008-nvapi-Add-stub-for-EnumNvidiaDisplayHandle.patch
+	patch_apply nvapi-Stub_DLL/0009-nvapi-Add-stub-for-NvAPI_SYS_GetDriverAndBranchVersi.patch
+	patch_apply nvapi-Stub_DLL/0010-nvapi-Add-stub-for-NvAPI_Unload.patch
+	patch_apply nvapi-Stub_DLL/0011-nvapi-Add-stub-for-NvAPI_D3D_GetCurrentSLIState.patch
+	patch_apply nvapi-Stub_DLL/0012-nvapi-tests-Use-structure-to-list-imports.patch
+	patch_apply nvapi-Stub_DLL/0013-nvapi-Add-stub-for-NvAPI_GetLogicalGPUFromDisplay.patch
+	patch_apply nvapi-Stub_DLL/0014-nvapi-Add-stub-for-NvAPI_D3D_GetObjectHandleForResou.patch
+	patch_apply nvapi-Stub_DLL/0015-nvapi-Add-stub-for-NvAPI_D3D9_RegisterResource.patch
+	patch_apply nvapi-Stub_DLL/0016-nvapi-Improve-NvAPI_D3D_GetCurrentSLIState.patch
+	patch_apply nvapi-Stub_DLL/0017-nvapi-Implement-NvAPI_GPU_Get-Physical-Virtual-Frame.patch
+	patch_apply nvapi-Stub_DLL/0018-nvapi-Add-stub-for-NvAPI_GPU_GetGpuCoreCount.patch
+	patch_apply nvapi-Stub_DLL/0019-nvapi-Implement-NvAPI_D3D11_SetDepthBoundsTest.patch
+	patch_apply nvapi-Stub_DLL/0020-nvapi-Implement-NvAPI_D3D11_CreateDevice-and-NvAPI_D.patch
+	patch_apply nvapi-Stub_DLL/0021-Revert-wined3d-No-longer-export-wined3d_device_set_r.patch
 fi
 
 # Patchset nvcuvid-CUDA_Video_Support
