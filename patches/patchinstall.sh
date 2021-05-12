@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "c74508d22528548940db3c8ac6a350064ca445e9"
+	echo "0a50674c6aabb0368811ece4078a2bb69d7ea1bb"
 }
 
 # Show version information
@@ -261,7 +261,6 @@ patch_enable_all ()
 	enable_winemenubuilder_Desktop_Icon_Path="$1"
 	enable_winemenubuilder_integration="$1"
 	enable_wineps_drv_PostScript_Fixes="$1"
-	enable_winepulse_PulseAudio_Support="$1"
 	enable_winex11_CandidateWindowPos="$1"
 	enable_winex11_MWM_Decorations="$1"
 	enable_winex11_UpdateLayeredWindow="$1"
@@ -827,9 +826,6 @@ patch_enable ()
 			;;
 		wineps.drv-PostScript_Fixes)
 			enable_wineps_drv_PostScript_Fixes="$2"
-			;;
-		winepulse-PulseAudio_Support)
-			enable_winepulse_PulseAudio_Support="$2"
 			;;
 		winex11-CandidateWindowPos)
 			enable_winex11_CandidateWindowPos="$2"
@@ -2471,7 +2467,6 @@ fi
 # |
 if test "$enable_msxml3_FreeThreadedXMLHTTP60" -eq 1; then
 	patch_apply msxml3-FreeThreadedXMLHTTP60/0001-include-Remove-interfaces-already-define-in-msxml6.i.patch
-	patch_apply msxml3-FreeThreadedXMLHTTP60/0002-include-Add-IXMLHTTPRequest2-3-interfaces.patch
 	patch_apply msxml3-FreeThreadedXMLHTTP60/0003-msxml3-Implement-FreeThreadedXMLHTTP60.patch
 fi
 
@@ -3908,22 +3903,6 @@ fi
 # |
 if test "$enable_wineps_drv_PostScript_Fixes" -eq 1; then
 	patch_apply wineps.drv-PostScript_Fixes/0004-wineps.drv-Add-support-for-GETFACENAME-and-DOWNLOADF.patch
-fi
-
-# Patchset winepulse-PulseAudio_Support
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#37042] Implement exclusive mode in PulseAudio backend
-# |
-# | Modified files:
-# |   *	dlls/winepulse.drv/Makefile.in, dlls/winepulse.drv/mmdevdrv.c
-# |
-if test "$enable_winepulse_PulseAudio_Support" -eq 1; then
-	patch_apply winepulse-PulseAudio_Support/0001-winepulse.drv-Use-a-separate-mainloop-and-ctx-for-pu.patch
-	patch_apply winepulse-PulseAudio_Support/0003-winepulse-expose-audio-devices-directly-to-programs.patch
-	patch_apply winepulse-PulseAudio_Support/0005-winepulse-implement-GetPropValue.patch
-	patch_apply winepulse-PulseAudio_Support/0006-winepulse-fetch-actual-program-name-if-possible.patch
-	patch_apply winepulse-PulseAudio_Support/0007-winepulse-return-PKEY_AudioEndpoint_PhysicalSpeakers.patch
 fi
 
 # Patchset winex11-CandidateWindowPos
