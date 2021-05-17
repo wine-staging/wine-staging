@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "0a50674c6aabb0368811ece4078a2bb69d7ea1bb"
+	echo "ce72f9b4263a898503c154a37df6bc9d43153f4b"
 }
 
 # Show version information
@@ -3071,12 +3071,13 @@ fi
 # | 	should run unelevated by default with Vista+ setting)
 # |
 # | Modified files:
-# |   *	dlls/shell32/shlexec.c, loader/wine.inf.in, server/process.c
+# |   *	dlls/msi/custom.c, dlls/shell32/shlexec.c, loader/wine.inf.in, server/process.c
 # |
 if test "$enable_server_default_integrity" -eq 1; then
 	patch_apply server-default_integrity/0001-server-Create-processes-using-a-limited-administrato.patch
 	patch_apply server-default_integrity/0002-shell32-Implement-the-runas-verb.patch
 	patch_apply server-default_integrity/0003-wine.inf-Set-the-EnableLUA-value-to-1.patch
+	patch_apply server-default_integrity/0004-msi-Create-the-custom-action-server-as-an-elevated-p.patch
 fi
 
 # Patchset setupapi-DiskSpaceList
