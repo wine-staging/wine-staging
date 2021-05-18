@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "9172ca5baa27b0c929b14a49f60333613cc30c65"
+	echo "2a667e28ba7800288f5873a4b13bc0baf6e4a857"
 }
 
 # Show version information
@@ -1476,7 +1476,6 @@ fi
 # |
 if test "$enable_advapi32_LsaLookupPrivilegeName" -eq 1; then
 	patch_apply advapi32-LsaLookupPrivilegeName/0001-advapi32-Fix-error-code-when-calling-LsaOpenPolicy-f.patch
-	patch_apply advapi32-LsaLookupPrivilegeName/0002-advapi32-Use-TRACE-for-LsaOpenPolicy-LsaClose.patch
 fi
 
 # Patchset api-ms-win-Stub_DLLs
