@@ -1,0 +1,313 @@
+From 693d4ae06557d1c1021f908946a0f0fdc30bcc99 Mon Sep 17 00:00:00 2001
+From: Zebediah Figura <z.figura12@gmail.com>
+Date: Sat, 22 May 2021 17:38:50 -0500
+Subject: [PATCH] wined3d: Make depth bounds test into a proper state.
+
+---
+ dlls/wined3d/cs.c              | 31 +++++++++++++++++++++++++
+ dlls/wined3d/device.c          | 37 ++++++++++++++++++++++++++----
+ dlls/wined3d/state.c           | 42 +++++++++++++---------------------
+ dlls/wined3d/utils.c           |  2 ++
+ dlls/wined3d/wined3d_private.h | 17 +++++++++++++-
+ 5 files changed, 98 insertions(+), 31 deletions(-)
+
+diff --git a/dlls/wined3d/cs.c b/dlls/wined3d/cs.c
+index a17926f6ff0..7c116e3f887 100644
+--- a/dlls/wined3d/cs.c
++++ b/dlls/wined3d/cs.c
+@@ -128,6 +128,7 @@ enum wined3d_cs_op
+     WINED3D_CS_OP_SET_RENDER_STATE,
+     WINED3D_CS_OP_SET_TEXTURE_STATE,
+     WINED3D_CS_OP_SET_SAMPLER_STATE,
++    WINED3D_CS_OP_SET_DEPTH_BOUNDS,
+     WINED3D_CS_OP_SET_TRANSFORM,
+     WINED3D_CS_OP_SET_CLIP_PLANE,
+     WINED3D_CS_OP_SET_COLOR_KEY,
+@@ -382,6 +383,12 @@ struct wined3d_cs_set_sampler_state
+     DWORD value;
+ };
+ 
++struct wined3d_cs_set_depth_bounds
++{
++    enum wined3d_cs_op opcode;
++    struct wined3d_depth_bounds_state depth_bounds;
++};
++
+ struct wined3d_cs_set_transform
+ {
+     enum wined3d_cs_op opcode;
+@@ -615,6 +622,7 @@ static const char *debug_cs_op(enum wined3d_cs_op op)
+         WINED3D_TO_STR(WINED3D_CS_OP_SET_RENDER_STATE);
+         WINED3D_TO_STR(WINED3D_CS_OP_SET_TEXTURE_STATE);
+         WINED3D_TO_STR(WINED3D_CS_OP_SET_SAMPLER_STATE);
++        WINED3D_TO_STR(WINED3D_CS_OP_SET_DEPTH_BOUNDS);
+         WINED3D_TO_STR(WINED3D_CS_OP_SET_TRANSFORM);
+         WINED3D_TO_STR(WINED3D_CS_OP_SET_CLIP_PLANE);
+         WINED3D_TO_STR(WINED3D_CS_OP_SET_COLOR_KEY);
+@@ -1916,6 +1924,28 @@ void wined3d_device_context_emit_set_sampler_state(struct wined3d_device_context
+     wined3d_device_context_submit(context, WINED3D_CS_QUEUE_DEFAULT);
+ }
+ 
++static void wined3d_cs_exec_set_depth_bounds(struct wined3d_cs *cs, const void *data)
++{
++    const struct wined3d_cs_set_depth_bounds *op = data;
++
++    cs->state.depth_bounds = op->depth_bounds;
++    device_invalidate_state(cs->c.device, STATE_DEPTH_BOUNDS);
++}
++
++void wined3d_device_context_emit_set_depth_bounds(struct wined3d_device_context *context,
++        BOOL enable, float min, float max)
++{
++    struct wined3d_cs_set_depth_bounds *op;
++
++    op = wined3d_device_context_require_space(context, sizeof(*op), WINED3D_CS_QUEUE_DEFAULT);
++    op->opcode = WINED3D_CS_OP_SET_DEPTH_BOUNDS;
++    op->depth_bounds.enable = enable;
++    op->depth_bounds.min = min;
++    op->depth_bounds.max = max;
++
++    wined3d_device_context_submit(context, WINED3D_CS_QUEUE_DEFAULT);
++}
++
+ static void wined3d_cs_exec_set_transform(struct wined3d_cs *cs, const void *data)
+ {
+     const struct wined3d_cs_set_transform *op = data;
+@@ -2892,6 +2922,7 @@ static void (* const wined3d_cs_op_handlers[])(struct wined3d_cs *cs, const void
+     /* WINED3D_CS_OP_SET_RENDER_STATE            */ wined3d_cs_exec_set_render_state,
+     /* WINED3D_CS_OP_SET_TEXTURE_STATE           */ wined3d_cs_exec_set_texture_state,
+     /* WINED3D_CS_OP_SET_SAMPLER_STATE           */ wined3d_cs_exec_set_sampler_state,
++    /* WINED3D_CS_OP_SET_DEPTH_BOUNDS            */ wined3d_cs_exec_set_depth_bounds,
+     /* WINED3D_CS_OP_SET_TRANSFORM               */ wined3d_cs_exec_set_transform,
+     /* WINED3D_CS_OP_SET_CLIP_PLANE              */ wined3d_cs_exec_set_clip_plane,
+     /* WINED3D_CS_OP_SET_COLOR_KEY               */ wined3d_cs_exec_set_color_key,
+diff --git a/dlls/wined3d/device.c b/dlls/wined3d/device.c
+index 7651713154c..b6550a1a4e4 100644
+--- a/dlls/wined3d/device.c
++++ b/dlls/wined3d/device.c
+@@ -1923,6 +1923,14 @@ void CDECL wined3d_device_context_set_rasterizer_state(struct wined3d_device_con
+         wined3d_rasterizer_state_decref(prev);
+ }
+ 
++static void wined3d_device_context_set_depth_bounds(struct wined3d_device_context *context,
++        BOOL enable, float min, float max)
++{
++    TRACE("context %p, enable %d, min %.8e, max %.8e.\n", context, enable, min, max);
++
++    wined3d_device_context_emit_set_depth_bounds(context, enable, min, max);
++}
++
+ void CDECL wined3d_device_context_set_viewports(struct wined3d_device_context *context, unsigned int viewport_count,
+         const struct wined3d_viewport *viewports)
+ {
+@@ -3546,7 +3554,8 @@ static void wined3d_device_set_texture(struct wined3d_device *device,
+ void CDECL wined3d_device_apply_stateblock(struct wined3d_device *device,
+         struct wined3d_stateblock *stateblock)
+ {
+-    BOOL set_blend_state = FALSE, set_depth_stencil_state = FALSE, set_rasterizer_state = FALSE;
++    bool set_blend_state = false, set_depth_stencil_state = false, set_rasterizer_state = false,
++            set_depth_bounds = false;
+     const struct wined3d_stateblock_state *state = &stateblock->stateblock_state;
+     const struct wined3d_saved_states *changed = &stateblock->changed;
+     const unsigned int word_bit_count = sizeof(DWORD) * CHAR_BIT;
+@@ -3652,7 +3661,7 @@ void CDECL wined3d_device_apply_stateblock(struct wined3d_device *device,
+                 case WINED3D_RS_COLORWRITEENABLE1:
+                 case WINED3D_RS_COLORWRITEENABLE2:
+                 case WINED3D_RS_COLORWRITEENABLE3:
+-                    set_blend_state = TRUE;
++                    set_blend_state = true;
+                     break;
+ 
+                 case WINED3D_RS_BACK_STENCILFAIL:
+@@ -3671,7 +3680,7 @@ void CDECL wined3d_device_apply_stateblock(struct wined3d_device *device,
+                 case WINED3D_RS_ZENABLE:
+                 case WINED3D_RS_ZFUNC:
+                 case WINED3D_RS_ZWRITEENABLE:
+-                    set_depth_stencil_state = TRUE;
++                    set_depth_stencil_state = true;
+                     break;
+ 
+                 case WINED3D_RS_FILLMODE:
+@@ -3680,9 +3689,15 @@ void CDECL wined3d_device_apply_stateblock(struct wined3d_device *device,
+                 case WINED3D_RS_DEPTHBIAS:
+                 case WINED3D_RS_SCISSORTESTENABLE:
+                 case WINED3D_RS_ANTIALIASEDLINEENABLE:
+-                    set_rasterizer_state = TRUE;
++                    set_rasterizer_state = true;
+                     break;
+ 
++                case WINED3D_RS_ADAPTIVETESS_X:
++                case WINED3D_RS_ADAPTIVETESS_Z:
++                case WINED3D_RS_ADAPTIVETESS_W:
++                    set_depth_bounds = true;
++                    /* fall through */
++
+                 default:
+                     wined3d_device_set_render_state(device, idx, state->rs[idx]);
+                     break;
+@@ -3871,6 +3886,20 @@ void CDECL wined3d_device_apply_stateblock(struct wined3d_device *device,
+         }
+     }
+ 
++    if (set_depth_bounds)
++    {
++        union
++        {
++            DWORD d;
++            float f;
++        } zmin, zmax;
++
++        zmin.d = state->rs[WINED3D_RS_ADAPTIVETESS_Z];
++        zmax.d = state->rs[WINED3D_RS_ADAPTIVETESS_W];
++        wined3d_device_context_set_depth_bounds(context,
++                state->rs[WINED3D_RS_ADAPTIVETESS_X] == WINED3DFMT_NVDB, zmin.f, zmax.f);
++    }
++
+     for (i = 0; i < ARRAY_SIZE(changed->textureState); ++i)
+     {
+         map = changed->textureState[i];
+diff --git a/dlls/wined3d/state.c b/dlls/wined3d/state.c
+index 1194604e7dc..551dd2e3cbf 100644
+--- a/dlls/wined3d/state.c
++++ b/dlls/wined3d/state.c
+@@ -2053,42 +2053,31 @@ static void state_tessellation(struct wined3d_context *context, const struct win
+                 state->render_states[WINED3D_RS_ENABLEADAPTIVETESSELLATION]);
+ }
+ 
+-static void state_nvdb(struct wined3d_context *context, const struct wined3d_state *state, DWORD state_id)
++static void depth_bounds(struct wined3d_context *context, const struct wined3d_state *state, DWORD state_id)
+ {
+     const struct wined3d_gl_info *gl_info = wined3d_context_gl(context)->gl_info;
+-    union
+-    {
+-        uint32_t d;
+-        float f;
+-    } zmin, zmax;
++    float zmin = state->depth_bounds.min, zmax = state->depth_bounds.max;
+ 
+-    if (state->render_states[WINED3D_RS_ADAPTIVETESS_X] == WINED3DFMT_NVDB)
++    /* If zmin is larger than zmax, an INVALID_VALUE error is generated.
++     * In d3d9, the test is not performed in this case. */
++    if (state->depth_bounds.enable && zmin <= zmax)
+     {
+-        zmin.d = state->render_states[WINED3D_RS_ADAPTIVETESS_Z];
+-        zmax.d = state->render_states[WINED3D_RS_ADAPTIVETESS_W];
+-
+-        /* If zmin is larger than zmax INVALID_VALUE error is generated.
+-         * In d3d9 test is not performed in this case*/
+-        if (zmin.f <= zmax.f)
+-        {
+-            gl_info->gl_ops.gl.p_glEnable(GL_DEPTH_BOUNDS_TEST_EXT);
+-            checkGLcall("glEnable(GL_DEPTH_BOUNDS_TEST_EXT)");
+-            GL_EXTCALL(glDepthBoundsEXT(zmin.f, zmax.f));
+-            checkGLcall("glDepthBoundsEXT(...)");
+-        }
+-        else
+-        {
+-            gl_info->gl_ops.gl.p_glDisable(GL_DEPTH_BOUNDS_TEST_EXT);
+-            checkGLcall("glDisable(GL_DEPTH_BOUNDS_TEST_EXT)");
+-        }
++        gl_info->gl_ops.gl.p_glEnable(GL_DEPTH_BOUNDS_TEST_EXT);
++        checkGLcall("glEnable(GL_DEPTH_BOUNDS_TEST_EXT)");
++        GL_EXTCALL(glDepthBoundsEXT(zmin, zmax));
++        checkGLcall("glDepthBoundsEXT(...)");
+     }
+     else
+     {
+         gl_info->gl_ops.gl.p_glDisable(GL_DEPTH_BOUNDS_TEST_EXT);
+         checkGLcall("glDisable(GL_DEPTH_BOUNDS_TEST_EXT)");
+     }
++}
+ 
+-    state_tessellation(context, state, STATE_RENDER(WINED3D_RS_ENABLEADAPTIVETESSELLATION));
++static void depth_bounds_w(struct wined3d_context *context, const struct wined3d_state *state, DWORD state_id)
++{
++    if (state->depth_bounds.enable)
++        WARN("Depth bounds test is not supported by this GL implementation.\n");
+ }
+ 
+ static void state_wrapu(struct wined3d_context *context, const struct wined3d_state *state, DWORD state_id)
+@@ -4698,6 +4687,8 @@ const struct wined3d_state_entry_template misc_state_template_gl[] =
+     { STATE_DEPTH_STENCIL,                                { STATE_DEPTH_STENCIL,                                depth_stencil_2s    }, EXT_STENCIL_TWO_SIDE            },
+     { STATE_DEPTH_STENCIL,                                { STATE_DEPTH_STENCIL,                                depth_stencil       }, WINED3D_GL_EXT_NONE             },
+     { STATE_STENCIL_REF,                                  { STATE_DEPTH_STENCIL,                                NULL                }, WINED3D_GL_EXT_NONE             },
++    { STATE_DEPTH_BOUNDS,                                 { STATE_DEPTH_BOUNDS,                                 depth_bounds        }, EXT_DEPTH_BOUNDS_TEST           },
++    { STATE_DEPTH_BOUNDS,                                 { STATE_DEPTH_BOUNDS,                                 depth_bounds_w      }, WINED3D_GL_EXT_NONE             },
+     { STATE_STREAMSRC,                                    { STATE_STREAMSRC,                                    streamsrc           }, WINED3D_GL_EXT_NONE             },
+     { STATE_VDECL,                                        { STATE_VDECL,                                        vdecl_miscpart      }, WINED3D_GL_EXT_NONE             },
+     { STATE_RASTERIZER,                                   { STATE_RASTERIZER,                                   rasterizer_cc       }, ARB_CLIP_CONTROL                },
+@@ -4811,7 +4802,6 @@ const struct wined3d_state_entry_template misc_state_template_gl[] =
+     { STATE_RENDER(WINED3D_RS_ADAPTIVETESS_Y),            { STATE_RENDER(WINED3D_RS_ENABLEADAPTIVETESSELLATION),NULL                }, WINED3D_GL_EXT_NONE             },
+     { STATE_RENDER(WINED3D_RS_ADAPTIVETESS_Z),            { STATE_RENDER(WINED3D_RS_ENABLEADAPTIVETESSELLATION),NULL                }, WINED3D_GL_EXT_NONE             },
+     { STATE_RENDER(WINED3D_RS_ADAPTIVETESS_W),            { STATE_RENDER(WINED3D_RS_ENABLEADAPTIVETESSELLATION),NULL                }, WINED3D_GL_EXT_NONE             },
+-    { STATE_RENDER(WINED3D_RS_ENABLEADAPTIVETESSELLATION),{ STATE_RENDER(WINED3D_RS_ENABLEADAPTIVETESSELLATION),state_nvdb          }, EXT_DEPTH_BOUNDS_TEST           },
+     { STATE_RENDER(WINED3D_RS_ENABLEADAPTIVETESSELLATION),{ STATE_RENDER(WINED3D_RS_ENABLEADAPTIVETESSELLATION),state_tessellation  }, WINED3D_GL_EXT_NONE             },
+     { STATE_RENDER(WINED3D_RS_MULTISAMPLEANTIALIAS),      { STATE_RENDER(WINED3D_RS_MULTISAMPLEANTIALIAS),      state_msaa          }, ARB_MULTISAMPLE                 },
+     { STATE_RENDER(WINED3D_RS_MULTISAMPLEANTIALIAS),      { STATE_RENDER(WINED3D_RS_MULTISAMPLEANTIALIAS),      state_msaa_w        }, WINED3D_GL_EXT_NONE             },
+diff --git a/dlls/wined3d/utils.c b/dlls/wined3d/utils.c
+index dc7823b9534..7c7d14a7126 100644
+--- a/dlls/wined3d/utils.c
++++ b/dlls/wined3d/utils.c
+@@ -5244,6 +5244,8 @@ const char *debug_d3dstate(DWORD state)
+         return "STATE_DEPTH_STENCIL";
+     if (STATE_IS_STENCIL_REF(state))
+         return "STATE_STENCIL_REF";
++    if (STATE_IS_DEPTH_BOUNDS(state))
++        return "STATE_DEPTH_BOUNDS";
+ 
+     return wine_dbg_sprintf("UNKNOWN_STATE(%#x)", state);
+ }
+diff --git a/dlls/wined3d/wined3d_private.h b/dlls/wined3d/wined3d_private.h
+index e7a3e42d8bb..4f235fb04cd 100644
+--- a/dlls/wined3d/wined3d_private.h
++++ b/dlls/wined3d/wined3d_private.h
+@@ -1832,7 +1832,10 @@ void dispatch_compute(struct wined3d_device *device, const struct wined3d_state
+ #define STATE_STENCIL_REF (STATE_DEPTH_STENCIL + 1)
+ #define STATE_IS_STENCIL_REF(a) ((a) == STATE_STENCIL_REF)
+ 
+-#define STATE_COMPUTE_OFFSET (STATE_STENCIL_REF + 1)
++#define STATE_DEPTH_BOUNDS (STATE_STENCIL_REF + 1)
++#define STATE_IS_DEPTH_BOUNDS(a) ((a) == STATE_DEPTH_BOUNDS)
++
++#define STATE_COMPUTE_OFFSET (STATE_DEPTH_BOUNDS + 1)
+ 
+ #define STATE_COMPUTE_SHADER (STATE_COMPUTE_OFFSET)
+ #define STATE_IS_COMPUTE_SHADER(a) ((a) == STATE_COMPUTE_SHADER)
+@@ -3665,6 +3668,13 @@ struct wined3d_light_state
+     const struct wined3d_light_info *lights[WINED3D_MAX_ACTIVE_LIGHTS];
+ };
+ 
++struct wined3d_depth_bounds_state
++{
++    BOOL enable;
++    float min;
++    float max;
++};
++
+ #define WINED3D_STATE_NO_REF        0x00000001
+ #define WINED3D_STATE_INIT_DEFAULT  0x00000002
+ 
+@@ -3719,8 +3729,11 @@ struct wined3d_state
+     struct wined3d_blend_state *blend_state;
+     struct wined3d_color blend_factor;
+     unsigned int sample_mask;
++
+     struct wined3d_depth_stencil_state *depth_stencil_state;
+     unsigned int stencil_ref;
++    struct wined3d_depth_bounds_state depth_bounds;
++
+     struct wined3d_rasterizer_state *rasterizer_state;
+ };
+ 
+@@ -4789,6 +4802,8 @@ void wined3d_device_context_emit_set_clip_plane(struct wined3d_device_context *c
+         const struct wined3d_vec4 *plane) DECLSPEC_HIDDEN;
+ void wined3d_device_context_emit_set_constant_buffer(struct wined3d_device_context *context,
+         enum wined3d_shader_type type, UINT cb_idx, struct wined3d_buffer *buffer) DECLSPEC_HIDDEN;
++void wined3d_device_context_emit_set_depth_bounds(struct wined3d_device_context *context,
++        BOOL enable, float min, float max) DECLSPEC_HIDDEN;
+ void wined3d_device_context_emit_set_depth_stencil_state(struct wined3d_device_context *context,
+         struct wined3d_depth_stencil_state *state, unsigned int stencil_ref) DECLSPEC_HIDDEN;
+ void wined3d_device_context_emit_set_depth_stencil_view(struct wined3d_device_context *context,
+-- 
+2.30.2
+

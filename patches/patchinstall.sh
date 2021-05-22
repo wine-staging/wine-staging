@@ -94,6 +94,7 @@ patch_enable_all ()
 	enable_comdlg32_lpstrFileTitle="$1"
 	enable_crypt32_CMS_Certificates="$1"
 	enable_cryptext_CryptExtOpenCER="$1"
+	enable_d3d11_Deferred_Context="$1"
 	enable_d3drm_IDirect3D3_support="$1"
 	enable_d3dx9_36_BumpLuminance="$1"
 	enable_d3dx9_36_CloneEffect="$1"
@@ -328,6 +329,9 @@ patch_enable ()
 			;;
 		cryptext-CryptExtOpenCER)
 			enable_cryptext_CryptExtOpenCER="$2"
+			;;
+		d3d11-Deferred_Context)
+			enable_d3d11_Deferred_Context="$2"
 			;;
 		d3drm-IDirect3D3-support)
 			enable_d3drm_IDirect3D3_support="$2"
@@ -1362,9 +1366,13 @@ if test "$enable_nvcuvid_CUDA_Video_Support" -eq 1; then
 fi
 
 if test "$enable_nvapi_Stub_DLL" -eq 1; then
+	if test "$enable_d3d11_Deferred_Context" -gt 1; then
+		abort "Patchset d3d11-Deferred_Context disabled, but nvapi-Stub_DLL depends on that."
+	fi
 	if test "$enable_nvcuda_CUDA_Support" -gt 1; then
 		abort "Patchset nvcuda-CUDA_Support disabled, but nvapi-Stub_DLL depends on that."
 	fi
+	enable_d3d11_Deferred_Context=1
 	enable_nvcuda_CUDA_Support=1
 fi
 
@@ -1612,6 +1620,37 @@ fi
 # |
 if test "$enable_cryptext_CryptExtOpenCER" -eq 1; then
 	patch_apply cryptext-CryptExtOpenCER/0001-cryptext-Implement-CryptExtOpenCER.patch
+fi
+
+# Patchset d3d11-Deferred_Context
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#42191] Multiple games require d3d11 deferred contexts (Diablo 3, Dark Souls 3, The Evil Within, Elex, Alien:
+# | 	Isolation, Assassin's Creed III)
+# |   *	[#43743] No 3D graphics in Wolcen: Lords of Mayhem
+# |   *	[#41636] Multiple DirectX 11 games need ID3D11Device1::CreateDeferredContext1 implementation (WWE 2K15, Dishonored:
+# | 	Death of the Outsider, Pro Evolution Soccer 2019, Shantae and the Pirate's Curse, Space Engineers)
+# |
+# | Modified files:
+# |   *	dlls/d3d11/d3d11_private.h, dlls/d3d11/device.c, dlls/d3d11/tests/d3d11.c, dlls/wined3d/buffer.c,
+# | 	dlls/wined3d/context.c, dlls/wined3d/cs.c, dlls/wined3d/device.c, dlls/wined3d/resource.c, dlls/wined3d/texture.c,
+# | 	dlls/wined3d/wined3d.spec, dlls/wined3d/wined3d_private.h, include/wine/wined3d.h
+# |
+if test "$enable_d3d11_Deferred_Context" -eq 1; then
+	patch_apply d3d11-Deferred_Context/0001-d3d11-tests-Add-a-couple-of-extra-tests-for-SRV-RTV-.patch
+	patch_apply d3d11-Deferred_Context/0002-wined3d-Check-for-SRV-RTV-binding-conflicts-per-wine.patch
+	patch_apply d3d11-Deferred_Context/0003-d3d11-tests-Add-some-tests-for-Map-on-deferred-conte.patch
+	patch_apply d3d11-Deferred_Context/0004-d3d11-tests-Add-some-tests-for-UpdateSubresource-on-.patch
+	patch_apply d3d11-Deferred_Context/0005-wined3d-Store-the-framebuffer-state-inline-in-struct.patch
+	patch_apply d3d11-Deferred_Context/0006-d3d11-Implement-ID3D11Device-CreateDeferredContext.patch
+	patch_apply d3d11-Deferred_Context/0007-d3d11-Implement-ID3D11Device1-CreateDeferredContext1.patch
+	patch_apply d3d11-Deferred_Context/0008-wined3d-Keep-a-list-of-acquired-resources-in-struct-.patch
+	patch_apply d3d11-Deferred_Context/0009-d3d11-Implement-ID3D11DeviceContext-ClearState-using.patch
+	patch_apply d3d11-Deferred_Context/0010-d3d11-Implement-ID3D11DeviceContext-FinishCommandLis.patch
+	patch_apply d3d11-Deferred_Context/0011-wined3d-Implement-restoring-context-in-wined3d_defer.patch
+	patch_apply d3d11-Deferred_Context/0012-d3d11-Implement-ID3D11DeviceContext-ExecuteCommandLi.patch
+	patch_apply d3d11-Deferred_Context/0013-wined3d-Implement-wined3d_deferred_context_update_su.patch
+	patch_apply d3d11-Deferred_Context/0014-wined3d-Implement-wined3d_deferred_context_map.patch
 fi
 
 # Patchset d3drm-IDirect3D3-support
@@ -2841,16 +2880,18 @@ fi
 # Patchset nvapi-Stub_DLL
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	nvcuda-CUDA_Support
+# |   *	d3d11-Deferred_Context, nvcuda-CUDA_Support
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#35062] Fix graphical corruption in FarCry 3 with NVIDIA drivers
 # |   *	[#43862] CS:GO fails to start when nvapi cannot be initialized
 # |
 # | Modified files:
-# |   *	configure.ac, dlls/d3d11/device.c, dlls/nvapi/Makefile.in, dlls/nvapi/nvapi.c, dlls/nvapi/nvapi.spec,
-# | 	dlls/nvapi/tests/Makefile.in, dlls/nvapi/tests/nvapi.c, dlls/nvapi64/Makefile.in, dlls/nvapi64/nvapi64.spec,
-# | 	dlls/wined3d/device.c, dlls/wined3d/wined3d.spec, include/Makefile.in, include/nvapi.h, include/wine/wined3d.h
+# |   *	configure.ac, dlls/d3d11/d3d11_private.h, dlls/d3d11/device.c, dlls/nvapi/Makefile.in, dlls/nvapi/nvapi.c,
+# | 	dlls/nvapi/nvapi.spec, dlls/nvapi/tests/Makefile.in, dlls/nvapi/tests/nvapi.c, dlls/nvapi64/Makefile.in,
+# | 	dlls/nvapi64/nvapi64.spec, dlls/wined3d/cs.c, dlls/wined3d/device.c, dlls/wined3d/state.c, dlls/wined3d/utils.c,
+# | 	dlls/wined3d/wined3d.spec, dlls/wined3d/wined3d_private.h, include/Makefile.in, include/nvapi.h, include/wine/wined3d.h,
+# | 	include/wine/winedxgi.idl
 # |
 if test "$enable_nvapi_Stub_DLL" -eq 1; then
 	patch_apply nvapi-Stub_DLL/0001-nvapi-First-implementation.patch
@@ -2871,15 +2912,16 @@ if test "$enable_nvapi_Stub_DLL" -eq 1; then
 	patch_apply nvapi-Stub_DLL/0016-nvapi-Improve-NvAPI_D3D_GetCurrentSLIState.patch
 	patch_apply nvapi-Stub_DLL/0017-nvapi-Implement-NvAPI_GPU_Get-Physical-Virtual-Frame.patch
 	patch_apply nvapi-Stub_DLL/0018-nvapi-Add-stub-for-NvAPI_GPU_GetGpuCoreCount.patch
-	patch_apply nvapi-Stub_DLL/0019-nvapi-Implement-NvAPI_D3D11_SetDepthBoundsTest.patch
-	patch_apply nvapi-Stub_DLL/0020-nvapi-Implement-NvAPI_D3D11_CreateDevice-and-NvAPI_D.patch
-	patch_apply nvapi-Stub_DLL/0021-Revert-wined3d-No-longer-export-wined3d_device_set_r.patch
+	patch_apply nvapi-Stub_DLL/0019-wined3d-Make-depth-bounds-test-into-a-proper-state.patch
+	patch_apply nvapi-Stub_DLL/0020-d3d11-Introduce-a-COM-interface-to-retrieve-the-wine.patch
+	patch_apply nvapi-Stub_DLL/0021-nvapi-Implement-NvAPI_D3D11_SetDepthBoundsTest.patch
+	patch_apply nvapi-Stub_DLL/0022-nvapi-Implement-NvAPI_D3D11_CreateDevice-and-NvAPI_D.patch
 fi
 
 # Patchset nvcuvid-CUDA_Video_Support
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	nvcuda-CUDA_Support, nvapi-Stub_DLL
+# |   *	d3d11-Deferred_Context, nvcuda-CUDA_Support, nvapi-Stub_DLL
 # |
 # | Modified files:
 # |   *	configure.ac, dlls/nvcuvid/Makefile.in, dlls/nvcuvid/nvcuvid.c, dlls/nvcuvid/nvcuvid.spec, include/Makefile.in,
@@ -2892,7 +2934,7 @@ fi
 # Patchset nvencodeapi-Video_Encoder
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	nvcuda-CUDA_Support, nvapi-Stub_DLL, nvcuvid-CUDA_Video_Support
+# |   *	d3d11-Deferred_Context, nvcuda-CUDA_Support, nvapi-Stub_DLL, nvcuvid-CUDA_Video_Support
 # |
 # | Modified files:
 # |   *	configure.ac, dlls/nvencodeapi/Makefile.in, dlls/nvencodeapi/nvencodeapi.c, dlls/nvencodeapi/nvencodeapi.spec,
