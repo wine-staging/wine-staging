@@ -1280,6 +1280,13 @@ if test "$enable_wined3d_Indexed_Vertex_Blending" -eq 1; then
 	enable_wined3d_SWVP_shaders=1
 fi
 
+if test "$enable_wined3d_CSMT_Main" -eq 1; then
+	if test "$enable_d3d11_Deferred_Context" -gt 1; then
+		abort "Patchset d3d11-Deferred_Context disabled, but wined3d-CSMT_Main depends on that."
+	fi
+	enable_d3d11_Deferred_Context=1
+fi
+
 if test "$enable_user32_rawinput_mouse_experimental" -eq 1; then
 	if test "$enable_user32_rawinput_mouse" -gt 1; then
 		abort "Patchset user32-rawinput-mouse disabled, but user32-rawinput-mouse-experimental depends on that."
@@ -3857,6 +3864,9 @@ if test "$enable_wined3d_Accounting" -eq 1; then
 fi
 
 # Patchset wined3d-CSMT_Main
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	d3d11-Deferred_Context
 # |
 # | Modified files:
 # |   *	dlls/wined3d/cs.c, dlls/wined3d/wined3d_private.h
