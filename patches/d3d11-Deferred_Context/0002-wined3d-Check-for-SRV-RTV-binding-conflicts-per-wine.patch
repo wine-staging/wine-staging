@@ -1,0 +1,286 @@
+From bca2466f49202f638339644f9c92b3573b719822 Mon Sep 17 00:00:00 2001
+From: Zebediah Figura <z.figura12@gmail.com>
+Date: Sat, 22 May 2021 00:27:53 -0500
+Subject: [PATCH] wined3d: Check for SRV/RTV binding conflicts per
+ wined3d_state.
+
+Signed-off-by: Zebediah Figura <z.figura12@gmail.com>
+---
+ dlls/wined3d/context.c         |  19 ++++-
+ dlls/wined3d/device.c          |  23 ++++--
+ dlls/wined3d/resource.c        |   1 -
+ dlls/wined3d/wined3d_private.h | 125 +++++++--------------------------
+ 4 files changed, 61 insertions(+), 107 deletions(-)
+
+diff --git a/dlls/wined3d/context.c b/dlls/wined3d/context.c
+index 2debf50de7f..7f50126204b 100644
+--- a/dlls/wined3d/context.c
++++ b/dlls/wined3d/context.c
+@@ -335,6 +335,23 @@ void context_update_stream_info(struct wined3d_context *context, const struct wi
+     }
+ }
+ 
++static bool is_resource_rtv_bound(const struct wined3d_state *state,
++        const struct wined3d_resource *resource)
++{
++    unsigned int i;
++
++    if (!resource->rtv_bind_count_device)
++        return false;
++
++    for (i = 0; i < ARRAY_SIZE(state->fb.render_targets); ++i)
++    {
++        if (state->fb.render_targets[i] && state->fb.render_targets[i]->resource == resource)
++            return true;
++    }
++
++    return false;
++}
++
+ /* Context activation is done by the caller. */
+ static void context_preload_texture(struct wined3d_context *context,
+         const struct wined3d_state *state, unsigned int idx)
+@@ -344,7 +361,7 @@ static void context_preload_texture(struct wined3d_context *context,
+     if (!(texture = state->textures[idx]))
+         return;
+ 
+-    if ((texture->resource.rtv_full_bind_count_device + texture->resource.rtv_partial_bind_count_device)
++    if (is_resource_rtv_bound(state, &texture->resource)
+             || (state->fb.depth_stencil && state->fb.depth_stencil->resource == &texture->resource))
+         context->uses_fbo_attached_resources = 1;
+ 
+diff --git a/dlls/wined3d/device.c b/dlls/wined3d/device.c
+index dbb5dcf2672..2c8ebba8844 100644
+--- a/dlls/wined3d/device.c
++++ b/dlls/wined3d/device.c
+@@ -1985,7 +1985,7 @@ void CDECL wined3d_device_context_set_shader_resource_view(struct wined3d_device
+     if (view == prev)
+         return;
+ 
+-    if (view && (wined3d_is_srv_rtv_bound(view)
++    if (view && (wined3d_is_srv_rtv_bound(state, view)
+             || ((dsv = state->fb.depth_stencil)
+             && dsv->resource == view->resource && wined3d_dsv_srv_conflict(dsv, view->format))))
+     {
+@@ -2064,22 +2064,31 @@ void CDECL wined3d_device_context_set_unordered_access_view(struct wined3d_devic
+ static void wined3d_device_context_unbind_srv_for_rtv(struct wined3d_device_context *context,
+         const struct wined3d_rendertarget_view *view, BOOL dsv)
+ {
+-    struct wined3d_state *state = context->state;
++    const struct wined3d_state *state = context->state;
++    const struct wined3d_resource *resource;
+ 
+-    if (view && wined3d_is_rtv_srv_bound(view))
++    if (!view)
++        return;
++    resource = view->resource;
++
++    if (resource->srv_bind_count_device)
+     {
+-        const struct wined3d_resource *resource = view->resource;
+         const struct wined3d_shader_resource_view *srv;
+         unsigned int i, j;
+ 
+-        WARN("Application sets bound resource as render target.\n");
+-
+         for (i = 0; i < WINED3D_SHADER_TYPE_COUNT; ++i)
++        {
+             for (j = 0; j < MAX_SHADER_RESOURCE_VIEWS; ++j)
++            {
+                 if ((srv = state->shader_resource_view[i][j]) && srv->resource == resource
+-                        && ((!dsv && wined3d_is_srv_rtv_bound(srv))
++                        && ((!dsv && wined3d_is_srv_rtv_bound(state, srv))
+                         || (dsv && wined3d_dsv_srv_conflict(view, srv->format))))
++                {
++                    WARN("Application sets bound resource as render target.\n");
+                     wined3d_device_context_set_shader_resource_view(context, i, j, NULL);
++                }
++            }
++        }
+     }
+ }
+ 
+diff --git a/dlls/wined3d/resource.c b/dlls/wined3d/resource.c
+index 6e34605f547..58e3e5c77fd 100644
+--- a/dlls/wined3d/resource.c
++++ b/dlls/wined3d/resource.c
+@@ -235,7 +235,6 @@ static void wined3d_resource_destroy_object(void *object)
+ 
+     TRACE("resource %p.\n", resource);
+ 
+-    heap_free(resource->sub_resource_bind_counts_device);
+     wined3d_resource_free_sysmem(resource);
+     context_resource_released(resource->device, resource);
+     wined3d_resource_release(resource);
+diff --git a/dlls/wined3d/wined3d_private.h b/dlls/wined3d/wined3d_private.h
+index 4c308d2ac05..fadad706af4 100644
+--- a/dlls/wined3d/wined3d_private.h
++++ b/dlls/wined3d/wined3d_private.h
+@@ -4084,16 +4084,8 @@ struct wined3d_resource
+ 
+     struct list resource_list_entry;
+ 
+-    struct
+-    {
+-        uint32_t srv;
+-        uint32_t rtv;
+-    }
+-    *sub_resource_bind_counts_device;
+-    uint32_t srv_full_bind_count_device;
+-    uint32_t rtv_full_bind_count_device;
+-    uint32_t srv_partial_bind_count_device;
+-    uint32_t rtv_partial_bind_count_device;
++    uint32_t srv_bind_count_device;
++    uint32_t rtv_bind_count_device;
+ };
+ 
+ static inline ULONG wined3d_resource_incref(struct wined3d_resource *resource)
+@@ -6214,120 +6206,57 @@ static inline bool wined3d_rtv_all_subresources(const struct wined3d_rendertarge
+     return texture->level_count == 1 && rtv->layer_count == wined3d_bind_layer_count(texture);
+ }
+ 
+-static inline void wined3d_srv_bind_count_add(struct wined3d_shader_resource_view *srv, int value)
+-{
+-    struct wined3d_resource *resource = srv->resource;
+-    struct wined3d_texture *texture;
+-    unsigned int level, layer;
+-
+-    if (wined3d_srv_all_subresources(srv))
+-    {
+-        resource->srv_full_bind_count_device += value;
+-        return;
+-    }
+-
+-    resource->srv_partial_bind_count_device += value;
+-
+-    texture = texture_from_resource(resource);
+-
+-    if (!resource->sub_resource_bind_counts_device
+-            && !(resource->sub_resource_bind_counts_device = heap_alloc_zero(texture->level_count
+-            * wined3d_bind_layer_count(texture) * sizeof(*resource->sub_resource_bind_counts_device))))
+-        return;
+-
+-    for (layer = 0; layer < srv->desc.u.texture.layer_count; ++layer)
+-        for (level = 0; level < srv->desc.u.texture.level_count; ++level)
+-            resource->sub_resource_bind_counts_device[(layer + srv->desc.u.texture.layer_idx)
+-                    * texture->level_count + srv->desc.u.texture.level_idx + level].srv += value;
+-}
+-
+ static inline void wined3d_srv_bind_count_inc(struct wined3d_shader_resource_view *srv)
+ {
+-    wined3d_srv_bind_count_add(srv, 1);
++    ++srv->resource->srv_bind_count_device;
+ }
+ 
+ static inline void wined3d_srv_bind_count_dec(struct wined3d_shader_resource_view *srv)
+ {
+-    wined3d_srv_bind_count_add(srv, -1);
+-}
+-
+-static inline void wined3d_rtv_bind_count_add(struct wined3d_rendertarget_view *rtv, int value)
+-{
+-    struct wined3d_resource *resource = rtv->resource;
+-    struct wined3d_texture *texture;
+-    unsigned int layer;
+-
+-    if (wined3d_rtv_all_subresources(rtv))
+-    {
+-        resource->rtv_full_bind_count_device += value;
+-        return;
+-    }
+-
+-    resource->rtv_partial_bind_count_device += value;
+-
+-    texture = texture_from_resource(resource);
+-
+-    if (!resource->sub_resource_bind_counts_device
+-            && !(resource->sub_resource_bind_counts_device = heap_alloc_zero(texture->level_count
+-            * wined3d_bind_layer_count(texture) * sizeof(*resource->sub_resource_bind_counts_device))))
+-        return;
+-
+-    for (layer = 0; layer < rtv->layer_count; ++layer)
+-        resource->sub_resource_bind_counts_device[rtv->sub_resource_idx + layer * texture->level_count].rtv += value;
++    --srv->resource->srv_bind_count_device;
+ }
+ 
+ static inline void wined3d_rtv_bind_count_inc(struct wined3d_rendertarget_view *rtv)
+ {
+-    wined3d_rtv_bind_count_add(rtv, 1);
++    ++rtv->resource->rtv_bind_count_device;
+ }
+ 
+ static inline void wined3d_rtv_bind_count_dec(struct wined3d_rendertarget_view *rtv)
+ {
+-    wined3d_rtv_bind_count_add(rtv, -1);
++    --rtv->resource->rtv_bind_count_device;
+ }
+ 
+-static inline bool wined3d_is_srv_rtv_bound(const struct wined3d_shader_resource_view *srv)
++static inline bool wined3d_rtv_overlaps_srv(const struct wined3d_rendertarget_view *rtv,
++        const struct wined3d_shader_resource_view *srv)
+ {
+-    struct wined3d_resource *resource = srv->resource;
+-    struct wined3d_texture *texture;
+-    unsigned int level, layer;
++    if (rtv->resource != srv->resource)
++        return false;
+ 
+-    if (!(resource->rtv_full_bind_count_device + resource->rtv_partial_bind_count_device))
+-        return FALSE;
++    if (wined3d_srv_all_subresources(srv) || wined3d_rtv_all_subresources(rtv))
++        return true;
+ 
+-    if (resource->rtv_full_bind_count_device || wined3d_srv_all_subresources(srv))
+-        return TRUE;
+-
+-    texture = texture_from_resource(resource);
+-
+-    for (layer = 0; layer < srv->desc.u.texture.layer_count; ++layer)
+-        for (level = 0; level < srv->desc.u.texture.level_count; ++level)
+-            if (resource->sub_resource_bind_counts_device[(layer + srv->desc.u.texture.layer_idx)
+-                    * texture->level_count + srv->desc.u.texture.level_idx + level].rtv)
+-                return TRUE;
+-
+-    return FALSE;
++    return rtv->sub_resource_idx >= srv->desc.u.texture.level_idx
++            && rtv->sub_resource_idx < srv->desc.u.texture.level_idx + srv->desc.u.texture.level_count
++            && rtv->layer_count >= srv->desc.u.texture.layer_idx;
+ }
+ 
+-static inline bool wined3d_is_rtv_srv_bound(const struct wined3d_rendertarget_view *rtv)
++static inline bool wined3d_is_srv_rtv_bound(const struct wined3d_state *state,
++        const struct wined3d_shader_resource_view *srv)
+ {
+-    struct wined3d_resource *resource = rtv->resource;
+-    struct wined3d_texture *texture;
+-    unsigned int layer;
++    unsigned int i;
+ 
+-    if (!(resource->srv_full_bind_count_device + resource->srv_partial_bind_count_device))
+-        return FALSE;
++    if (!srv->resource->rtv_bind_count_device)
++        return false;
+ 
+-    if (resource->srv_full_bind_count_device || wined3d_rtv_all_subresources(rtv))
+-        return TRUE;
++    for (i = 0; i < ARRAY_SIZE(state->fb.render_targets); ++i)
++    {
++        const struct wined3d_rendertarget_view *rtv;
+ 
+-    texture = texture_from_resource(resource);
++        if ((rtv = state->fb.render_targets[i]) && wined3d_rtv_overlaps_srv(rtv, srv))
++            return true;
++    }
+ 
+-    for (layer = 0; layer < rtv->layer_count; ++layer)
+-        if (resource->sub_resource_bind_counts_device[rtv->sub_resource_idx + layer * texture->level_count].srv)
+-            return TRUE;
+-
+-    return FALSE;
++    return false;
+ }
+ 
+ static inline void wined3d_viewport_get_z_range(const struct wined3d_viewport *vp, float *min_z, float *max_z)
+-- 
+2.30.2
+
