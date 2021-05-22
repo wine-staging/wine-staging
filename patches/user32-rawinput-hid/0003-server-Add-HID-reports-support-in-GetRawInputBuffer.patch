@@ -1,0 +1,115 @@
+From 508f296e7ae9804a34438fd0d03eafcdb1c888f4 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Fri, 14 May 2021 22:05:06 +0200
+Subject: [PATCH] server: Add HID reports support in GetRawInputBuffer.
+
+Returned by get_rawinput_buffer request after each hardware_msg_data.
+
+Wine-Bug: https://bugs.winehq.org/show_bug.cgi?id=50506
+---
+ dlls/user32/rawinput.c | 28 +++++++++++++++++++++++++---
+ server/queue.c         | 11 ++++++-----
+ 2 files changed, 31 insertions(+), 8 deletions(-)
+
+diff --git a/dlls/user32/rawinput.c b/dlls/user32/rawinput.c
+index e4e7bad508f..716047b4599 100644
+--- a/dlls/user32/rawinput.c
++++ b/dlls/user32/rawinput.c
+@@ -280,6 +280,8 @@ struct rawinput_thread_data *rawinput_thread_data(void)
+ 
+ BOOL rawinput_from_hardware_message(RAWINPUT *rawinput, const struct hardware_msg_data *msg_data)
+ {
++    SIZE_T size;
++
+     rawinput->header.dwType = msg_data->rawinput.type;
+     if (msg_data->rawinput.type == RIM_TYPEMOUSE)
+     {
+@@ -371,6 +373,23 @@ BOOL rawinput_from_hardware_message(RAWINPUT *rawinput, const struct hardware_ms
+         rawinput->data.keyboard.Message          = msg_data->rawinput.kbd.message;
+         rawinput->data.keyboard.ExtraInformation = msg_data->info;
+     }
++    else if (msg_data->rawinput.type == RIM_TYPEHID)
++    {
++        size = msg_data->rawinput.hid.count * msg_data->rawinput.hid.length;
++        if (size > RAWINPUT_BUFFER_SIZE - sizeof(*rawinput))
++        {
++            ERR( "Dropping unexpectedly large HID hardware message.\n" );
++            return FALSE;
++        }
++
++        rawinput->header.dwSize  = FIELD_OFFSET( RAWINPUT, data.hid.bRawData ) + size;
++        rawinput->header.hDevice = ULongToHandle( msg_data->rawinput.hid.device );
++        rawinput->header.wParam  = 0;
++
++        rawinput->data.hid.dwCount = msg_data->rawinput.hid.count;
++        rawinput->data.hid.dwSizeHid = msg_data->rawinput.hid.length;
++        memcpy( rawinput->data.hid.bRawData, msg_data + 1, size );
++    }
+     else
+     {
+         FIXME("Unhandled rawinput type %#x.\n", msg_data->rawinput.type);
+@@ -564,7 +583,7 @@ UINT WINAPI DECLSPEC_HOTPATCH GetRawInputBuffer(RAWINPUT *data, UINT *data_size,
+     struct hardware_msg_data *msg_data;
+     struct rawinput_thread_data *thread_data;
+     RAWINPUT *rawinput;
+-    UINT count = 0, rawinput_size, next_size, overhead;
++    UINT count = 0, rawinput_size, msg_size, next_size, overhead;
+     BOOL is_wow64;
+     int i;
+ 
+@@ -619,12 +638,15 @@ UINT WINAPI DECLSPEC_HOTPATCH GetRawInputBuffer(RAWINPUT *data, UINT *data_size,
+ 
+     for (i = 0; i < count; ++i)
+     {
+-        rawinput_from_hardware_message(data, msg_data);
++        if (!rawinput_from_hardware_message(data, msg_data)) break;
+         if (overhead) memmove((char *)&data->data + overhead, &data->data,
+                               data->header.dwSize - sizeof(RAWINPUTHEADER));
+         data->header.dwSize += overhead;
+         data = NEXTRAWINPUTBLOCK(data);
+-        msg_data++;
++        msg_size = sizeof(*msg_data);
++        if (msg_data->rawinput.type == RIM_TYPEHID)
++            msg_size += msg_data->rawinput.hid.count * msg_data->rawinput.hid.length;
++        msg_data = (struct hardware_msg_data *)((char *)msg_data + msg_size);
+     }
+ 
+     if (count == 0 && next_size == 0) *data_size = 0;
+diff --git a/server/queue.c b/server/queue.c
+index 4f1695c92cc..ebbe4049ae8 100644
+--- a/server/queue.c
++++ b/server/queue.c
+@@ -3311,16 +3311,17 @@ DECL_HANDLER(get_rawinput_buffer)
+     {
+         struct message *msg = LIST_ENTRY( ptr, struct message, entry );
+         struct hardware_msg_data *data = msg->data;
++        data_size_t hid_size = data->rawinput.type != RIM_TYPEHID ? 0 : msg->data_size - sizeof(*data);
+ 
+         ptr = list_next( &input->msg_list, ptr );
+         if (msg->msg != WM_INPUT) continue;
+ 
+-        next_size = req->rawinput_size;
++        next_size = req->rawinput_size + hid_size;
+         if (size + next_size > req->buffer_size) break;
+-        if (cur + sizeof(*data) > buf + get_reply_max_size()) break;
+-        if (cur + sizeof(*data) > buf + buf_size)
++        if (cur + msg->data_size > buf + get_reply_max_size()) break;
++        if (cur + msg->data_size > buf + buf_size)
+         {
+-            buf_size += buf_size / 2;
++            buf_size += buf_size / 2 + hid_size;
+             if (!(tmp = realloc( buf, buf_size )))
+             {
+                 set_error( STATUS_NO_MEMORY );
+@@ -3330,7 +3331,7 @@ DECL_HANDLER(get_rawinput_buffer)
+             buf = tmp;
+         }
+ 
+-        memcpy(cur, data, sizeof(*data));
++        memcpy( cur, data, msg->data_size );
+         list_remove( &msg->entry );
+         free_message( msg );
+ 
+-- 
+2.30.2
+
