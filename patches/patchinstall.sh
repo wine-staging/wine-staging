@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "9561af9a7d8d77e2f98341e278c842226cae47ed"
+	echo "94eb8d36461f6eb380b95e58629ad4871e5efef4"
 }
 
 # Show version information
@@ -222,7 +222,6 @@ patch_enable_all ()
 	enable_user32_FlashWindowEx="$1"
 	enable_user32_GetSystemMetrics="$1"
 	enable_user32_Implement_CascadeWindows="$1"
-	enable_user32_InternalGetWindowIcon="$1"
 	enable_user32_LR_LOADFROMFILE="$1"
 	enable_user32_ListBox_Size="$1"
 	enable_user32_LoadKeyboardLayoutEx="$1"
@@ -713,9 +712,6 @@ patch_enable ()
 			;;
 		user32-Implement-CascadeWindows)
 			enable_user32_Implement_CascadeWindows="$2"
-			;;
-		user32-InternalGetWindowIcon)
-			enable_user32_InternalGetWindowIcon="$2"
 			;;
 		user32-LR_LOADFROMFILE)
 			enable_user32_LR_LOADFROMFILE="$2"
@@ -1639,15 +1635,11 @@ fi
 # | 	Death of the Outsider, Pro Evolution Soccer 2019, Shantae and the Pirate's Curse, Space Engineers)
 # |
 # | Modified files:
-# |   *	dlls/d3d11/d3d11_private.h, dlls/d3d11/device.c, dlls/d3d11/tests/d3d11.c, dlls/wined3d/buffer.c,
-# | 	dlls/wined3d/context.c, dlls/wined3d/cs.c, dlls/wined3d/device.c, dlls/wined3d/resource.c, dlls/wined3d/texture.c,
-# | 	dlls/wined3d/wined3d.spec, dlls/wined3d/wined3d_private.h, include/wine/wined3d.h
+# |   *	dlls/d3d11/d3d11_private.h, dlls/d3d11/device.c, dlls/d3d11/tests/d3d11.c, dlls/wined3d/buffer.c, dlls/wined3d/cs.c,
+# | 	dlls/wined3d/device.c, dlls/wined3d/resource.c, dlls/wined3d/texture.c, dlls/wined3d/wined3d.spec,
+# | 	dlls/wined3d/wined3d_private.h, include/wine/wined3d.h
 # |
 if test "$enable_d3d11_Deferred_Context" -eq 1; then
-	patch_apply d3d11-Deferred_Context/0001-d3d11-tests-Add-a-couple-of-extra-tests-for-SRV-RTV-.patch
-	patch_apply d3d11-Deferred_Context/0002-wined3d-Check-for-SRV-RTV-binding-conflicts-per-wine.patch
-	patch_apply d3d11-Deferred_Context/0003-d3d11-tests-Add-some-tests-for-Map-on-deferred-conte.patch
-	patch_apply d3d11-Deferred_Context/0004-d3d11-tests-Add-some-tests-for-UpdateSubresource-on-.patch
 	patch_apply d3d11-Deferred_Context/0005-wined3d-Store-the-framebuffer-state-inline-in-struct.patch
 	patch_apply d3d11-Deferred_Context/0006-d3d11-Implement-ID3D11Device-CreateDeferredContext.patch
 	patch_apply d3d11-Deferred_Context/0007-d3d11-Implement-ID3D11Device1-CreateDeferredContext1.patch
@@ -2551,7 +2543,7 @@ fi
 # Patchset ntdll-APC_Performance
 # |
 # | Modified files:
-# |   *	dlls/ntdll/unix/file.c
+# |   *	dlls/ntdll/unix/file.c, dlls/ntdll/unix/unix_private.h
 # |
 if test "$enable_ntdll_APC_Performance" -eq 1; then
 	patch_apply ntdll-APC_Performance/0001-ntdll-Reuse-old-async-fileio-structures-if-possible.patch
@@ -3514,18 +3506,6 @@ fi
 if test "$enable_user32_Implement_CascadeWindows" -eq 1; then
 	patch_apply user32-Implement-CascadeWindows/0001-user32-Implement-CascadeWindows.patch
 	patch_apply user32-Implement-CascadeWindows/0002-user32-Implement-TileWindows.patch
-fi
-
-# Patchset user32-InternalGetWindowIcon
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#47915] user32: AddInternalGetWindowIcon stub.
-# |
-# | Modified files:
-# |   *	dlls/user32/user32.spec, dlls/user32/win.c
-# |
-if test "$enable_user32_InternalGetWindowIcon" -eq 1; then
-	patch_apply user32-InternalGetWindowIcon/0001-user32-AddInternalGetWindowIcon-stub.patch
 fi
 
 # Patchset user32-LR_LOADFROMFILE
