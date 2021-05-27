@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "8ddff3f51faca2c0824e204a69f69e241fb93d15"
+	echo "9bc7d41080f5e6805154b9d52a765f2be5d37279"
 }
 
 # Show version information
@@ -283,7 +283,6 @@ patch_enable_all ()
 	enable_ws2_32_APC_Performance="$1"
 	enable_ws2_32_Connect_Time="$1"
 	enable_ws2_32_getsockopt="$1"
-	enable_wtsapi32_EnumerateProcesses="$1"
 	enable_xactengine_initial="$1"
 	enable_xactengine3_7_Notification="$1"
 	enable_xactengine3_7_PrepareWave="$1"
@@ -895,9 +894,6 @@ patch_enable ()
 			;;
 		ws2_32-getsockopt)
 			enable_ws2_32_getsockopt="$2"
-			;;
-		wtsapi32-EnumerateProcesses)
-			enable_wtsapi32_EnumerateProcesses="$2"
 			;;
 		xactengine-initial)
 			enable_xactengine_initial="$2"
@@ -3236,7 +3232,6 @@ fi
 # | 	dlls/shell32/shfldr_unixfs.c, dlls/shell32/shlview.c, dlls/shell32/shlview_cmenu.c
 # |
 if test "$enable_shell32_Context_Menu" -eq 1; then
-	patch_apply shell32-Context_Menu/0001-shell32-Fix-copying-of-files-when-using-a-context-me.patch
 	patch_apply shell32-Context_Menu/0003-shell32-Implement-insert-paste-for-item-context-menu.patch
 	patch_apply shell32-Context_Menu/0005-shell32-Add-support-for-setting-getting-PREFERREDDRO.patch
 	patch_apply shell32-Context_Menu/0006-shell32-Add-parameter-to-ISFHelper-DeleteItems-to-al.patch
@@ -4256,18 +4251,6 @@ fi
 # |
 if test "$enable_ws2_32_getsockopt" -eq 1; then
 	patch_apply ws2_32-getsockopt/0001-ws2_32-Divide-values-returned-by-SO_RCVBUF-and-SO_SN.patch
-fi
-
-# Patchset wtsapi32-EnumerateProcesses
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#29903] Support for WTSEnumerateProcessesW
-# |
-# | Modified files:
-# |   *	dlls/wtsapi32/tests/wtsapi.c, dlls/wtsapi32/wtsapi32.c
-# |
-if test "$enable_wtsapi32_EnumerateProcesses" -eq 1; then
-	patch_apply wtsapi32-EnumerateProcesses/0001-wtsapi32-Partial-implementation-of-WTSEnumerateProce.patch
 fi
 
 # Patchset xactengine-initial

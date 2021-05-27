@@ -1,15 +1,15 @@
-From 598845132c5c0b49bb088b6e70a4127bc81924fb Mon Sep 17 00:00:00 2001
+From ff99f88bc6aabaa9ab5b7e4b44092f39a6079541 Mon Sep 17 00:00:00 2001
 From: Andrew Church <achurch@achurch.org>
 Date: Mon, 25 Feb 2019 11:23:12 +1100
 Subject: [PATCH] dinput: Allow reconnecting to disconnected joysticks
 
 Wine-bug: https://bugs.winehq.org/show_bug.cgi?id=34297
 ---
- dlls/dinput/joystick_linuxinput.c | 148 +++++++++++++++++++++++-------
- 1 file changed, 113 insertions(+), 35 deletions(-)
+ dlls/dinput/joystick_linuxinput.c | 152 ++++++++++++++++++++++--------
+ 1 file changed, 115 insertions(+), 37 deletions(-)
 
 diff --git a/dlls/dinput/joystick_linuxinput.c b/dlls/dinput/joystick_linuxinput.c
-index 14acbb5cd8c..ef7b160ba58 100644
+index 307b447d237..fcd60724853 100644
 --- a/dlls/dinput/joystick_linuxinput.c
 +++ b/dlls/dinput/joystick_linuxinput.c
 @@ -84,6 +84,13 @@ struct wine_input_absinfo {
@@ -25,8 +25,8 @@ index 14acbb5cd8c..ef7b160ba58 100644
 +
  /* implemented in effect_linuxinput.c */
  HRESULT linuxinput_create_effect(int* fd, REFGUID rguid, struct list *parent_list_entry, LPDIRECTINPUTEFFECT* peff);
- HRESULT linuxinput_get_info_A(int fd, REFGUID rguid, LPDIEFFECTINFOA info);
-@@ -123,6 +130,7 @@ struct JoystickImpl
+ HRESULT linuxinput_get_info_W(int fd, REFGUID rguid, LPDIEFFECTINFOW info);
+@@ -122,6 +129,7 @@ struct JoystickImpl
  
  	/* joystick private */
  	int				joyfd;
@@ -34,7 +34,7 @@ index 14acbb5cd8c..ef7b160ba58 100644
  
  	int                             dev_axes_to_di[ABS_MAX];
          POINTL                          povs[4];
-@@ -468,6 +476,7 @@ static JoystickImpl *alloc_device(REFGUID rguid, IDirectInputImpl *dinput, unsig
+@@ -467,6 +475,7 @@ static JoystickImpl *alloc_device(REFGUID rguid, IDirectInputImpl *dinput, unsig
      newDevice->generic.base.dinput = dinput;
      newDevice->generic.joy_polldev = joy_polldev;
      newDevice->joyfd       = -1;
@@ -42,106 +42,98 @@ index 14acbb5cd8c..ef7b160ba58 100644
      newDevice->joydev      = &joydevs[index];
      newDevice->generic.name        = newDevice->joydev->name;
      list_init(&newDevice->ff_effects);
-@@ -675,38 +684,15 @@ static HRESULT joydev_create_device(IDirectInputImpl *dinput, REFGUID rguid, REF
+@@ -674,6 +683,44 @@ static HRESULT joydev_create_device(IDirectInputImpl *dinput, REFGUID rguid, REF
      return DIERR_DEVICENOTREG;
  }
  
--
--const struct dinput_device joystick_linuxinput_device = {
--  "Wine Linux-input joystick driver",
--  joydev_enum_deviceA,
--  joydev_enum_deviceW,
--  joydev_create_device
--};
--
--/******************************************************************************
--  *     Acquire : gets exclusive control of the joystick
--  */
--static HRESULT WINAPI JoystickWImpl_Acquire(LPDIRECTINPUTDEVICE8W iface)
 +static int joydev_open_evdev(JoystickImpl *This)
- {
--    JoystickImpl *This = impl_from_IDirectInputDevice8W(iface);
--    HRESULT res;
--
--    TRACE("(this=%p)\n",This);
++{
 +    int fd;
- 
--    if ((res = IDirectInputDevice2WImpl_Acquire(iface)) != DI_OK)
++
 +    if ((fd = open(This->joydev->device, O_RDWR)) == -1)
-     {
--        WARN("Failed to acquire: %x\n", res);
--        return res;
--    }
--
--    if ((This->joyfd = open(This->joydev->device, O_RDWR)) == -1)
--    {
--        if ((This->joyfd = open(This->joydev->device, O_RDONLY)) == -1)
++    {
 +        if ((fd = open(This->joydev->device, O_RDONLY)) == -1)
-         {
-             /* Couldn't open the device at all */
--            ERR("Failed to open device %s: %d %s\n", This->joydev->device, errno, strerror(errno));
--            IDirectInputDevice2WImpl_Unacquire(iface);
--            return DIERR_NOTFOUND;
-         }
-         else
-         {
-@@ -721,18 +707,53 @@ static HRESULT WINAPI JoystickWImpl_Acquire(LPDIRECTINPUTDEVICE8W iface)
-         event.type = EV_FF;
-         event.code = FF_GAIN;
-         event.value = This->ff_gain;
--        if (write(This->joyfd, &event, sizeof(event)) == -1)
++        {
++            /* Couldn't open the device at all */
++        }
++        else
++        {
++            /* Couldn't open in r/w but opened in read-only. */
++            WARN("Could not open %s in read-write mode.  Force feedback will be disabled.\n", This->joydev->device);
++        }
++    }
++    else
++    {
++        struct input_event event;
++
++        event.type = EV_FF;
++        event.code = FF_GAIN;
++        event.value = This->ff_gain;
 +        if (write(fd, &event, sizeof(event)) == -1)
-             ERR("Failed to set gain (%i): %d %s\n", This->ff_gain, errno, strerror(errno));
-         if (!This->ff_autocenter)
-         {
-             /* Disable autocenter. */
-             event.code = FF_AUTOCENTER;
-             event.value = 0;
--            if (write(This->joyfd, &event, sizeof(event)) == -1)
++            ERR("Failed to set gain (%i): %d %s\n", This->ff_gain, errno, strerror(errno));
++        if (!This->ff_autocenter)
++        {
++            /* Disable autocenter. */
++            event.code = FF_AUTOCENTER;
++            event.value = 0;
 +            if (write(fd, &event, sizeof(event)) == -1)
-                 ERR("Failed disabling autocenter: %d %s\n", errno, strerror(errno));
-         }
-     }
- 
++                ERR("Failed disabling autocenter: %d %s\n", errno, strerror(errno));
++        }
++    }
++
 +    return fd;
 +}
 +
-+
-+const struct dinput_device joystick_linuxinput_device = {
-+  "Wine Linux-input joystick driver",
-+  joydev_enum_deviceA,
-+  joydev_enum_deviceW,
-+  joydev_create_device
-+};
-+
-+/******************************************************************************
-+  *     Acquire : gets exclusive control of the joystick
-+  */
-+static HRESULT WINAPI JoystickWImpl_Acquire(LPDIRECTINPUTDEVICE8W iface)
-+{
-+    JoystickImpl *This = impl_from_IDirectInputDevice8W(iface);
-+    HRESULT res;
-+
-+    TRACE("(this=%p)\n",This);
-+
-+    if ((res = IDirectInputDevice2WImpl_Acquire(iface)) != DI_OK)
-+    {
-+        WARN("Failed to acquire: %x\n", res);
-+        return res;
-+    }
-+
+ 
+ const struct dinput_device joystick_linuxinput_device = {
+   "Wine Linux-input joystick driver",
+@@ -698,40 +745,14 @@ static HRESULT WINAPI JoystickWImpl_Acquire(LPDIRECTINPUTDEVICE8W iface)
+         return res;
+     }
+ 
+-    if ((This->joyfd = open(This->joydev->device, O_RDWR)) == -1)
 +    if ((This->joyfd = joydev_open_evdev(This)) == -1)
-+    {
+     {
+-        if ((This->joyfd = open(This->joydev->device, O_RDONLY)) == -1)
+-        {
+-            /* Couldn't open the device at all */
+-            ERR("Failed to open device %s: %d %s\n", This->joydev->device, errno, strerror(errno));
+-            IDirectInputDevice2WImpl_Unacquire(iface);
+-            return DIERR_NOTFOUND;
+-        }
+-        else
+-        {
+-            /* Couldn't open in r/w but opened in read-only. */
+-            WARN("Could not open %s in read-write mode.  Force feedback will be disabled.\n", This->joydev->device);
+-        }
+-    }
+-    else
+-    {
+-        struct input_event event;
+-
+-        event.type = EV_FF;
+-        event.code = FF_GAIN;
+-        event.value = This->ff_gain;
+-        if (write(This->joyfd, &event, sizeof(event)) == -1)
+-            ERR("Failed to set gain (%i): %d %s\n", This->ff_gain, errno, strerror(errno));
+-        if (!This->ff_autocenter)
+-        {
+-            /* Disable autocenter. */
+-            event.code = FF_AUTOCENTER;
+-            event.value = 0;
+-            if (write(This->joyfd, &event, sizeof(event)) == -1)
+-                ERR("Failed disabling autocenter: %d %s\n", errno, strerror(errno));
+-        }
 +        ERR("Failed to open device %s: %d %s\n", This->joydev->device, errno, strerror(errno));
 +        IDirectInputDevice2WImpl_Unacquire(iface);
 +        return DIERR_NOTFOUND;
-+    }
-+
+     }
+ 
 +    This->joyfd_state = WINE_FD_STATE_OK;
      return DI_OK;
  }
  
-@@ -764,6 +785,7 @@ static HRESULT WINAPI JoystickWImpl_Unacquire(LPDIRECTINPUTDEVICE8W iface)
+@@ -763,6 +784,7 @@ static HRESULT WINAPI JoystickWImpl_Unacquire(LPDIRECTINPUTDEVICE8W iface)
  
        close(This->joyfd);
        This->joyfd = -1;
@@ -149,7 +141,7 @@ index 14acbb5cd8c..ef7b160ba58 100644
      }
      return res;
  }
-@@ -802,23 +824,79 @@ static void joy_polldev( IDirectInputDevice8W *iface )
+@@ -801,23 +823,79 @@ static void joy_polldev( IDirectInputDevice8W *iface )
      struct input_event ie;
      JoystickImpl *This = impl_from_IDirectInputDevice8W( iface );
  
