@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "9bc7d41080f5e6805154b9d52a765f2be5d37279"
+	echo "ce151dd681fe5ee80daba96dce12e37d6846e152"
 }
 
 # Show version information
@@ -1631,19 +1631,10 @@ fi
 # | 	Death of the Outsider, Pro Evolution Soccer 2019, Shantae and the Pirate's Curse, Space Engineers)
 # |
 # | Modified files:
-# |   *	dlls/d3d11/d3d11_private.h, dlls/d3d11/device.c, dlls/d3d11/tests/d3d11.c, dlls/wined3d/buffer.c, dlls/wined3d/cs.c,
-# | 	dlls/wined3d/device.c, dlls/wined3d/resource.c, dlls/wined3d/texture.c, dlls/wined3d/wined3d.spec,
-# | 	dlls/wined3d/wined3d_private.h, include/wine/wined3d.h
+# |   *	dlls/d3d11/tests/d3d11.c, dlls/wined3d/buffer.c, dlls/wined3d/cs.c, dlls/wined3d/resource.c, dlls/wined3d/texture.c,
+# | 	dlls/wined3d/wined3d_private.h
 # |
 if test "$enable_d3d11_Deferred_Context" -eq 1; then
-	patch_apply d3d11-Deferred_Context/0005-wined3d-Store-the-framebuffer-state-inline-in-struct.patch
-	patch_apply d3d11-Deferred_Context/0006-d3d11-Implement-ID3D11Device-CreateDeferredContext.patch
-	patch_apply d3d11-Deferred_Context/0007-d3d11-Implement-ID3D11Device1-CreateDeferredContext1.patch
-	patch_apply d3d11-Deferred_Context/0008-wined3d-Keep-a-list-of-acquired-resources-in-struct-.patch
-	patch_apply d3d11-Deferred_Context/0009-d3d11-Implement-ID3D11DeviceContext-ClearState-using.patch
-	patch_apply d3d11-Deferred_Context/0010-d3d11-Implement-ID3D11DeviceContext-FinishCommandLis.patch
-	patch_apply d3d11-Deferred_Context/0011-wined3d-Implement-restoring-context-in-wined3d_defer.patch
-	patch_apply d3d11-Deferred_Context/0012-d3d11-Implement-ID3D11DeviceContext-ExecuteCommandLi.patch
 	patch_apply d3d11-Deferred_Context/0013-wined3d-Implement-wined3d_deferred_context_update_su.patch
 	patch_apply d3d11-Deferred_Context/0014-wined3d-Implement-wined3d_deferred_context_map.patch
 fi
@@ -1850,7 +1841,7 @@ fi
 # |
 # | Modified files:
 # |   *	dlls/dinput/config.c, dlls/dinput/device.c, dlls/dinput/device_private.h, dlls/dinput/dinput_main.c,
-# | 	dlls/dinput/joystick.c, dlls/dinput/keyboard.c, dlls/dinput/mouse.c, dlls/dinput8/tests/device.c
+# | 	dlls/dinput/joystick.c, dlls/dinput8/tests/device.c
 # |
 if test "$enable_dinput_joy_mappings" -eq 1; then
 	patch_apply dinput-joy-mappings/0001-dinput-Load-users-Joystick-mappings.patch
