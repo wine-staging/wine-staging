@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "ce151dd681fe5ee80daba96dce12e37d6846e152"
+	echo "35180d368a94156cb77b09560b24d3af428b988b"
 }
 
 # Show version information
@@ -1840,7 +1840,7 @@ fi
 # |   *	[#34108] dinput: Improve support for user Joystick configuration.
 # |
 # | Modified files:
-# |   *	dlls/dinput/config.c, dlls/dinput/device.c, dlls/dinput/device_private.h, dlls/dinput/dinput_main.c,
+# |   *	dlls/dinput/ansi.c, dlls/dinput/config.c, dlls/dinput/device.c, dlls/dinput/device_private.h, dlls/dinput/dinput_main.c,
 # | 	dlls/dinput/joystick.c, dlls/dinput8/tests/device.c
 # |
 if test "$enable_dinput_joy_mappings" -eq 1; then
@@ -1859,11 +1859,10 @@ fi
 # |   *	[#47326] dinput: Allow mapping of controls based of genre type.
 # |
 # | Modified files:
-# |   *	dlls/dinput/device.c, dlls/dinput/dinput_main.c
+# |   *	dlls/dinput/device.c
 # |
 if test "$enable_dinput_SetActionMap_genre" -eq 1; then
 	patch_apply dinput-SetActionMap-genre/0001-dinput-Allow-mapping-of-controls-based-of-Genre-type.patch
-	patch_apply dinput-SetActionMap-genre/0002-dinput-Improved-tracing-of-Semantic-value.patch
 fi
 
 # Patchset dinput-axis-recalc
