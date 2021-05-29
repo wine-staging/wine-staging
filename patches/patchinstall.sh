@@ -283,6 +283,7 @@ patch_enable_all ()
 	enable_ws2_32_APC_Performance="$1"
 	enable_ws2_32_Connect_Time="$1"
 	enable_ws2_32_getsockopt="$1"
+	enable_wscript_support_d_u_switches="$1"
 	enable_xactengine_initial="$1"
 	enable_xactengine3_7_Notification="$1"
 	enable_xactengine3_7_PrepareWave="$1"
@@ -894,6 +895,9 @@ patch_enable ()
 			;;
 		ws2_32-getsockopt)
 			enable_ws2_32_getsockopt="$2"
+			;;
+		wscript-support-d-u-switches)
+			enable_wscript_support_d_u_switches="$2"
 			;;
 		xactengine-initial)
 			enable_xactengine_initial="$2"
@@ -4241,6 +4245,18 @@ fi
 # |
 if test "$enable_ws2_32_getsockopt" -eq 1; then
 	patch_apply ws2_32-getsockopt/0001-ws2_32-Divide-values-returned-by-SO_RCVBUF-and-SO_SN.patch
+fi
+
+# Patchset wscript-support-d-u-switches
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#49905] wscript: return TRUE for /d and /u stub switches
+# |
+# | Modified files:
+# |   *	programs/wscript/main.c
+# |
+if test "$enable_wscript_support_d_u_switches" -eq 1; then
+	patch_apply wscript-support-d-u-switches/0001-wscript-return-TRUE-for-d-and-u-stub-switches.patch
 fi
 
 # Patchset xactengine-initial
