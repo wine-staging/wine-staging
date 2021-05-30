@@ -238,6 +238,7 @@ patch_enable_all ()
 	enable_user32_recursive_activation="$1"
 	enable_uxtheme_CloseThemeClass="$1"
 	enable_version_VerQueryValue="$1"
+	enable_wbemdisp_ISWbemObject_Invoke="$1"
 	enable_widl_SLTG_Typelib_Support="$1"
 	enable_windowscodecs_GIF_Encoder="$1"
 	enable_windowscodecs_TIFF_Support="$1"
@@ -760,6 +761,9 @@ patch_enable ()
 			;;
 		version-VerQueryValue)
 			enable_version_VerQueryValue="$2"
+			;;
+		wbemdisp-ISWbemObject-Invoke)
+			enable_wbemdisp_ISWbemObject_Invoke="$2"
 			;;
 		widl-SLTG_Typelib_Support)
 			enable_widl_SLTG_Typelib_Support="$2"
@@ -3718,6 +3722,19 @@ fi
 # |
 if test "$enable_version_VerQueryValue" -eq 1; then
 	patch_apply version-VerQueryValue/0001-version-Test-for-VerQueryValueA-try-2.patch
+fi
+
+# Patchset wbemdisp-ISWbemObject-Invoke
+# |
+# | Modified files:
+# |   *	dlls/vbscript/interp.c, dlls/vbscript/tests/lang.vbs, dlls/vbscript/tests/run.c, dlls/vbscript/utils.c,
+# | 	dlls/wbemdisp/locator.c, dlls/wbemprox/query.c
+# |
+if test "$enable_wbemdisp_ISWbemObject_Invoke" -eq 1; then
+	patch_apply wbemdisp-ISWbemObject-Invoke/0001-wbemdisp-Support-DISPATCH_METHOD-in-ISWbemObject-Inv.patch
+	patch_apply wbemdisp-ISWbemObject-Invoke/0002-vbscript-Support-VT_BSTR-VT_ARRAY-Iterator.patch
+	patch_apply wbemdisp-ISWbemObject-Invoke/0003-wbemprox-Support-VT_BYREF-in-to_longlong.patch
+	patch_apply wbemdisp-ISWbemObject-Invoke/0004-vbscript-Add-wmi-test.patch
 fi
 
 # Patchset windowscodecs-GIF_Encoder
