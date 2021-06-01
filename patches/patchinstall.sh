@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "35180d368a94156cb77b09560b24d3af428b988b"
+	echo "96030ce738aa20f85a5138ec7c231c19a086f019"
 }
 
 # Show version information
@@ -142,7 +142,6 @@ patch_enable_all ()
 	enable_mshtml_HTMLLocation_put_hash="$1"
 	enable_mshtml_TranslateAccelerator="$1"
 	enable_msi_msi_vcl_get_cost="$1"
-	enable_msvcrt_Math_Precision="$1"
 	enable_msxml3_FreeThreadedXMLHTTP60="$1"
 	enable_ntdll_APC_Performance="$1"
 	enable_ntdll_ApiSetMap="$1"
@@ -232,7 +231,6 @@ patch_enable_all ()
 	enable_user32_ScrollWindowEx="$1"
 	enable_user32_message_order="$1"
 	enable_user32_msgbox_Support_WM_COPY_mesg="$1"
-	enable_user32_rawinput_hid="$1"
 	enable_user32_rawinput_mouse="$1"
 	enable_user32_rawinput_mouse_experimental="$1"
 	enable_user32_recursive_activation="$1"
@@ -474,9 +472,6 @@ patch_enable ()
 			;;
 		msi-msi_vcl_get_cost)
 			enable_msi_msi_vcl_get_cost="$2"
-			;;
-		msvcrt-Math_Precision)
-			enable_msvcrt_Math_Precision="$2"
 			;;
 		msxml3-FreeThreadedXMLHTTP60)
 			enable_msxml3_FreeThreadedXMLHTTP60="$2"
@@ -744,9 +739,6 @@ patch_enable ()
 			;;
 		user32-msgbox-Support-WM_COPY-mesg)
 			enable_user32_msgbox_Support_WM_COPY_mesg="$2"
-			;;
-		user32-rawinput-hid)
-			enable_user32_rawinput_hid="$2"
 			;;
 		user32-rawinput-mouse)
 			enable_user32_rawinput_mouse="$2"
@@ -1296,20 +1288,6 @@ if test "$enable_user32_rawinput_mouse_experimental" -eq 1; then
 		abort "Patchset user32-rawinput-mouse disabled, but user32-rawinput-mouse-experimental depends on that."
 	fi
 	enable_user32_rawinput_mouse=1
-fi
-
-if test "$enable_user32_rawinput_mouse" -eq 1; then
-	if test "$enable_user32_rawinput_hid" -gt 1; then
-		abort "Patchset user32-rawinput-hid disabled, but user32-rawinput-mouse depends on that."
-	fi
-	enable_user32_rawinput_hid=1
-fi
-
-if test "$enable_user32_rawinput_hid" -eq 1; then
-	if test "$enable_loader_KeyboardLayouts" -gt 1; then
-		abort "Patchset loader-KeyboardLayouts disabled, but user32-rawinput-hid depends on that."
-	fi
-	enable_loader_KeyboardLayouts=1
 fi
 
 if test "$enable_stdole32_tlb_SLTG_Typelib" -eq 1; then
@@ -2511,18 +2489,6 @@ if test "$enable_msi_msi_vcl_get_cost" -eq 1; then
 	patch_apply msi-msi_vcl_get_cost/0001-msi-Do-not-sign-extend-after-multiplying.patch
 fi
 
-# Patchset msvcrt-Math_Precision
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#37149] Calculate msvcrt exponential math operations with higher precision
-# |
-# | Modified files:
-# |   *	dlls/msvcrt/unixlib.c
-# |
-if test "$enable_msvcrt_Math_Precision" -eq 1; then
-	patch_apply msvcrt-Math_Precision/0001-msvcrt-Calculate-sinh-cosh-exp-pow-with-higher-preci.patch
-fi
-
 # Patchset msxml3-FreeThreadedXMLHTTP60
 # |
 # | This patchset fixes the following Wine bugs:
@@ -3630,29 +3596,7 @@ if test "$enable_user32_msgbox_Support_WM_COPY_mesg" -eq 1; then
 	patch_apply user32-msgbox-Support-WM_COPY-mesg/0002-user32-msgbox-Use-a-windows-hook-to-trap-Ctrl-C.patch
 fi
 
-# Patchset user32-rawinput-hid
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	loader-KeyboardLayouts
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#50506] WM_INPUT messages are not received for HID devices registered with RegisterRawInputDevices
-# |
-# | Modified files:
-# |   *	dlls/user32/message.c, dlls/user32/rawinput.c, dlls/user32/user_private.h, server/protocol.def, server/queue.c,
-# | 	server/trace.c, tools/make_requests
-# |
-if test "$enable_user32_rawinput_hid" -eq 1; then
-	patch_apply user32-rawinput-hid/0001-server-Add-extra-data-bytes-to-be-added-after-hardwa.patch
-	patch_apply user32-rawinput-hid/0002-server-Add-HID-reports-count-length-to-rawinput-unio.patch
-	patch_apply user32-rawinput-hid/0003-server-Add-HID-reports-support-in-GetRawInputBuffer.patch
-	patch_apply user32-rawinput-hid/0004-server-Implement-WM_INPUT-RIM_TYPEHID-message-dispat.patch
-fi
-
 # Patchset user32-rawinput-mouse
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	loader-KeyboardLayouts, user32-rawinput-hid
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#42631] Mouse drift, jump or don't react to small slow movements in Unity-engine games and Fallout 4 (partly fixed in
@@ -3679,7 +3623,7 @@ fi
 # Patchset user32-rawinput-mouse-experimental
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	loader-KeyboardLayouts, user32-rawinput-hid, user32-rawinput-mouse
+# |   *	user32-rawinput-mouse
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#45882] - Raw Input should use untransformed mouse values (affects Overwatch, several Source games).
