@@ -240,6 +240,7 @@ patch_enable_all ()
 	enable_version_VerQueryValue="$1"
 	enable_wbemdisp_ISWbemObject_Invoke="$1"
 	enable_widl_SLTG_Typelib_Support="$1"
+	enable_windows_networking_connectivity_new_dll="$1"
 	enable_windowscodecs_GIF_Encoder="$1"
 	enable_windowscodecs_TIFF_Support="$1"
 	enable_wine_inf_Directory_ContextMenuHandlers="$1"
@@ -767,6 +768,9 @@ patch_enable ()
 			;;
 		widl-SLTG_Typelib_Support)
 			enable_widl_SLTG_Typelib_Support="$2"
+			;;
+		windows.networking.connectivity-new-dll)
+			enable_windows_networking_connectivity_new_dll="$2"
 			;;
 		windowscodecs-GIF_Encoder)
 			enable_windowscodecs_GIF_Encoder="$2"
@@ -3726,6 +3730,10 @@ fi
 
 # Patchset wbemdisp-ISWbemObject-Invoke
 # |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#51120] wbemdisp: Support DISPATCH_METHOD in ISWbemObject Invoke.
+# |   *	[#39463] vbscript: Support looping of data from WMI
+# |
 # | Modified files:
 # |   *	dlls/vbscript/interp.c, dlls/vbscript/tests/lang.vbs, dlls/vbscript/tests/run.c, dlls/vbscript/utils.c,
 # | 	dlls/wbemdisp/locator.c, dlls/wbemprox/query.c
@@ -3735,6 +3743,28 @@ if test "$enable_wbemdisp_ISWbemObject_Invoke" -eq 1; then
 	patch_apply wbemdisp-ISWbemObject-Invoke/0002-vbscript-Support-VT_BSTR-VT_ARRAY-Iterator.patch
 	patch_apply wbemdisp-ISWbemObject-Invoke/0003-wbemprox-Support-VT_BYREF-in-to_longlong.patch
 	patch_apply wbemdisp-ISWbemObject-Invoke/0004-vbscript-Add-wmi-test.patch
+fi
+
+# Patchset windows.networking.connectivity-new-dll
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#46534] Implement INetworkInformationStatics interface
+# |
+# | Modified files:
+# |   *	configure.ac, dlls/windows.networking.connectivity/Makefile.in, dlls/windows.networking.connectivity/network.rgs,
+# | 	dlls/windows.networking.connectivity/rsrc.rc, dlls/windows.networking.connectivity/windows.networking.connectivity.spec,
+# | 	dlls/windows.networking.connectivity/windows.networking.connectivity_main.c, include/Makefile.in,
+# | 	include/windows.networking.connectivity.idl, include/windows.networking.idl
+# |
+if test "$enable_windows_networking_connectivity_new_dll" -eq 1; then
+	patch_apply windows.networking.connectivity-new-dll/0001-include-Add-windows.networking.connectivity.idl.patch
+	patch_apply windows.networking.connectivity-new-dll/0002-include-Add-windows.networking.idl.patch
+	patch_apply windows.networking.connectivity-new-dll/0003-windows.networking.connectivity-Add-stub-dll.patch
+	patch_apply windows.networking.connectivity-new-dll/0004-windows.networking.connectivity-Implement-IActivatio.patch
+	patch_apply windows.networking.connectivity-new-dll/0005-windows.networking.connectivity-Implement-INetworkIn.patch
+	patch_apply windows.networking.connectivity-new-dll/0006-windows.networking.connectivity-Registry-DLL.patch
+	patch_apply windows.networking.connectivity-new-dll/0007-windows.networking.connectivity-Implement-INetworkIn.patch
+	patch_apply windows.networking.connectivity-new-dll/0008-windows.networking.connectivity-IConnectionProfile-G.patch
 fi
 
 # Patchset windowscodecs-GIF_Encoder
