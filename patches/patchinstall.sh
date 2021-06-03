@@ -184,7 +184,6 @@ patch_enable_all ()
 	enable_packager_DllMain="$1"
 	enable_programs_findstr="$1"
 	enable_programs_systeminfo="$1"
-	enable_quartz_MediaSeeking_Positions="$1"
 	enable_riched20_Class_Tests="$1"
 	enable_riched20_IText_Interface="$1"
 	enable_secur32_InitializeSecurityContextW="$1"
@@ -597,9 +596,6 @@ patch_enable ()
 			;;
 		programs-systeminfo)
 			enable_programs_systeminfo="$2"
-			;;
-		quartz-MediaSeeking_Positions)
-			enable_quartz_MediaSeeking_Positions="$2"
 			;;
 		riched20-Class_Tests)
 			enable_riched20_Class_Tests="$2"
@@ -3004,15 +3000,6 @@ fi
 # |
 if test "$enable_programs_systeminfo" -eq 1; then
 	patch_apply programs-systeminfo/0001-systeminfo-add-basic-functionality.patch
-fi
-
-# Patchset quartz-MediaSeeking_Positions
-# |
-# | Modified files:
-# |   *	dlls/strmbase/pospass.c
-# |
-if test "$enable_quartz_MediaSeeking_Positions" -eq 1; then
-	patch_apply quartz-MediaSeeking_Positions/0001-strmbase-Fix-MediaSeekingPassThru_GetPositions-retur.patch
 fi
 
 # Patchset riched20-Class_Tests
