@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "649385e7d47091fa25b9114668075b06d2942e2f"
+	echo "aadcff491fc9d823a90cee567c8e1d55cd9a589b"
 }
 
 # Show version information
@@ -1455,11 +1455,12 @@ fi
 # Patchset Compiler_Warnings
 # |
 # | Modified files:
-# |   *	dlls/d2d1/bitmap.c, dlls/d2d1/brush.c, dlls/d2d1/dc_render_target.c, dlls/d2d1/geometry.c,
-# | 	dlls/d2d1/hwnd_render_target.c, dlls/d2d1/state_block.c, dlls/d3d11/view.c, dlls/d3d8/texture.c, dlls/d3d9/texture.c,
-# | 	dlls/ddraw/viewport.c, dlls/dwrite/font.c, dlls/dwrite/layout.c, dlls/msxml3/schema.c, dlls/oleaut32/oleaut.c,
-# | 	dlls/rpcrt4/cstub.c, dlls/vbscript/vbdisp.c, dlls/windowscodecs/info.c, dlls/wsdapi/msgparams.c, include/wine/list.h,
-# | 	include/wine/rbtree.h, include/winnt.h
+# |   *	dlls/bcrypt/gnutls.c, dlls/d2d1/bitmap.c, dlls/d2d1/brush.c, dlls/d2d1/dc_render_target.c, dlls/d2d1/geometry.c,
+# | 	dlls/d2d1/hwnd_render_target.c, dlls/d2d1/state_block.c, dlls/d3d10/effect.c, dlls/d3d11/view.c, dlls/d3d8/texture.c,
+# | 	dlls/d3d9/texture.c, dlls/ddraw/viewport.c, dlls/dwrite/font.c, dlls/dwrite/layout.c, dlls/dxgi/output.c,
+# | 	dlls/msctf/range.c, dlls/msxml3/schema.c, dlls/ntdll/unix/virtual.c, dlls/oleaut32/oleaut.c, dlls/rpcrt4/cstub.c,
+# | 	dlls/rpcrt4/ndr_marshall.c, dlls/rpcrt4/ndr_typelib.c, dlls/vbscript/vbdisp.c, dlls/wbemdisp/locator.c,
+# | 	dlls/windowscodecs/info.c, dlls/wsdapi/msgparams.c, include/wine/list.h, include/wine/rbtree.h, include/winnt.h
 # |
 if test "$enable_Compiler_Warnings" -eq 1; then
 	patch_apply Compiler_Warnings/0001-windowscodecs-Avoid-implicit-cast-of-interface-point.patch
@@ -1475,6 +1476,14 @@ if test "$enable_Compiler_Warnings" -eq 1; then
 	patch_apply Compiler_Warnings/0030-vbscript-Avoid-implicit-cast-of-interface-pointer.patch
 	patch_apply Compiler_Warnings/0031-include-Check-element-type-in-CONTAINING_RECORD-and-.patch
 	patch_apply Compiler_Warnings/0032-wsdapi-Avoid-implicit-cast-of-interface-pointer.patch
+	patch_apply Compiler_Warnings/0033-ntdll-Avoid-implicit-cast-of-interface-pointer.patch
+	patch_apply Compiler_Warnings/0034-bcrypt-Stop-compile-error-when-HAVE_GNUTLS_CIPHER_IN.patch
+	patch_apply Compiler_Warnings/0035-d3d10-Avoid-implicit-cast-of-interface-pointer.patch
+	patch_apply Compiler_Warnings/0036-d2d1-Avoid-implicit-cast-of-interface-pointer.patch
+	patch_apply Compiler_Warnings/0037-dxgi-Avoid-implicit-cast-of-interface-pointer.patch
+	patch_apply Compiler_Warnings/0038-msctf-Avoid-implicit-cast-of-interface-pointer.patch
+	patch_apply Compiler_Warnings/0039-rpcrt4-Avoid-implicit-cast-of-interface-pointer.patch
+	patch_apply Compiler_Warnings/0040-wbemdisp-Avoid-implicit-cast-of-interface-pointer.patch
 fi
 
 # Patchset Pipelight
