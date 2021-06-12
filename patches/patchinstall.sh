@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "2a505efb1ca14f33503657eb070de6edd484b4f3"
+	echo "f5bd0be6a44c1c7d69afb8b8eb6311923e7762a1"
 }
 
 # Show version information
@@ -150,7 +150,6 @@ patch_enable_all ()
 	enable_ntdll_Builtin_Prot="$1"
 	enable_ntdll_CriticalSection="$1"
 	enable_ntdll_DOS_Attributes="$1"
-	enable_ntdll_Dealloc_Thread_Stack="$1"
 	enable_ntdll_Exception="$1"
 	enable_ntdll_FileDispositionInformation="$1"
 	enable_ntdll_FileFsFullSizeInformation="$1"
@@ -496,9 +495,6 @@ patch_enable ()
 			;;
 		ntdll-DOS_Attributes)
 			enable_ntdll_DOS_Attributes="$2"
-			;;
-		ntdll-Dealloc_Thread_Stack)
-			enable_ntdll_Dealloc_Thread_Stack="$2"
 			;;
 		ntdll-Exception)
 			enable_ntdll_Exception="$2"
@@ -2626,15 +2622,6 @@ if test "$enable_ntdll_CriticalSection" -eq 1; then
 	patch_apply ntdll-CriticalSection/0002-ntdll-Add-inline-versions-of-RtlEnterCriticalSection.patch
 	patch_apply ntdll-CriticalSection/0003-ntdll-Use-fast-CS-functions-for-heap-locking.patch
 	patch_apply ntdll-CriticalSection/0004-ntdll-Use-fast-CS-functions-for-threadpool-locking.patch
-fi
-
-# Patchset ntdll-Dealloc_Thread_Stack
-# |
-# | Modified files:
-# |   *	dlls/ntdll/unix/unix_private.h, dlls/ntdll/unix/virtual.c
-# |
-if test "$enable_ntdll_Dealloc_Thread_Stack" -eq 1; then
-	patch_apply ntdll-Dealloc_Thread_Stack/0001-ntdll-Do-not-allow-to-allocate-thread-stack-for-curr.patch
 fi
 
 # Patchset ntdll-Exception

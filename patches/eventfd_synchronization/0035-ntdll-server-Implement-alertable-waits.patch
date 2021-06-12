@@ -1,4 +1,4 @@
-From 39109644ddeb39a7a42c2f10657b35c515dfee46 Mon Sep 17 00:00:00 2001
+From 52c6ab47d908e75409bb3b7f2faac66da16ea23a Mon Sep 17 00:00:00 2001
 From: Zebediah Figura <zfigura@codeweavers.com>
 Date: Mon, 6 Jul 2020 17:17:31 -0500
 Subject: [PATCH] ntdll, server: Implement alertable waits.
@@ -164,22 +164,22 @@ index d1a282c65e9..2a7c3865617 100644
  
  /* We need to let the server know when we are doing a message wait, and when we
 diff --git a/dlls/ntdll/unix/unix_private.h b/dlls/ntdll/unix/unix_private.h
-index a5bade02b8a..76eef4220c5 100644
+index f6934ae9e91..c3ad33e282b 100644
 --- a/dlls/ntdll/unix/unix_private.h
 +++ b/dlls/ntdll/unix/unix_private.h
-@@ -53,6 +53,7 @@ struct ntdll_thread_data
+@@ -61,6 +61,7 @@ struct ntdll_thread_data
      void              *cpu_data[16];  /* reserved for CPU-specific data */
      struct debug_info *debug_info;    /* info for debugstr functions */
-     void              *start_stack;   /* stack for thread startup */
+     void              *kernel_stack;  /* stack for thread startup and kernel syscalls */
 +    int                esync_apc_fd;  /* fd to wait on for user APCs */
      int                request_fd;    /* fd for sending server requests */
      int                reply_fd;      /* fd for receiving server replies */
      int                wait_fd[2];    /* fd for sleeping server requests */
 diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
-index f3e6b612b93..04c31a473af 100644
+index 422be6d8a73..1ff97ed5129 100644
 --- a/dlls/ntdll/unix/virtual.c
 +++ b/dlls/ntdll/unix/virtual.c
-@@ -2876,6 +2876,7 @@ static TEB *init_teb( void *ptr, PEB *peb )
+@@ -2888,6 +2888,7 @@ static TEB *init_teb( void *ptr, PEB *peb, BOOL is_wow )
      teb->StaticUnicodeString.Buffer = teb->StaticUnicodeBuffer;
      teb->StaticUnicodeString.MaximumLength = sizeof(teb->StaticUnicodeBuffer);
      thread_data = (struct ntdll_thread_data *)&teb->GdiTebBatch;
@@ -244,10 +244,10 @@ index aeb58c5469c..cea025d9308 100644
  void esync_clear( int fd );
  
 diff --git a/server/protocol.def b/server/protocol.def
-index 00c89cce793..bb45c509685 100644
+index 14558f2d842..fad731bdc74 100644
 --- a/server/protocol.def
 +++ b/server/protocol.def
-@@ -3738,3 +3738,7 @@ enum esync_type
+@@ -3794,3 +3794,7 @@ enum esync_type
  @REQ(esync_msgwait)
      int          in_msgwait;    /* are we in a message wait? */
  @END
@@ -256,10 +256,10 @@ index 00c89cce793..bb45c509685 100644
 +@REQ(get_esync_apc_fd)
 +@END
 diff --git a/server/thread.c b/server/thread.c
-index 409a28129b3..e4781e57c8c 100644
+index 10da1e3d4c7..258c3f28815 100644
 --- a/server/thread.c
 +++ b/server/thread.c
-@@ -227,6 +227,7 @@ static inline void init_thread_structure( struct thread *thread )
+@@ -228,6 +228,7 @@ static inline void init_thread_structure( struct thread *thread )
      thread->teb             = 0;
      thread->entry_point     = 0;
      thread->esync_fd        = -1;
@@ -267,7 +267,7 @@ index 409a28129b3..e4781e57c8c 100644
      thread->system_regs     = 0;
      thread->queue           = NULL;
      thread->wait            = NULL;
-@@ -374,7 +375,10 @@ struct thread *create_thread( int fd, struct process *process, const struct secu
+@@ -375,7 +376,10 @@ struct thread *create_thread( int fd, struct process *process, const struct secu
      }
  
      if (do_esync())
@@ -278,7 +278,7 @@ index 409a28129b3..e4781e57c8c 100644
  
      set_fd_events( thread->request_fd, POLLIN );  /* start listening to events */
      add_process_thread( thread->process, thread );
-@@ -1156,8 +1160,13 @@ static int queue_apc( struct process *process, struct thread *thread, struct thr
+@@ -1164,8 +1168,13 @@ static int queue_apc( struct process *process, struct thread *thread, struct thr
      grab_object( apc );
      list_add_tail( queue, &apc->entry );
      if (!list_prev( queue, &apc->entry ))  /* first one */
@@ -292,7 +292,7 @@ index 409a28129b3..e4781e57c8c 100644
      return 1;
  }
  
-@@ -1203,6 +1212,10 @@ static struct thread_apc *thread_dequeue_apc( struct thread *thread, int system
+@@ -1211,6 +1220,10 @@ static struct thread_apc *thread_dequeue_apc( struct thread *thread, int system
          apc = LIST_ENTRY( ptr, struct thread_apc, entry );
          list_remove( ptr );
      }
@@ -304,7 +304,7 @@ index 409a28129b3..e4781e57c8c 100644
  }
  
 diff --git a/server/thread.h b/server/thread.h
-index 1eb501cbd52..13e4628d89a 100644
+index 8a5a8501d9c..e5145f9eb07 100644
 --- a/server/thread.h
 +++ b/server/thread.h
 @@ -55,6 +55,7 @@ struct thread
