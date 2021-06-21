@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "1de583a4dac7d704b2d4291ada4a1885cd8cd1c9"
+	echo "5c756468656afc9207c0f51f774bbc29267e1469"
 }
 
 # Show version information
@@ -280,7 +280,6 @@ patch_enable_all ()
 	enable_winmm_mciSendCommandA="$1"
 	enable_wintab32_improvements="$1"
 	enable_wintrust_WTHelperGetProvCertFromChain="$1"
-	enable_ws2_32_Connect_Time="$1"
 	enable_ws2_32_getsockopt="$1"
 	enable_wscript_support_d_u_switches="$1"
 	enable_xactengine_initial="$1"
@@ -885,9 +884,6 @@ patch_enable ()
 			;;
 		wintrust-WTHelperGetProvCertFromChain)
 			enable_wintrust_WTHelperGetProvCertFromChain="$2"
-			;;
-		ws2_32-Connect_Time)
-			enable_ws2_32_Connect_Time="$2"
 			;;
 		ws2_32-getsockopt)
 			enable_ws2_32_getsockopt="$2"
@@ -4219,15 +4215,6 @@ fi
 # |
 if test "$enable_wintrust_WTHelperGetProvCertFromChain" -eq 1; then
 	patch_apply wintrust-WTHelperGetProvCertFromChain/0001-wintrust-Add-parameter-check-in-WTHelperGetProvCertF.patch
-fi
-
-# Patchset ws2_32-Connect_Time
-# |
-# | Modified files:
-# |   *	dlls/ws2_32/socket.c, dlls/ws2_32/tests/sock.c, server/protocol.def, server/sock.c
-# |
-if test "$enable_ws2_32_Connect_Time" -eq 1; then
-	patch_apply ws2_32-Connect_Time/0001-ws2_32-Implement-returning-the-proper-time-with-SO_C.patch
 fi
 
 # Patchset ws2_32-getsockopt
