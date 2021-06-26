@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "ad03df1222c2bb22e991641dcc0d9e4ed684158b"
+	echo "542175ab10420953920779f3c64eb310dd3aa258"
 }
 
 # Show version information
@@ -250,7 +250,6 @@ patch_enable_all ()
 	enable_winecfg_Libraries="$1"
 	enable_winecfg_Staging="$1"
 	enable_wined3d_Accounting="$1"
-	enable_wined3d_CSMT_Main="$1"
 	enable_wined3d_Indexed_Vertex_Blending="$1"
 	enable_wined3d_SWVP_shaders="$1"
 	enable_wined3d_Silence_FIXMEs="$1"
@@ -796,9 +795,6 @@ patch_enable ()
 		wined3d-Accounting)
 			enable_wined3d_Accounting="$2"
 			;;
-		wined3d-CSMT_Main)
-			enable_wined3d_CSMT_Main="$2"
-			;;
 		wined3d-Indexed_Vertex_Blending)
 			enable_wined3d_Indexed_Vertex_Blending="$2"
 			;;
@@ -1272,13 +1268,6 @@ if test "$enable_wined3d_Indexed_Vertex_Blending" -eq 1; then
 	enable_wined3d_SWVP_shaders=1
 fi
 
-if test "$enable_wined3d_CSMT_Main" -eq 1; then
-	if test "$enable_d3d11_Deferred_Context" -gt 1; then
-		abort "Patchset d3d11-Deferred_Context disabled, but wined3d-CSMT_Main depends on that."
-	fi
-	enable_d3d11_Deferred_Context=1
-fi
-
 if test "$enable_user32_rawinput_mouse_experimental" -eq 1; then
 	if test "$enable_user32_rawinput_mouse" -gt 1; then
 		abort "Patchset user32-rawinput-mouse disabled, but user32-rawinput-mouse-experimental depends on that."
@@ -1640,12 +1629,21 @@ fi
 # | 	Death of the Outsider, Pro Evolution Soccer 2019, Shantae and the Pirate's Curse, Space Engineers)
 # |
 # | Modified files:
-# |   *	dlls/d3d11/tests/d3d11.c, dlls/wined3d/buffer.c, dlls/wined3d/cs.c, dlls/wined3d/resource.c, dlls/wined3d/texture.c,
-# | 	dlls/wined3d/wined3d_private.h
+# |   *	dlls/d3d11/device.c, dlls/d3d11/tests/d3d11.c, dlls/wined3d/buffer.c, dlls/wined3d/cs.c, dlls/wined3d/device.c,
+# | 	dlls/wined3d/resource.c, dlls/wined3d/texture.c, dlls/wined3d/utils.c, dlls/wined3d/wined3d_private.h
 # |
 if test "$enable_d3d11_Deferred_Context" -eq 1; then
-	patch_apply d3d11-Deferred_Context/0013-wined3d-Implement-wined3d_deferred_context_update_su.patch
-	patch_apply d3d11-Deferred_Context/0014-wined3d-Implement-wined3d_deferred_context_map.patch
+	patch_apply d3d11-Deferred_Context/0001-wined3d-Pass-a-wined3d_resource-and-sub-resource-ind.patch
+	patch_apply d3d11-Deferred_Context/0002-wined3d-Move-box-validation-to-wined3d_device_contex.patch
+	patch_apply d3d11-Deferred_Context/0003-wined3d-Report-a-byte-count-of-1-for-WINED3DFMT_UNKN.patch
+	patch_apply d3d11-Deferred_Context/0004-wined3d-Use-wined3d_buffer_copy_bo_address-in-wined3.patch
+	patch_apply d3d11-Deferred_Context/0005-wined3d-Pass-a-wined3d_const_bo_address-to-wined3d_c.patch
+	patch_apply d3d11-Deferred_Context/0006-wined3d-Introduce-a-prepare_upload_bo-device-context.patch
+	patch_apply d3d11-Deferred_Context/0007-wined3d-Implement-wined3d_deferred_context_prepare_u.patch
+	patch_apply d3d11-Deferred_Context/0008-d3d11-Forbid-map-types-other-than-DISCARD-and-NOOVER.patch
+	patch_apply d3d11-Deferred_Context/0009-wined3d-Use-context-ops-prepare_upload_bo-in-wined3d.patch
+	patch_apply d3d11-Deferred_Context/0010-wined3d-Implement-NOOVERWITE-maps-in-wined3d_deferre.patch
+	patch_apply d3d11-Deferred_Context/0011-wined3d-Print-a-message-when-forcing-CS-serializatio.patch
 fi
 
 # Patchset d3drm-IDirect3D3-support
@@ -3888,18 +3886,6 @@ fi
 # |
 if test "$enable_wined3d_Accounting" -eq 1; then
 	patch_apply wined3d-Accounting/0001-wined3d-Use-real-values-for-memory-accounting-on-NVI.patch
-fi
-
-# Patchset wined3d-CSMT_Main
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	d3d11-Deferred_Context
-# |
-# | Modified files:
-# |   *	dlls/wined3d/cs.c, dlls/wined3d/wined3d_private.h
-# |
-if test "$enable_wined3d_CSMT_Main" -eq 1; then
-	patch_apply wined3d-CSMT_Main/0045-wined3d-Improve-wined3d_cs_emit_update_sub_resource.patch
 fi
 
 # Patchset wined3d-SWVP-shaders

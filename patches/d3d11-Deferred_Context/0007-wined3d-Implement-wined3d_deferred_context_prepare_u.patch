@@ -1,0 +1,207 @@
+From 2df1209afb01d15b18a6c34a6c4450d9b0ca9ffe Mon Sep 17 00:00:00 2001
+From: Zebediah Figura <z.figura12@gmail.com>
+Date: Wed, 23 Jun 2021 17:44:22 -0500
+Subject: [PATCH] wined3d: Implement
+ wined3d_deferred_context_prepare_upload_bo().
+
+Signed-off-by: Zebediah Figura <z.figura12@gmail.com>
+---
+ dlls/wined3d/cs.c              | 64 ++++++++++++++++++++++++++++++++--
+ dlls/wined3d/resource.c        | 30 +++++++++-------
+ dlls/wined3d/wined3d_private.h |  3 ++
+ 3 files changed, 81 insertions(+), 16 deletions(-)
+
+diff --git a/dlls/wined3d/cs.c b/dlls/wined3d/cs.c
+index a3124a229e1..80636943069 100644
+--- a/dlls/wined3d/cs.c
++++ b/dlls/wined3d/cs.c
+@@ -26,6 +26,13 @@ WINE_DECLARE_DEBUG_CHANNEL(fps);
+ 
+ #define WINED3D_INITIAL_CS_SIZE 4096
+ 
++struct wined3d_deferred_upload
++{
++    struct wined3d_resource *resource;
++    unsigned int sub_resource_idx;
++    void *sysmem;
++};
++
+ struct wined3d_command_list
+ {
+     LONG refcount;
+@@ -38,6 +45,9 @@ struct wined3d_command_list
+     SIZE_T resource_count;
+     struct wined3d_resource **resources;
+ 
++    SIZE_T upload_count;
++    struct wined3d_deferred_upload *uploads;
++
+     /* List of command lists queued for execution on this command list. We might
+      * be the only thing holding a pointer to another command list, so we need
+      * to hold a reference here (and in wined3d_deferred_context) as well. */
+@@ -48,9 +58,13 @@ struct wined3d_command_list
+ static void wined3d_command_list_destroy_object(void *object)
+ {
+     struct wined3d_command_list *list = object;
++    SIZE_T i;
+ 
+     TRACE("list %p.\n", list);
+ 
++    for (i = 0; i < list->upload_count; ++i)
++        wined3d_free_sysmem(list->uploads[i].sysmem);
++
+     heap_free(list->resources);
+     heap_free(list->data);
+     heap_free(list);
+@@ -3343,6 +3357,9 @@ struct wined3d_deferred_context
+     SIZE_T resource_count, resources_capacity;
+     struct wined3d_resource **resources;
+ 
++    SIZE_T upload_count, uploads_capacity;
++    struct wined3d_deferred_upload *uploads;
++
+     /* List of command lists queued for execution on this context. A command
+      * list can be the only thing holding a pointer to another command list, so
+      * we need to hold a reference here and in wined3d_command_list as well. */
+@@ -3401,9 +3418,44 @@ static void *wined3d_deferred_context_prepare_upload_bo(struct wined3d_device_co
+         struct wined3d_resource *resource, unsigned int sub_resource_idx, const struct wined3d_box *box,
+         unsigned int row_pitch, unsigned int slice_pitch, uint32_t flags, struct wined3d_const_bo_address *address)
+ {
+-    FIXME("context %p, resource %p, sub_resource_idx %u, box %p, flags %#x, address %p, stub!\n",
+-            context, resource, sub_resource_idx, box, flags, address);
+-    return false;
++    struct wined3d_deferred_context *deferred = wined3d_deferred_context_from_context(context);
++    const struct wined3d_format *format = resource->format;
++    struct wined3d_deferred_upload *upload;
++    void *sysmem;
++    size_t size;
++
++    size = (box->back - box->front - 1) * slice_pitch
++            + ((box->bottom - box->top - 1) / format->block_height) * row_pitch
++            + ((box->right - box->left + format->block_width - 1) / format->block_width) * format->block_byte_count;
++
++    if (!(flags & WINED3D_MAP_WRITE))
++    {
++        WARN("Flags %#x are not valid on a deferred context.\n", flags);
++        return NULL;
++    }
++
++    if (flags & ~(WINED3D_MAP_WRITE | WINED3D_MAP_DISCARD))
++    {
++        FIXME("Unhandled flags %#x.\n", flags);
++        return NULL;
++    }
++
++    if (!wined3d_array_reserve((void **)&deferred->uploads, &deferred->uploads_capacity,
++            deferred->upload_count + 1, sizeof(*deferred->uploads)))
++        return NULL;
++
++    if (!(sysmem = wined3d_allocate_sysmem(size)))
++        return NULL;
++
++    upload = &deferred->uploads[deferred->upload_count++];
++    upload->resource = resource;
++    wined3d_resource_incref(resource);
++    upload->sub_resource_idx = sub_resource_idx;
++    upload->sysmem = sysmem;
++
++    address->buffer_object = 0;
++    address->addr = sysmem;
++    return sysmem;
+ }
+ 
+ static HRESULT wined3d_deferred_context_map(struct wined3d_device_context *context, struct wined3d_resource *resource,
+@@ -3527,6 +3579,12 @@ void CDECL wined3d_deferred_context_destroy(struct wined3d_device_context *conte
+ 
+     for (i = 0; i < deferred->resource_count; ++i)
+         wined3d_resource_decref(deferred->resources[i]);
++
++    for (i = 0; i < deferred->upload_count; ++i)
++    {
++        wined3d_resource_decref(deferred->uploads[i].resource);
++        wined3d_free_sysmem(deferred->uploads[i].sysmem);
++    }
+     heap_free(deferred->resources);
+ 
+     wined3d_state_destroy(deferred->c.state);
+diff --git a/dlls/wined3d/resource.c b/dlls/wined3d/resource.c
+index f37c313e023..8e4be0e0315 100644
+--- a/dlls/wined3d/resource.c
++++ b/dlls/wined3d/resource.c
+@@ -334,24 +334,33 @@ void CDECL wined3d_resource_preload(struct wined3d_resource *resource)
+     wined3d_cs_emit_preload_resource(resource->device->cs, resource);
+ }
+ 
+-static BOOL wined3d_resource_allocate_sysmem(struct wined3d_resource *resource)
++void *wined3d_allocate_sysmem(SIZE_T size)
+ {
+     void **p;
+-    SIZE_T align = RESOURCE_ALIGNMENT - 1 + sizeof(*p);
++    static const SIZE_T align = RESOURCE_ALIGNMENT - 1 + sizeof(*p);
+     void *mem;
+ 
+-    if (!(mem = heap_alloc_zero(resource->size + align)))
++    if (!(mem = heap_alloc_zero(size + align)))
+     {
+         ERR("Failed to allocate system memory.\n");
+-        return FALSE;
++        return NULL;
+     }
+ 
++    TRACE("Allocated %lu bytes at %p.\n", size, mem);
+     p = (void **)(((ULONG_PTR)mem + align) & ~(RESOURCE_ALIGNMENT - 1)) - 1;
+     *p = mem;
+ 
+-    resource->heap_memory = ++p;
++    return ++p;
++}
+ 
+-    return TRUE;
++void wined3d_free_sysmem(void *mem)
++{
++    void **p = mem;
++
++    if (!p)
++        return;
++
++    heap_free(*(--p));
+ }
+ 
+ BOOL wined3d_resource_prepare_sysmem(struct wined3d_resource *resource)
+@@ -359,17 +368,12 @@ BOOL wined3d_resource_prepare_sysmem(struct wined3d_resource *resource)
+     if (resource->heap_memory)
+         return TRUE;
+ 
+-    return wined3d_resource_allocate_sysmem(resource);
++    return !!(resource->heap_memory = wined3d_allocate_sysmem(resource->size));
+ }
+ 
+ void wined3d_resource_free_sysmem(struct wined3d_resource *resource)
+ {
+-    void **p = resource->heap_memory;
+-
+-    if (!p)
+-        return;
+-
+-    heap_free(*(--p));
++    wined3d_free_sysmem(resource->heap_memory);
+     resource->heap_memory = NULL;
+ }
+ 
+diff --git a/dlls/wined3d/wined3d_private.h b/dlls/wined3d/wined3d_private.h
+index d85720e48b2..074927a9e99 100644
+--- a/dlls/wined3d/wined3d_private.h
++++ b/dlls/wined3d/wined3d_private.h
+@@ -4151,6 +4151,9 @@ void wined3d_resource_update_draw_binding(struct wined3d_resource *resource) DEC
+ #define RESOURCE_ALIGNMENT 16
+ #define WINED3D_CONSTANT_BUFFER_ALIGNMENT 16
+ 
++void *wined3d_allocate_sysmem(SIZE_T size) DECLSPEC_HIDDEN;
++void wined3d_free_sysmem(void *mem) DECLSPEC_HIDDEN;
++
+ #define WINED3D_LOCATION_DISCARDED      0x00000001
+ #define WINED3D_LOCATION_SYSMEM         0x00000002
+ #define WINED3D_LOCATION_BUFFER         0x00000008
+-- 
+2.30.2
+

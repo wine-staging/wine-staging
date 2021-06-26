@@ -1,0 +1,208 @@
+From eb98e2cffac9434f3c3afc97e7a90e6fb3058c2d Mon Sep 17 00:00:00 2001
+From: Zebediah Figura <z.figura12@gmail.com>
+Date: Wed, 23 Jun 2021 15:49:58 -0500
+Subject: [PATCH] wined3d: Pass a wined3d_resource and sub-resource index to
+ wined3d_texture_check_box_dimensions().
+
+Signed-off-by: Zebediah Figura <z.figura12@gmail.com>
+---
+ dlls/wined3d/device.c          |  9 ++----
+ dlls/wined3d/resource.c        | 38 ++++++++++++++++++++++++++
+ dlls/wined3d/texture.c         | 50 +++-------------------------------
+ dlls/wined3d/wined3d_private.h |  4 +--
+ 4 files changed, 47 insertions(+), 54 deletions(-)
+
+diff --git a/dlls/wined3d/device.c b/dlls/wined3d/device.c
+index 2af705b10e3..5b2bd7ae03b 100644
+--- a/dlls/wined3d/device.c
++++ b/dlls/wined3d/device.c
+@@ -4608,7 +4608,7 @@ HRESULT CDECL wined3d_device_context_copy_sub_resource_region(struct wined3d_dev
+             wined3d_box_set(&b, 0, 0, min(src_w, dst_w), min(src_h, dst_h), 0, min(src_d, dst_d));
+             src_box = &b;
+         }
+-        else if (FAILED(wined3d_texture_check_box_dimensions(src_texture, src_level, src_box)))
++        else if (FAILED(wined3d_resource_check_box_dimensions(src_resource, src_sub_resource_idx, src_box)))
+         {
+             WARN("Invalid source box %s.\n", debug_box(src_box));
+             return WINED3DERR_INVALIDCALL;
+@@ -4631,8 +4631,7 @@ HRESULT CDECL wined3d_device_context_copy_sub_resource_region(struct wined3d_dev
+                     dst_y + (src_row_count * dst_resource->format->block_height),
+                     dst_z, dst_z + (src_box->back - src_box->front));
+         }
+-        if (FAILED(wined3d_texture_check_box_dimensions(dst_texture,
+-                dst_sub_resource_idx % dst_texture->level_count, &dst_box)))
++        if (FAILED(wined3d_resource_check_box_dimensions(dst_resource, dst_sub_resource_idx, &dst_box)))
+         {
+             WARN("Invalid destination box %s.\n", debug_box(&dst_box));
+             return WINED3DERR_INVALIDCALL;
+@@ -4760,11 +4759,9 @@ HRESULT CDECL wined3d_device_context_clear_rendertarget_view(struct wined3d_devi
+     else
+     {
+         struct wined3d_box b = {rect->left, rect->top, rect->right, rect->bottom, 0, 1};
+-        struct wined3d_texture *texture = texture_from_resource(view->resource);
+         HRESULT hr;
+ 
+-        if (FAILED(hr = wined3d_texture_check_box_dimensions(texture,
+-                view->sub_resource_idx % texture->level_count, &b)))
++        if (FAILED(hr = wined3d_resource_check_box_dimensions(resource, view->sub_resource_idx, &b)))
+             return hr;
+     }
+ 
+diff --git a/dlls/wined3d/resource.c b/dlls/wined3d/resource.c
+index 58e3e5c77fd..f37c313e023 100644
+--- a/dlls/wined3d/resource.c
++++ b/dlls/wined3d/resource.c
+@@ -501,6 +501,44 @@ unsigned int wined3d_resource_get_sample_count(const struct wined3d_resource *re
+     return resource->multisample_type;
+ }
+ 
++HRESULT wined3d_resource_check_box_dimensions(struct wined3d_resource *resource,
++        unsigned int sub_resource_idx, const struct wined3d_box *box)
++{
++    const struct wined3d_format *format = resource->format;
++    struct wined3d_sub_resource_desc desc;
++    unsigned int width_mask, height_mask;
++
++    wined3d_resource_get_sub_resource_desc(resource, sub_resource_idx, &desc);
++
++    if (box->left >= box->right || box->right > desc.width
++            || box->top >= box->bottom || box->bottom > desc.height
++            || box->front >= box->back || box->back > desc.depth)
++    {
++        WARN("Box %s is invalid.\n", debug_box(box));
++        return WINEDDERR_INVALIDRECT;
++    }
++
++    if (resource->format_flags & WINED3DFMT_FLAG_BLOCKS)
++    {
++        /* This assumes power of two block sizes, but NPOT block sizes would
++         * be silly anyway.
++         *
++         * This also assumes that the format's block depth is 1. */
++        width_mask = format->block_width - 1;
++        height_mask = format->block_height - 1;
++
++        if ((box->left & width_mask) || (box->top & height_mask)
++                || (box->right & width_mask && box->right != desc.width)
++                || (box->bottom & height_mask && box->bottom != desc.height))
++        {
++            WARN("Box %s is misaligned for %ux%u blocks.\n", debug_box(box), format->block_width, format->block_height);
++            return WINED3DERR_INVALIDCALL;
++        }
++    }
++
++    return WINED3D_OK;
++}
++
+ VkAccessFlags vk_access_mask_from_bind_flags(uint32_t bind_flags)
+ {
+     VkAccessFlags flags = 0;
+diff --git a/dlls/wined3d/texture.c b/dlls/wined3d/texture.c
+index 5876f580e0d..0f753e66704 100644
+--- a/dlls/wined3d/texture.c
++++ b/dlls/wined3d/texture.c
+@@ -1653,46 +1653,6 @@ void * CDECL wined3d_texture_get_parent(const struct wined3d_texture *texture)
+     return texture->resource.parent;
+ }
+ 
+-HRESULT wined3d_texture_check_box_dimensions(const struct wined3d_texture *texture,
+-        unsigned int level, const struct wined3d_box *box)
+-{
+-    const struct wined3d_format *format = texture->resource.format;
+-    unsigned int width_mask, height_mask, width, height, depth;
+-
+-    width = wined3d_texture_get_level_width(texture, level);
+-    height = wined3d_texture_get_level_height(texture, level);
+-    depth = wined3d_texture_get_level_depth(texture, level);
+-
+-    if (box->left >= box->right || box->right > width
+-            || box->top >= box->bottom || box->bottom > height
+-            || box->front >= box->back || box->back > depth)
+-    {
+-        WARN("Box %s is invalid.\n", debug_box(box));
+-        return WINEDDERR_INVALIDRECT;
+-    }
+-
+-    if (texture->resource.format_flags & WINED3DFMT_FLAG_BLOCKS)
+-    {
+-        /* This assumes power of two block sizes, but NPOT block sizes would
+-         * be silly anyway.
+-         *
+-         * This also assumes that the format's block depth is 1. */
+-        width_mask = format->block_width - 1;
+-        height_mask = format->block_height - 1;
+-
+-        if ((box->left & width_mask) || (box->top & height_mask)
+-                || (box->right & width_mask && box->right != width)
+-                || (box->bottom & height_mask && box->bottom != height))
+-        {
+-            WARN("Box %s is misaligned for %ux%u blocks.\n",
+-                    debug_box(box), format->block_width, format->block_height);
+-            return WINED3DERR_INVALIDCALL;
+-        }
+-    }
+-
+-    return WINED3D_OK;
+-}
+-
+ void CDECL wined3d_texture_get_pitch(const struct wined3d_texture *texture,
+         unsigned int level, unsigned int *row_pitch, unsigned int *slice_pitch)
+ {
+@@ -2250,7 +2210,7 @@ HRESULT CDECL wined3d_texture_add_dirty_region(struct wined3d_texture *texture,
+         return WINED3DERR_INVALIDCALL;
+     }
+ 
+-    if (dirty_region && FAILED(wined3d_texture_check_box_dimensions(texture, 0, dirty_region)))
++    if (dirty_region && FAILED(wined3d_resource_check_box_dimensions(&texture->resource, 0, dirty_region)))
+     {
+         WARN("Invalid dirty_region %s specified.\n", debug_box(dirty_region));
+         return WINED3DERR_INVALIDCALL;
+@@ -3553,7 +3513,7 @@ static HRESULT texture_resource_sub_resource_map(struct wined3d_resource *resour
+     sub_resource = wined3d_texture_get_sub_resource(texture, sub_resource_idx);
+ 
+     texture_level = sub_resource_idx % texture->level_count;
+-    if (FAILED(wined3d_texture_check_box_dimensions(texture, texture_level, box)))
++    if (FAILED(wined3d_resource_check_box_dimensions(resource, sub_resource_idx, box)))
+     {
+         WARN("Map box is invalid.\n");
+         if (((fmt_flags & WINED3DFMT_FLAG_BLOCKS) && !(resource->access & WINED3D_RESOURCE_ACCESS_CPU))
+@@ -4024,12 +3984,10 @@ HRESULT CDECL wined3d_device_context_blt(struct wined3d_device_context *context,
+             && filter != WINED3D_TEXF_LINEAR)
+         return WINED3DERR_INVALIDCALL;
+ 
+-    if (FAILED(hr = wined3d_texture_check_box_dimensions(dst_texture,
+-            dst_sub_resource_idx % dst_texture->level_count, &dst_box)))
++    if (FAILED(hr = wined3d_resource_check_box_dimensions(&dst_texture->resource, dst_sub_resource_idx, &dst_box)))
+         return hr;
+ 
+-    if (FAILED(hr = wined3d_texture_check_box_dimensions(src_texture,
+-            src_sub_resource_idx % src_texture->level_count, &src_box)))
++    if (FAILED(hr = wined3d_resource_check_box_dimensions(&src_texture->resource, src_sub_resource_idx, &src_box)))
+         return hr;
+ 
+     if (dst_texture->sub_resources[dst_sub_resource_idx].map_count
+diff --git a/dlls/wined3d/wined3d_private.h b/dlls/wined3d/wined3d_private.h
+index 84dad38f0c9..6700302b481 100644
+--- a/dlls/wined3d/wined3d_private.h
++++ b/dlls/wined3d/wined3d_private.h
+@@ -4134,6 +4134,8 @@ HRESULT resource_init(struct wined3d_resource *resource, struct wined3d_device *
+         unsigned int size, void *parent, const struct wined3d_parent_ops *parent_ops,
+         const struct wined3d_resource_ops *resource_ops) DECLSPEC_HIDDEN;
+ void resource_unload(struct wined3d_resource *resource) DECLSPEC_HIDDEN;
++HRESULT wined3d_resource_check_box_dimensions(struct wined3d_resource *resource,
++        unsigned int sub_resource_idx, const struct wined3d_box *box) DECLSPEC_HIDDEN;
+ void wined3d_resource_free_sysmem(struct wined3d_resource *resource) DECLSPEC_HIDDEN;
+ const struct wined3d_format *wined3d_resource_get_decompress_format(
+         const struct wined3d_resource *resource) DECLSPEC_HIDDEN;
+@@ -4358,8 +4360,6 @@ void texture2d_load_fb_texture(struct wined3d_texture_gl *texture_gl, unsigned i
+ void texture2d_read_from_framebuffer(struct wined3d_texture *texture, unsigned int sub_resource_idx,
+         struct wined3d_context *context, DWORD src_location, DWORD dst_location) DECLSPEC_HIDDEN;
+ 
+-HRESULT wined3d_texture_check_box_dimensions(const struct wined3d_texture *texture,
+-        unsigned int level, const struct wined3d_box *box) DECLSPEC_HIDDEN;
+ void wined3d_texture_cleanup(struct wined3d_texture *texture) DECLSPEC_HIDDEN;
+ void wined3d_texture_download_from_texture(struct wined3d_texture *dst_texture, unsigned int dst_sub_resource_idx,
+         struct wined3d_texture *src_texture, unsigned int src_sub_resource_idx) DECLSPEC_HIDDEN;
+-- 
+2.30.2
+
