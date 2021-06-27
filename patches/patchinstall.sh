@@ -2454,11 +2454,11 @@ fi
 # |   *	[#49692] Multiple applications need a Media Foundation media source implementation
 # |
 # | Modified files:
-# |   *	dlls/mf/topology.c, dlls/mfplat/buffer.c, dlls/mfplat/main.c, dlls/mfreadwrite/tests/mfplat.c,
-# | 	dlls/winegstreamer/Makefile.in, dlls/winegstreamer/audioconvert.c, dlls/winegstreamer/colorconvert.c,
-# | 	dlls/winegstreamer/decode_transform.c, dlls/winegstreamer/gst_private.h, dlls/winegstreamer/main.c,
-# | 	dlls/winegstreamer/media_source.c, dlls/winegstreamer/mfplat.c, dlls/winegstreamer/quartz_parser.c,
-# | 	dlls/winegstreamer/wg_parser.c, dlls/winegstreamer/winegstreamer_classes.idl, include/mfidl.idl, include/wmcodecdsp.idl
+# |   *	dlls/mf/topology.c, dlls/mfplat/buffer.c, dlls/mfplat/main.c, dlls/winegstreamer/Makefile.in,
+# | 	dlls/winegstreamer/audioconvert.c, dlls/winegstreamer/colorconvert.c, dlls/winegstreamer/decode_transform.c,
+# | 	dlls/winegstreamer/gst_private.h, dlls/winegstreamer/media_source.c, dlls/winegstreamer/mfplat.c,
+# | 	dlls/winegstreamer/quartz_parser.c, dlls/winegstreamer/wg_parser.c, dlls/winegstreamer/winegstreamer_classes.idl,
+# | 	include/mfidl.idl, include/wmcodecdsp.idl
 # |
 if test "$enable_mfplat_streaming_support" -eq 1; then
 	patch_apply mfplat-streaming-support/0001-winegstreamer-Activate-source-pad-in-push-mode-if-it.patch
@@ -2498,7 +2498,7 @@ if test "$enable_mfplat_streaming_support" -eq 1; then
 	patch_apply mfplat-streaming-support/0035-mfplat-Stub-out-MFCreateDXGIDeviceManager-to-avoid-t.patch
 	patch_apply mfplat-streaming-support/0036-winegstreamer-Don-t-rely-on-max_size-in-unseekable-p.patch
 	patch_apply mfplat-streaming-support/0037-winegstreamer-Implement-MFT_MESSAGE_COMMAND_FLUSH-fo.patch
-	patch_apply mfplat-streaming-support/0038-mfreadwrite-Unset-seeking-flag-also-on-SourceStarted.patch
+	patch_apply mfplat-streaming-support/0038-mfplat-Fix-copy-paste-error.patch
 	patch_apply mfplat-streaming-support/0039-winegstreamer-Default-Frame-size-if-one-isn-t-availa.patch
 fi
 
