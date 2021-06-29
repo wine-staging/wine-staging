@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "362eed3ae30e17da64888407140334925499071c"
+	echo "7f1623bc626d3ca2411c1a3088512d8ef461252b"
 }
 
 # Show version information
@@ -188,7 +188,6 @@ patch_enable_all ()
 	enable_riched20_Class_Tests="$1"
 	enable_riched20_IText_Interface="$1"
 	enable_secur32_InitializeSecurityContextW="$1"
-	enable_server_FileEndOfFileInformation="$1"
 	enable_server_File_Permissions="$1"
 	enable_server_Key_State="$1"
 	enable_server_PeekMessage="$1"
@@ -606,9 +605,6 @@ patch_enable ()
 			;;
 		secur32-InitializeSecurityContextW)
 			enable_secur32_InitializeSecurityContextW="$2"
-			;;
-		server-FileEndOfFileInformation)
-			enable_server_FileEndOfFileInformation="$2"
 			;;
 		server-File_Permissions)
 			enable_server_File_Permissions="$2"
@@ -1615,12 +1611,9 @@ fi
 # |
 # | Modified files:
 # |   *	dlls/d3d11/device.c, dlls/d3d11/tests/d3d11.c, dlls/wined3d/buffer.c, dlls/wined3d/cs.c, dlls/wined3d/device.c,
-# | 	dlls/wined3d/resource.c, dlls/wined3d/texture.c, dlls/wined3d/utils.c, dlls/wined3d/wined3d_private.h
+# | 	dlls/wined3d/resource.c, dlls/wined3d/texture.c, dlls/wined3d/wined3d_private.h
 # |
 if test "$enable_d3d11_Deferred_Context" -eq 1; then
-	patch_apply d3d11-Deferred_Context/0003-wined3d-Report-a-byte-count-of-1-for-WINED3DFMT_UNKN.patch
-	patch_apply d3d11-Deferred_Context/0004-wined3d-Use-wined3d_buffer_copy_bo_address-in-wined3.patch
-	patch_apply d3d11-Deferred_Context/0005-wined3d-Pass-a-wined3d_const_bo_address-to-wined3d_c.patch
 	patch_apply d3d11-Deferred_Context/0006-wined3d-Introduce-a-prepare_upload_bo-device-context.patch
 	patch_apply d3d11-Deferred_Context/0007-wined3d-Implement-wined3d_deferred_context_prepare_u.patch
 	patch_apply d3d11-Deferred_Context/0008-d3d11-Forbid-map-types-other-than-DISCARD-and-NOOVER.patch
@@ -3083,16 +3076,6 @@ fi
 # |
 if test "$enable_secur32_InitializeSecurityContextW" -eq 1; then
 	patch_apply secur32-InitializeSecurityContextW/0001-secur32-Input-Parameter-should-be-NULL-on-first-call.patch
-fi
-
-# Patchset server-FileEndOfFileInformation
-# |
-# | Modified files:
-# |   *	dlls/ntdll/unix/file.c, server/fd.c, server/protocol.def
-# |
-if test "$enable_server_FileEndOfFileInformation" -eq 1; then
-	patch_apply server-FileEndOfFileInformation/0001-ntdll-Set-EOF-on-file-which-has-a-memory-mapping-sho.patch
-	patch_apply server-FileEndOfFileInformation/0002-server-Growing-files-which-are-mapped-to-memory-shou.patch
 fi
 
 # Patchset server-File_Permissions
