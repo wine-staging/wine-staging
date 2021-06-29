@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "542175ab10420953920779f3c64eb310dd3aa258"
+	echo "362eed3ae30e17da64888407140334925499071c"
 }
 
 # Show version information
@@ -152,7 +152,6 @@ patch_enable_all ()
 	enable_ntdll_CriticalSection="$1"
 	enable_ntdll_DOS_Attributes="$1"
 	enable_ntdll_Exception="$1"
-	enable_ntdll_FileDispositionInformation="$1"
 	enable_ntdll_FileFsFullSizeInformation="$1"
 	enable_ntdll_ForceBottomUpAlloc="$1"
 	enable_ntdll_HashLinks="$1"
@@ -280,7 +279,6 @@ patch_enable_all ()
 	enable_winmm_mciSendCommandA="$1"
 	enable_wintab32_improvements="$1"
 	enable_wintrust_WTHelperGetProvCertFromChain="$1"
-	enable_ws2_32_getsockopt="$1"
 	enable_wscript_support_d_u_switches="$1"
 	enable_xactengine_initial="$1"
 	enable_xactengine3_7_Notification="$1"
@@ -500,9 +498,6 @@ patch_enable ()
 			;;
 		ntdll-Exception)
 			enable_ntdll_Exception="$2"
-			;;
-		ntdll-FileDispositionInformation)
-			enable_ntdll_FileDispositionInformation="$2"
 			;;
 		ntdll-FileFsFullSizeInformation)
 			enable_ntdll_FileFsFullSizeInformation="$2"
@@ -884,9 +879,6 @@ patch_enable ()
 			;;
 		wintrust-WTHelperGetProvCertFromChain)
 			enable_wintrust_WTHelperGetProvCertFromChain="$2"
-			;;
-		ws2_32-getsockopt)
-			enable_ws2_32_getsockopt="$2"
 			;;
 		wscript-support-d-u-switches)
 			enable_wscript_support_d_u_switches="$2"
@@ -1364,13 +1356,6 @@ if test "$enable_ntdll_WRITECOPY" -eq 1; then
 	enable_ntdll_ForceBottomUpAlloc=1
 fi
 
-if test "$enable_kernel32_CopyFileEx" -eq 1; then
-	if test "$enable_ntdll_FileDispositionInformation" -gt 1; then
-		abort "Patchset ntdll-FileDispositionInformation disabled, but kernel32-CopyFileEx depends on that."
-	fi
-	enable_ntdll_FileDispositionInformation=1
-fi
-
 if test "$enable_imm32_com_initialization" -eq 1; then
 	if test "$enable_winex11__NET_ACTIVE_WINDOW" -gt 1; then
 		abort "Patchset winex11-_NET_ACTIVE_WINDOW disabled, but imm32-com-initialization depends on that."
@@ -1633,8 +1618,6 @@ fi
 # | 	dlls/wined3d/resource.c, dlls/wined3d/texture.c, dlls/wined3d/utils.c, dlls/wined3d/wined3d_private.h
 # |
 if test "$enable_d3d11_Deferred_Context" -eq 1; then
-	patch_apply d3d11-Deferred_Context/0001-wined3d-Pass-a-wined3d_resource-and-sub-resource-ind.patch
-	patch_apply d3d11-Deferred_Context/0002-wined3d-Move-box-validation-to-wined3d_device_contex.patch
 	patch_apply d3d11-Deferred_Context/0003-wined3d-Report-a-byte-count-of-1-for-WINED3DFMT_UNKN.patch
 	patch_apply d3d11-Deferred_Context/0004-wined3d-Use-wined3d_buffer_copy_bo_address-in-wined3.patch
 	patch_apply d3d11-Deferred_Context/0005-wined3d-Pass-a-wined3d_const_bo_address-to-wined3d_c.patch
@@ -2338,20 +2321,7 @@ if test "$enable_iphlpapi_System_Ping" -eq 1; then
 	patch_apply iphlpapi-System_Ping/0001-iphlpapi-Fallback-to-system-ping-when-ICMP-permissio.patch
 fi
 
-# Patchset ntdll-FileDispositionInformation
-# |
-# | Modified files:
-# |   *	dlls/ntdll/tests/file.c, server/fd.c
-# |
-if test "$enable_ntdll_FileDispositionInformation" -eq 1; then
-	patch_apply ntdll-FileDispositionInformation/0001-ntdll-tests-Added-tests-to-set-disposition-on-file-w.patch
-	patch_apply ntdll-FileDispositionInformation/0002-server-Do-not-allow-to-set-disposition-on-file-which.patch
-fi
-
 # Patchset kernel32-CopyFileEx
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-FileDispositionInformation
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#22692] Add support for CopyFileEx progress callback
@@ -3228,7 +3198,7 @@ fi
 # Patchset shell32-Progress_Dialog
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-FileDispositionInformation, kernel32-CopyFileEx, shell32-SHFileOperation_Move
+# |   *	kernel32-CopyFileEx, shell32-SHFileOperation_Move
 # |
 # | Modified files:
 # |   *	dlls/shell32/shell32.rc, dlls/shell32/shlfileop.c, dlls/shell32/shresdef.h
@@ -3243,7 +3213,7 @@ fi
 # Patchset shell32-ACE_Viewer
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-FileDispositionInformation, kernel32-CopyFileEx, shell32-SHFileOperation_Move, shell32-Progress_Dialog
+# |   *	kernel32-CopyFileEx, shell32-SHFileOperation_Move, shell32-Progress_Dialog
 # |
 # | Modified files:
 # |   *	dlls/shell32/Makefile.in, dlls/shell32/shell32.rc, dlls/shell32/shlview_cmenu.c, dlls/shell32/shresdef.h
@@ -4259,18 +4229,6 @@ fi
 # |
 if test "$enable_wintrust_WTHelperGetProvCertFromChain" -eq 1; then
 	patch_apply wintrust-WTHelperGetProvCertFromChain/0001-wintrust-Add-parameter-check-in-WTHelperGetProvCertF.patch
-fi
-
-# Patchset ws2_32-getsockopt
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#8606] Divide values returned by SO_RCVBUF and SO_SNDBUF getsockopt options by two
-# |
-# | Modified files:
-# |   *	dlls/ws2_32/socket.c, dlls/ws2_32/tests/sock.c
-# |
-if test "$enable_ws2_32_getsockopt" -eq 1; then
-	patch_apply ws2_32-getsockopt/0001-ws2_32-Divide-values-returned-by-SO_RCVBUF-and-SO_SN.patch
 fi
 
 # Patchset wscript-support-d-u-switches
