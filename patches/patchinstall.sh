@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "0ec555e58ea9d5b33f4c825e96965ad0cb15d00f"
+	echo "52ba1b498a9694daf804c9aea99c788bb4e753a3"
 }
 
 # Show version information
@@ -95,7 +95,6 @@ patch_enable_all ()
 	enable_comdlg32_lpstrFileTitle="$1"
 	enable_crypt32_CMS_Certificates="$1"
 	enable_cryptext_CryptExtOpenCER="$1"
-	enable_d3d11_Deferred_Context="$1"
 	enable_d3drm_IDirect3D3_support="$1"
 	enable_d3dx9_36_BumpLuminance="$1"
 	enable_d3dx9_36_CloneEffect="$1"
@@ -326,9 +325,6 @@ patch_enable ()
 			;;
 		cryptext-CryptExtOpenCER)
 			enable_cryptext_CryptExtOpenCER="$2"
-			;;
-		d3d11-Deferred_Context)
-			enable_d3d11_Deferred_Context="$2"
 			;;
 		d3drm-IDirect3D3-support)
 			enable_d3drm_IDirect3D3_support="$2"
@@ -1328,13 +1324,9 @@ if test "$enable_nvcuvid_CUDA_Video_Support" -eq 1; then
 fi
 
 if test "$enable_nvapi_Stub_DLL" -eq 1; then
-	if test "$enable_d3d11_Deferred_Context" -gt 1; then
-		abort "Patchset d3d11-Deferred_Context disabled, but nvapi-Stub_DLL depends on that."
-	fi
 	if test "$enable_nvcuda_CUDA_Support" -gt 1; then
 		abort "Patchset nvcuda-CUDA_Support disabled, but nvapi-Stub_DLL depends on that."
 	fi
-	enable_d3d11_Deferred_Context=1
 	enable_nvcuda_CUDA_Support=1
 fi
 
@@ -1598,28 +1590,6 @@ fi
 # |
 if test "$enable_cryptext_CryptExtOpenCER" -eq 1; then
 	patch_apply cryptext-CryptExtOpenCER/0001-cryptext-Implement-CryptExtOpenCER.patch
-fi
-
-# Patchset d3d11-Deferred_Context
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#42191] Multiple games require d3d11 deferred contexts (Diablo 3, Dark Souls 3, The Evil Within, Elex, Alien:
-# | 	Isolation, Assassin's Creed III)
-# |   *	[#43743] No 3D graphics in Wolcen: Lords of Mayhem
-# |   *	[#41636] Multiple DirectX 11 games need ID3D11Device1::CreateDeferredContext1 implementation (WWE 2K15, Dishonored:
-# | 	Death of the Outsider, Pro Evolution Soccer 2019, Shantae and the Pirate's Curse, Space Engineers)
-# |
-# | Modified files:
-# |   *	dlls/d3d11/device.c, dlls/d3d11/tests/d3d11.c, dlls/wined3d/buffer.c, dlls/wined3d/cs.c, dlls/wined3d/device.c,
-# | 	dlls/wined3d/resource.c, dlls/wined3d/texture.c, dlls/wined3d/wined3d_private.h
-# |
-if test "$enable_d3d11_Deferred_Context" -eq 1; then
-	patch_apply d3d11-Deferred_Context/0006-wined3d-Introduce-a-prepare_upload_bo-device-context.patch
-	patch_apply d3d11-Deferred_Context/0007-wined3d-Implement-wined3d_deferred_context_prepare_u.patch
-	patch_apply d3d11-Deferred_Context/0008-d3d11-Forbid-map-types-other-than-DISCARD-and-NOOVER.patch
-	patch_apply d3d11-Deferred_Context/0009-wined3d-Use-context-ops-prepare_upload_bo-in-wined3d.patch
-	patch_apply d3d11-Deferred_Context/0010-wined3d-Implement-NOOVERWITE-maps-in-wined3d_deferre.patch
-	patch_apply d3d11-Deferred_Context/0011-wined3d-Print-a-message-when-forcing-CS-serializatio.patch
 fi
 
 # Patchset d3drm-IDirect3D3-support
@@ -2880,7 +2850,7 @@ fi
 # Patchset nvapi-Stub_DLL
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	d3d11-Deferred_Context, nvcuda-CUDA_Support
+# |   *	nvcuda-CUDA_Support
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#35062] Fix graphical corruption in FarCry 3 with NVIDIA drivers
@@ -2921,7 +2891,7 @@ fi
 # Patchset nvcuvid-CUDA_Video_Support
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	d3d11-Deferred_Context, nvcuda-CUDA_Support, nvapi-Stub_DLL
+# |   *	nvcuda-CUDA_Support, nvapi-Stub_DLL
 # |
 # | Modified files:
 # |   *	configure.ac, dlls/nvcuvid/Makefile.in, dlls/nvcuvid/nvcuvid.c, dlls/nvcuvid/nvcuvid.spec, include/Makefile.in,
@@ -2934,7 +2904,7 @@ fi
 # Patchset nvencodeapi-Video_Encoder
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	d3d11-Deferred_Context, nvcuda-CUDA_Support, nvapi-Stub_DLL, nvcuvid-CUDA_Video_Support
+# |   *	nvcuda-CUDA_Support, nvapi-Stub_DLL, nvcuvid-CUDA_Video_Support
 # |
 # | Modified files:
 # |   *	configure.ac, dlls/nvencodeapi/Makefile.in, dlls/nvencodeapi/nvencodeapi.c, dlls/nvencodeapi/nvencodeapi.spec,
