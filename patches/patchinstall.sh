@@ -277,6 +277,7 @@ patch_enable_all ()
 	enable_winmm_mciSendCommandA="$1"
 	enable_wintab32_improvements="$1"
 	enable_wintrust_WTHelperGetProvCertFromChain="$1"
+	enable_ws2_32_connect_already_connected="$1"
 	enable_wscript_support_d_u_switches="$1"
 	enable_xactengine_initial="$1"
 	enable_xactengine3_7_Notification="$1"
@@ -871,6 +872,9 @@ patch_enable ()
 			;;
 		wintrust-WTHelperGetProvCertFromChain)
 			enable_wintrust_WTHelperGetProvCertFromChain="$2"
+			;;
+		ws2_32-connect-already-connected)
+			enable_ws2_32_connect_already_connected="$2"
 			;;
 		wscript-support-d-u-switches)
 			enable_wscript_support_d_u_switches="$2"
@@ -4182,6 +4186,18 @@ fi
 # |
 if test "$enable_wintrust_WTHelperGetProvCertFromChain" -eq 1; then
 	patch_apply wintrust-WTHelperGetProvCertFromChain/0001-wintrust-Add-parameter-check-in-WTHelperGetProvCertF.patch
+fi
+
+# Patchset ws2_32-connect-already-connected
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#51381] ws2_32: return correct error code when already connected.
+# |
+# | Modified files:
+# |   *	dlls/ws2_32/socket.c, server/sock.c
+# |
+if test "$enable_ws2_32_connect_already_connected" -eq 1; then
+	patch_apply ws2_32-connect-already-connected/0001-ws2_32-Return-STATUS_ADDRESS_ALREADY_ASSOCIATED-for-.patch
 fi
 
 # Patchset wscript-support-d-u-switches
