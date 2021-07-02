@@ -257,6 +257,7 @@ patch_enable_all ()
 	enable_wined3d_zero_inf_shaders="$1"
 	enable_winedbg_Process_Arguments="$1"
 	enable_winedevice_Default_Drivers="$1"
+	enable_winemac_drv_no_flicker_patch="$1"
 	enable_winemapi_user_xdg_mail="$1"
 	enable_winemenubuilder_Desktop_Icon_Path="$1"
 	enable_winemenubuilder_integration="$1"
@@ -812,6 +813,9 @@ patch_enable ()
 			;;
 		winedevice-Default_Drivers)
 			enable_winedevice_Default_Drivers="$2"
+			;;
+		winemac.drv-no-flicker-patch)
+			enable_winemac_drv_no_flicker_patch="$2"
 			;;
 		winemapi-user-xdg-mail)
 			enable_winemapi_user_xdg_mail="$2"
@@ -3950,6 +3954,18 @@ if test "$enable_winedevice_Default_Drivers" -eq 1; then
 	patch_apply winedevice-Default_Drivers/0002-dxgkrnl.sys-Add-stub-driver.patch
 	patch_apply winedevice-Default_Drivers/0003-dxgmms1.sys-Add-stub-driver.patch
 	patch_apply winedevice-Default_Drivers/0004-programs-winedevice-Load-some-common-drivers-and-fix.patch
+fi
+
+# Patchset winemac.drv-no-flicker-patch
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#34166] Fullscreen flickering on Mac
+# |
+# | Modified files:
+# |   *	dlls/winemac.drv/macdrv.h, dlls/winemac.drv/macdrv_main.c, dlls/winemac.drv/opengl.c
+# |
+if test "$enable_winemac_drv_no_flicker_patch" -eq 1; then
+	patch_apply winemac.drv-no-flicker-patch/0001-winemac.drv-No-Flicker-patch.patch
 fi
 
 # Patchset winemapi-user-xdg-mail
