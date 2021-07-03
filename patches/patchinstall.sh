@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "52ba1b498a9694daf804c9aea99c788bb4e753a3"
+	echo "12d33d21d33788fd46898ea42e9592d33b6e7c8e"
 }
 
 # Show version information
@@ -4210,10 +4210,10 @@ fi
 # |   *	[#51381] ws2_32: return correct error code when already connected.
 # |
 # | Modified files:
-# |   *	dlls/ws2_32/socket.c, server/sock.c
+# |   *	server/sock.c
 # |
 if test "$enable_ws2_32_connect_already_connected" -eq 1; then
-	patch_apply ws2_32-connect-already-connected/0001-ws2_32-Return-STATUS_ADDRESS_ALREADY_ASSOCIATED-for-.patch
+	patch_apply ws2_32-connect-already-connected/0001-server-Explicitly-forbid-connecting-a-listening-or-c.patch
 fi
 
 # Patchset wscript-support-d-u-switches
