@@ -57,7 +57,7 @@ upstream_commit()
 # Show version information
 version()
 {
-	echo "Wine Staging 6.11"
+	echo "Wine Staging 6.12"
 	echo "Copyright (C) 2014-2019 the Wine Staging project authors."
 	echo "Copyright (C) 2018-2020 Alistair Leslie-Hughes"
 	echo ""
