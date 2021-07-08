@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "adffa11609093c3c21cf43970bbecda1b2c43eb1"
+	echo "6763ed84cf0629dd7d1495263e1e3ea9aaf3d663"
 }
 
 # Show version information
@@ -278,7 +278,6 @@ patch_enable_all ()
 	enable_winmm_mciSendCommandA="$1"
 	enable_wintab32_improvements="$1"
 	enable_wintrust_WTHelperGetProvCertFromChain="$1"
-	enable_ws2_32_connect_already_connected="$1"
 	enable_wscript_support_d_u_switches="$1"
 	enable_xactengine_initial="$1"
 	enable_xactengine3_7_Notification="$1"
@@ -876,9 +875,6 @@ patch_enable ()
 			;;
 		wintrust-WTHelperGetProvCertFromChain)
 			enable_wintrust_WTHelperGetProvCertFromChain="$2"
-			;;
-		ws2_32-connect-already-connected)
-			enable_ws2_32_connect_already_connected="$2"
 			;;
 		wscript-support-d-u-switches)
 			enable_wscript_support_d_u_switches="$2"
@@ -2395,11 +2391,10 @@ fi
 # |   *	[#49692] Multiple applications need a Media Foundation media source implementation
 # |
 # | Modified files:
-# |   *	dlls/mf/topology.c, dlls/mfplat/buffer.c, dlls/mfplat/main.c, dlls/winegstreamer/Makefile.in,
-# | 	dlls/winegstreamer/audioconvert.c, dlls/winegstreamer/colorconvert.c, dlls/winegstreamer/decode_transform.c,
-# | 	dlls/winegstreamer/gst_private.h, dlls/winegstreamer/media_source.c, dlls/winegstreamer/mfplat.c,
-# | 	dlls/winegstreamer/quartz_parser.c, dlls/winegstreamer/wg_parser.c, dlls/winegstreamer/winegstreamer_classes.idl,
-# | 	include/mfidl.idl, include/wmcodecdsp.idl
+# |   *	dlls/mf/topology.c, dlls/mfplat/main.c, dlls/winegstreamer/Makefile.in, dlls/winegstreamer/audioconvert.c,
+# | 	dlls/winegstreamer/colorconvert.c, dlls/winegstreamer/decode_transform.c, dlls/winegstreamer/gst_private.h,
+# | 	dlls/winegstreamer/media_source.c, dlls/winegstreamer/mfplat.c, dlls/winegstreamer/quartz_parser.c,
+# | 	dlls/winegstreamer/wg_parser.c, dlls/winegstreamer/winegstreamer_classes.idl, include/mfidl.idl, include/wmcodecdsp.idl
 # |
 if test "$enable_mfplat_streaming_support" -eq 1; then
 	patch_apply mfplat-streaming-support/0001-winegstreamer-Activate-source-pad-in-push-mode-if-it.patch
@@ -2439,7 +2434,6 @@ if test "$enable_mfplat_streaming_support" -eq 1; then
 	patch_apply mfplat-streaming-support/0035-mfplat-Stub-out-MFCreateDXGIDeviceManager-to-avoid-t.patch
 	patch_apply mfplat-streaming-support/0036-winegstreamer-Don-t-rely-on-max_size-in-unseekable-p.patch
 	patch_apply mfplat-streaming-support/0037-winegstreamer-Implement-MFT_MESSAGE_COMMAND_FLUSH-fo.patch
-	patch_apply mfplat-streaming-support/0038-mfplat-Fix-copy-paste-error.patch
 	patch_apply mfplat-streaming-support/0039-winegstreamer-Default-Frame-size-if-one-isn-t-availa.patch
 fi
 
@@ -4202,18 +4196,6 @@ fi
 # |
 if test "$enable_wintrust_WTHelperGetProvCertFromChain" -eq 1; then
 	patch_apply wintrust-WTHelperGetProvCertFromChain/0001-wintrust-Add-parameter-check-in-WTHelperGetProvCertF.patch
-fi
-
-# Patchset ws2_32-connect-already-connected
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#51381] ws2_32: return correct error code when already connected.
-# |
-# | Modified files:
-# |   *	server/sock.c
-# |
-if test "$enable_ws2_32_connect_already_connected" -eq 1; then
-	patch_apply ws2_32-connect-already-connected/0001-server-Explicitly-forbid-connecting-a-listening-or-c.patch
 fi
 
 # Patchset wscript-support-d-u-switches
