@@ -2828,6 +2828,7 @@ fi
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#37664] MediaCoder needs CUDA for video encoding
+# |   *	[#51523] Add cuD3D11GetDevice and cuGraphicsD3D11RegisterResource stubs
 # |
 # | Modified files:
 # |   *	configure.ac, dlls/nvcuda/Makefile.in, dlls/nvcuda/internal.c, dlls/nvcuda/nvcuda.c, dlls/nvcuda/nvcuda.h,
@@ -2846,6 +2847,7 @@ if test "$enable_nvcuda_CUDA_Support" -eq 1; then
 	patch_apply nvcuda-CUDA_Support/0009-nvcuda-Implement-cuModuleLoad-wrapper-function.patch
 	patch_apply nvcuda-CUDA_Support/0010-nvcuda-Search-for-dylib-library-on-Mac-OS-X.patch
 	patch_apply nvcuda-CUDA_Support/0011-nvcuda-Add-semi-stub-for-cuD3D10GetDevice.patch
+	patch_apply nvcuda-CUDA_Support/0012-nvcuda-Add-semi-stub-for-cuD3D11GetDevice-and-cuGrap.patch
 fi
 
 # Patchset nvapi-Stub_DLL
