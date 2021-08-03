@@ -169,7 +169,6 @@ patch_enable_all ()
 	enable_ntdll_Syscall_Emulation="$1"
 	enable_ntdll_WRITECOPY="$1"
 	enable_ntdll_Zero_mod_name="$1"
-	enable_ntdll_aarch_TEB="$1"
 	enable_ntdll_ext4_case_folder="$1"
 	enable_ntoskrnl_Stubs="$1"
 	enable_nvapi_Stub_DLL="$1"
@@ -548,9 +547,6 @@ patch_enable ()
 			;;
 		ntdll-Zero_mod_name)
 			enable_ntdll_Zero_mod_name="$2"
-			;;
-		ntdll-aarch-TEB)
-			enable_ntdll_aarch_TEB="$2"
 			;;
 		ntdll-ext4-case-folder)
 			enable_ntdll_ext4_case_folder="$2"
@@ -2787,19 +2783,6 @@ fi
 # |
 if test "$enable_ntdll_Zero_mod_name" -eq 1; then
 	patch_apply ntdll-Zero_mod_name/0001-ntdll-Initialize-mod_name-to-zero.patch
-fi
-
-# Patchset ntdll-aarch-TEB
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#38780] AArch64 platforms: register X18 (TEB) must remain reserved for Wine to run 64-bit ARM Windows applications.
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/ntdll/loader.c, dlls/ntdll/relay.c
-# |
-if test "$enable_ntdll_aarch_TEB" -eq 1; then
-	patch_apply ntdll-aarch-TEB/0001-configure-Avoid-clobbering-x18-on-arm64-within-wine.patch
-	patch_apply ntdll-aarch-TEB/0002-ntdll-Always-restore-TEB-to-x18-on-aarch-64-on-retur.patch
 fi
 
 # Patchset ntdll-ext4-case-folder
