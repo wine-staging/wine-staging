@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "3f2850aeaa159270384764843cdb1dc3cbe902c6"
+	echo "f63ecaedc72f3580e7016ba71a480025e4d86e99"
 }
 
 # Show version information
@@ -3733,12 +3733,11 @@ fi
 # |   *	[#33037] Visual Studio 6 can't be installed with WinVer >= Win2K (missing HKEY_PERFORMANCE_DATA 230, process object)
 # |
 # | Modified files:
-# |   *	dlls/advapi32/tests/registry.c, loader/wine.inf.in
+# |   *	loader/wine.inf.in
 # |
 if test "$enable_wine_inf_Performance" -eq 1; then
 	patch_apply wine.inf-Performance/0001-wine.inf-Add-registry-keys-for-Windows-Performance-L.patch
 	patch_apply wine.inf-Performance/0002-wine.inf-Add-Counters-to-the-perflib-key-as-an-alias.patch
-	patch_apply wine.inf-Performance/0003-advapi32-tests-Add-test-for-perflib-registry-key.patch
 fi
 
 # Patchset wineboot-HKEY_DYN_DATA
