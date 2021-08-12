@@ -1,4 +1,4 @@
-From 03e143d7abd6684600722fee6c96d05d2c70830d Mon Sep 17 00:00:00 2001
+From e127c088e6f4cfae3066b31adcd73c4eee9008ed Mon Sep 17 00:00:00 2001
 From: Paul Gofman <pgofman@codeweavers.com>
 Date: Mon, 25 Nov 2019 12:19:20 +0300
 Subject: [PATCH] ntdll: Force virtual memory allocation order.
@@ -12,14 +12,14 @@ are from higher memory than they expect.
 Wine-Bug: https://bugs.winehq.org/show_bug.cgi?id=48175
 Wine-Bug: https://bugs.winehq.org/show_bug.cgi?id=46568
 ---
- dlls/ntdll/unix/virtual.c | 418 ++++++++++++++++++--------------------
- 1 file changed, 202 insertions(+), 216 deletions(-)
+ dlls/ntdll/unix/virtual.c | 421 ++++++++++++++++++--------------------
+ 1 file changed, 204 insertions(+), 217 deletions(-)
 
 diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
-index 75fa0b91872..525c55b8097 100644
+index 606e136dfaa..4899fc7b443 100644
 --- a/dlls/ntdll/unix/virtual.c
 +++ b/dlls/ntdll/unix/virtual.c
-@@ -1135,44 +1135,6 @@ static struct file_view *find_view_range( const void *addr, size_t size )
+@@ -1217,44 +1217,6 @@ static struct file_view *find_view_range( const void *addr, size_t size )
  }
  
  
@@ -64,7 +64,7 @@ index 75fa0b91872..525c55b8097 100644
  /***********************************************************************
   *           try_map_free_area
   *
-@@ -1205,110 +1167,6 @@ static void* try_map_free_area( void *base, void *end, ptrdiff_t step,
+@@ -1287,110 +1249,6 @@ static void* try_map_free_area( void *base, void *end, ptrdiff_t step,
      return NULL;
  }
  
@@ -175,7 +175,7 @@ index 75fa0b91872..525c55b8097 100644
  /***********************************************************************
   *           add_reserved_area
   *
-@@ -1466,8 +1324,7 @@ static void delete_view( struct file_view *view ) /* [in] View */
+@@ -1548,8 +1406,7 @@ static void delete_view( struct file_view *view ) /* [in] View */
  {
      if (!(view->protect & VPROT_SYSTEM)) unmap_area( view->base, view->size );
      set_page_vprot( view->base, view->size, 0 );
@@ -185,7 +185,7 @@ index 75fa0b91872..525c55b8097 100644
      wine_rb_remove( &views_tree, &view->entry );
      *(struct file_view **)view = next_free_view;
      next_free_view = view;
-@@ -1515,8 +1372,7 @@ static NTSTATUS create_view( struct file_view **view_ret, void *base, size_t siz
+@@ -1597,8 +1454,7 @@ static NTSTATUS create_view( struct file_view **view_ret, void *base, size_t siz
      set_page_vprot( base, size, vprot );
  
      wine_rb_put( &views_tree, view->base, &view->entry );
@@ -195,11 +195,8 @@ index 75fa0b91872..525c55b8097 100644
  
      *view_ret = view;
  
-@@ -1741,54 +1597,220 @@ static inline void *unmap_extra_space( void *ptr, size_t total_size, size_t want
-     return ptr;
- }
+@@ -1812,51 +1668,218 @@ static inline void *unmap_extra_space( void *ptr, size_t total_size, size_t want
  
--
  struct alloc_area
  {
 +    char *map_area_start, *map_area_end, *result;
@@ -217,20 +214,20 @@ index 75fa0b91872..525c55b8097 100644
 - *
 - * Try to map some space inside a reserved area. Callback for mmap_enum_reserved_areas.
 - */
--static int CDECL alloc_reserved_area_callback( void *start, SIZE_T size, void *arg )
-+static int CDECL alloc_area_in_reserved_or_between_callback( void *start, SIZE_T size, void *arg )
+-static int alloc_reserved_area_callback( void *start, SIZE_T size, void *arg )
++static int alloc_area_in_reserved_or_between_callback( void *start, SIZE_T size, void *arg )
  {
 -    struct alloc_area *alloc = arg;
 -    void *end = (char *)start + size;
--
--    if (start < address_space_start) start = address_space_start;
--    if (is_beyond_limit( start, size, alloc->limit )) end = alloc->limit;
--    if (start >= end) return 0;
 +    char *intersect_start, *intersect_end;
 +    char *end = (char *)start + size;
 +    struct alloc_area *area = arg;
 +    char *alloc_start;
  
+-    if (start < address_space_start) start = address_space_start;
+-    if (is_beyond_limit( start, size, alloc->limit )) end = alloc->limit;
+-    if (start >= end) return 0;
+-
 -    /* make sure we don't touch the preloader reserved range */
 -    if (preload_reserve_end >= start)
 +    if (area->top_down)
@@ -253,13 +250,20 @@ index 75fa0b91872..525c55b8097 100644
          {
 -            if (preload_reserve_start <= start) return 0;  /* no space in that area */
 -            if (preload_reserve_start < end) end = preload_reserve_start;
+-        }
+-        else if (preload_reserve_start <= start) start = preload_reserve_end;
+-        else
+-        {
+-            /* range is split in two by the preloader reservation, try first part */
+-            if ((alloc->result = find_reserved_free_area( start, preload_reserve_start, alloc->size,
+-                                                          alloc->top_down )))
 +            alloc_start = ROUND_ADDR( (char *)area->map_area_end - size, granularity_mask );
 +            if ((area->result = try_map_free_area( intersect_end, alloc_start + size, area->step,
 +                    alloc_start, area->size, area->unix_prot )))
-+                return 1;
+                 return 1;
+-            /* then fall through to try second part */
+-            start = preload_reserve_end;
          }
--        else if (preload_reserve_start <= start) start = preload_reserve_end;
--        else
 +
 +        if (intersect_end - intersect_start >= area->size)
 +        {
@@ -291,16 +295,11 @@ index 75fa0b91872..525c55b8097 100644
 +        assert(ROUND_ADDR(area->map_area_start, granularity_mask) == area->map_area_start);
 +
 +        if (intersect_start - area->map_area_start >= area->size)
-         {
--            /* range is split in two by the preloader reservation, try first part */
--            if ((alloc->result = find_reserved_free_area( start, preload_reserve_start, alloc->size,
--                                                          alloc->top_down )))
++        {
 +            if ((area->result = try_map_free_area( area->map_area_start, intersect_start, area->step,
 +                    area->map_area_start, area->size, area->unix_prot )))
-                 return 1;
--            /* then fall through to try second part */
--            start = preload_reserve_end;
-         }
++                return 1;
++        }
 +
 +        if (intersect_end - intersect_start >= area->size)
 +        {
@@ -446,7 +445,7 @@ index 75fa0b91872..525c55b8097 100644
  /***********************************************************************
   *           map_fixed_area
   *
-@@ -1860,48 +1882,11 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
+@@ -1928,48 +1951,11 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
          if (status != STATUS_SUCCESS) return status;
          ptr = base;
      }
@@ -498,7 +497,7 @@ index 75fa0b91872..525c55b8097 100644
      status = create_view( view_ret, ptr, size, vprot );
      if (status != STATUS_SUCCESS) unmap_area( ptr, size );
      return status;
-@@ -2627,6 +2612,7 @@ void virtual_init(void)
+@@ -2695,6 +2681,7 @@ void virtual_init(void)
              if (preload_reserve_start)
                  address_space_start = min( address_space_start, preload_reserve_start );
          }

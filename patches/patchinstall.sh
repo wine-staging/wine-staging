@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "f63ecaedc72f3580e7016ba71a480025e4d86e99"
+	echo "91494ae6f2e47254d15a47e292ff569f3b400be6"
 }
 
 # Show version information
@@ -240,7 +240,6 @@ patch_enable_all ()
 	enable_windowscodecs_TIFF_Support="$1"
 	enable_wine_inf_Directory_ContextMenuHandlers="$1"
 	enable_wine_inf_Dummy_CA_Certificate="$1"
-	enable_wine_inf_Performance="$1"
 	enable_wineboot_HKEY_DYN_DATA="$1"
 	enable_wineboot_ProxySettings="$1"
 	enable_winecfg_Libraries="$1"
@@ -760,9 +759,6 @@ patch_enable ()
 			;;
 		wine.inf-Dummy_CA_Certificate)
 			enable_wine_inf_Dummy_CA_Certificate="$2"
-			;;
-		wine.inf-Performance)
-			enable_wine_inf_Performance="$2"
 			;;
 		wineboot-HKEY_DYN_DATA)
 			enable_wineboot_HKEY_DYN_DATA="$2"
@@ -3725,20 +3721,6 @@ fi
 # |
 if test "$enable_wine_inf_Dummy_CA_Certificate" -eq 1; then
 	patch_apply wine.inf-Dummy_CA_Certificate/0001-wine.inf.in-Add-invalid-dummy-certificate-to-CA-cert.patch
-fi
-
-# Patchset wine.inf-Performance
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#33661] Add performance library registry keys needed by MS SQL Server Management Studio Express 2008 R2
-# |   *	[#33037] Visual Studio 6 can't be installed with WinVer >= Win2K (missing HKEY_PERFORMANCE_DATA 230, process object)
-# |
-# | Modified files:
-# |   *	loader/wine.inf.in
-# |
-if test "$enable_wine_inf_Performance" -eq 1; then
-	patch_apply wine.inf-Performance/0001-wine.inf-Add-registry-keys-for-Windows-Performance-L.patch
-	patch_apply wine.inf-Performance/0002-wine.inf-Add-Counters-to-the-perflib-key-as-an-alias.patch
 fi
 
 # Patchset wineboot-HKEY_DYN_DATA
