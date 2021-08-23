@@ -96,6 +96,7 @@ patch_enable_all ()
 	enable_crypt32_CMS_Certificates="$1"
 	enable_cryptext_CryptExtOpenCER="$1"
 	enable_d3drm_IDirect3D3_support="$1"
+	enable_d3dx11_43_D3DX11CreateTextureFromMemory="$1"
 	enable_d3dx9_36_BumpLuminance="$1"
 	enable_d3dx9_36_CloneEffect="$1"
 	enable_d3dx9_36_D3DXDisassembleShader="$1"
@@ -327,6 +328,9 @@ patch_enable ()
 			;;
 		d3drm-IDirect3D3-support)
 			enable_d3drm_IDirect3D3_support="$2"
+			;;
+		d3dx11_43-D3DX11CreateTextureFromMemory)
+			enable_d3dx11_43_D3DX11CreateTextureFromMemory="$2"
 			;;
 		d3dx9_36-BumpLuminance)
 			enable_d3dx9_36_BumpLuminance="$2"
@@ -1598,6 +1602,20 @@ fi
 # |
 if test "$enable_d3drm_IDirect3D3_support" -eq 1; then
 	patch_apply d3drm-IDirect3D3-support/0001-d3drm-Support-IDirect3D3-when-creating-device.patch
+fi
+
+# Patchset d3dx11_43-D3DX11CreateTextureFromMemory
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#50210] - Implement D3DX11GetImageInfoFromMemory
+# |   *	[#45533] - Implement D3DX11CreateTextureFromMemory
+# |
+# | Modified files:
+# |   *	dlls/d3dx11_42/Makefile.in, dlls/d3dx11_43/Makefile.in, dlls/d3dx11_43/main.c, dlls/d3dx11_43/texture.c
+# |
+if test "$enable_d3dx11_43_D3DX11CreateTextureFromMemory" -eq 1; then
+	patch_apply d3dx11_43-D3DX11CreateTextureFromMemory/0001-d3dx11_43-Implement-D3DX11GetImageInfoFromMemory.patch
+	patch_apply d3dx11_43-D3DX11CreateTextureFromMemory/0002-d3dx11_42-Implement-D3DX11CreateTextureFromMemory.patch
 fi
 
 # Patchset d3dx9_36-BumpLuminance
