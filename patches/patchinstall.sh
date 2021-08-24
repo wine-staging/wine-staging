@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "f33bf35d9a395a17e83b4bf512c5434368a8218e"
+	echo "a87bafc5b92c9f2deaa399e32a8ec42d28f7ea45"
 }
 
 # Show version information
@@ -116,7 +116,6 @@ patch_enable_all ()
 	enable_dinput_joy_mappings="$1"
 	enable_dinput_reconnect_joystick="$1"
 	enable_dinput_remap_joystick="$1"
-	enable_dpnet_Server_EnumServiceProviders="$1"
 	enable_dsound_EAX="$1"
 	enable_dsound_Fast_Mixer="$1"
 	enable_dwrite_FontFallback="$1"
@@ -388,9 +387,6 @@ patch_enable ()
 			;;
 		dinput-remap-joystick)
 			enable_dinput_remap_joystick="$2"
-			;;
-		dpnet-Server-EnumServiceProviders)
-			enable_dpnet_Server_EnumServiceProviders="$2"
 			;;
 		dsound-EAX)
 			enable_dsound_EAX="$2"
@@ -1867,18 +1863,6 @@ fi
 # |
 if test "$enable_dinput_remap_joystick" -eq 1; then
 	patch_apply dinput-remap-joystick/0001-dinput-Allow-remapping-of-joystick-buttons.patch
-fi
-
-# Patchset dpnet-Server-EnumServiceProviders
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#51221] dpnet: Impelment IDirectPlay8Server EnumServiceProviders.
-# |
-# | Modified files:
-# |   *	dlls/dpnet/server.c, dlls/dpnet/tests/server.c
-# |
-if test "$enable_dpnet_Server_EnumServiceProviders" -eq 1; then
-	patch_apply dpnet-Server-EnumServiceProviders/0001-dpnet-Implement-IDirectPlay8Server-EnumServicePro.patch
 fi
 
 # Patchset dsound-Fast_Mixer
