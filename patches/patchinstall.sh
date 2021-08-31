@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "8e2df64cf8979334618a3e2672d19cb9b891fa3f"
+	echo "21c4a25437969696cbf5ffecee191ba8302bb2dd"
 }
 
 # Show version information
@@ -206,7 +206,6 @@ patch_enable_all ()
 	enable_shell32_Toolbar_Bitmaps="$1"
 	enable_shell32_UnixFS="$1"
 	enable_shlwapi_AssocGetPerceivedType="$1"
-	enable_shlwapi_SHAddDataBlock="$1"
 	enable_shlwapi_UrlCanonicalize="$1"
 	enable_shlwapi_UrlCombine="$1"
 	enable_stdole32_idl_Typelib="$1"
@@ -657,9 +656,6 @@ patch_enable ()
 			;;
 		shlwapi-AssocGetPerceivedType)
 			enable_shlwapi_AssocGetPerceivedType="$2"
-			;;
-		shlwapi-SHAddDataBlock)
-			enable_shlwapi_SHAddDataBlock="$2"
 			;;
 		shlwapi-UrlCanonicalize)
 			enable_shlwapi_UrlCanonicalize="$2"
@@ -1260,6 +1256,13 @@ if test "$enable_stdole32_tlb_SLTG_Typelib" -eq 1; then
 		abort "Patchset widl-SLTG_Typelib_Support disabled, but stdole32.tlb-SLTG_Typelib depends on that."
 	fi
 	enable_widl_SLTG_Typelib_Support=1
+fi
+
+if test "$enable_shlwapi_UrlCombine" -eq 1; then
+	if test "$enable_shlwapi_UrlCanonicalize" -gt 1; then
+		abort "Patchset shlwapi-UrlCanonicalize disabled, but shlwapi-UrlCombine depends on that."
+	fi
+	enable_shlwapi_UrlCanonicalize=1
 fi
 
 if test "$enable_shell32_ACE_Viewer" -eq 1; then
@@ -2681,7 +2684,8 @@ fi
 # | Modified files:
 # |   *	dlls/ntdll/Makefile.in, dlls/ntdll/critsection.c, dlls/ntdll/ntdll.spec, dlls/ntdll/sync.c,
 # | 	dlls/ntdll/tests/Makefile.in, dlls/ntdll/tests/om.c, dlls/ntdll/tests/sync.c, dlls/ntdll/unix/loader.c,
-# | 	dlls/ntdll/unix/sync.c, dlls/ntdll/unix/unix_private.h, dlls/ntdll/unixlib.h, include/winternl.h
+# | 	dlls/ntdll/unix/sync.c, dlls/ntdll/unix/unix_private.h, dlls/ntdll/unixlib.h, dlls/wow64/sync.c, dlls/wow64/syscall.h,
+# | 	include/winternl.h
 # |
 if test "$enable_ntdll_NtAlertThreadByThreadId" -eq 1; then
 	patch_apply ntdll-NtAlertThreadByThreadId/0001-ntdll-tests-Move-some-tests-to-a-new-sync.c-file.patch
@@ -3266,15 +3270,6 @@ if test "$enable_shlwapi_AssocGetPerceivedType" -eq 1; then
 	patch_apply shlwapi-AssocGetPerceivedType/0002-shlwapi-Implement-AssocGetPerceivedType.patch
 fi
 
-# Patchset shlwapi-SHAddDataBlock
-# |
-# | Modified files:
-# |   *	dlls/shlwapi/clist.c, dlls/shlwapi/tests/clist.c
-# |
-if test "$enable_shlwapi_SHAddDataBlock" -eq 1; then
-	patch_apply shlwapi-SHAddDataBlock/0001-shlwapi-Fix-the-return-value-of-SHAddDataBlock.patch
-fi
-
 # Patchset shlwapi-UrlCanonicalize
 # |
 # | This patchset fixes the following Wine bugs:
@@ -3288,6 +3283,9 @@ if test "$enable_shlwapi_UrlCanonicalize" -eq 1; then
 fi
 
 # Patchset shlwapi-UrlCombine
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	shlwapi-UrlCanonicalize
 # |
 # | Modified files:
 # |   *	dlls/kernelbase/path.c, dlls/shlwapi/tests/url.c
