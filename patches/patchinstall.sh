@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "b5e17b669a90d961a93f6092ebc3736ff8ca9cd6"
+	echo "f232252951fec637758f6b2c4eeda1c0e0650310"
 }
 
 # Show version information
@@ -204,7 +204,6 @@ patch_enable_all ()
 	enable_shell32_SHFileOperation_Move="$1"
 	enable_shell32_SHGetStockIconInfo="$1"
 	enable_shell32_Toolbar_Bitmaps="$1"
-	enable_shell32_UnixFS="$1"
 	enable_shlwapi_AssocGetPerceivedType="$1"
 	enable_shlwapi_UrlCanonicalize="$1"
 	enable_shlwapi_UrlCombine="$1"
@@ -650,9 +649,6 @@ patch_enable ()
 			;;
 		shell32-Toolbar_Bitmaps)
 			enable_shell32_Toolbar_Bitmaps="$2"
-			;;
-		shell32-UnixFS)
-			enable_shell32_UnixFS="$2"
 			;;
 		shlwapi-AssocGetPerceivedType)
 			enable_shlwapi_AssocGetPerceivedType="$2"
@@ -3174,7 +3170,7 @@ fi
 # | Modified files:
 # |   *	dlls/shell32/brsfolder.c, dlls/shell32/clipboard.c, dlls/shell32/dataobject.c, dlls/shell32/recyclebin.c,
 # | 	dlls/shell32/shell32.rc, dlls/shell32/shell32_main.h, dlls/shell32/shellfolder.h, dlls/shell32/shfldr_fs.c,
-# | 	dlls/shell32/shfldr_unixfs.c, dlls/shell32/shlview.c, dlls/shell32/shlview_cmenu.c
+# | 	dlls/shell32/shlview.c, dlls/shell32/shlview_cmenu.c
 # |
 if test "$enable_shell32_Context_Menu" -eq 1; then
 	patch_apply shell32-Context_Menu/0003-shell32-Implement-insert-paste-for-item-context-menu.patch
@@ -3215,10 +3211,9 @@ fi
 # |   *	[#24851] Only set SFGAO_HASSUBFOLDER when there are really subfolders
 # |
 # | Modified files:
-# |   *	dlls/shell32/shfldr_unixfs.c, dlls/shell32/shlfolder.c
+# |   *	dlls/shell32/shlfolder.c
 # |
 if test "$enable_shell32_SFGAO_HASSUBFOLDER" -eq 1; then
-	patch_apply shell32-SFGAO_HASSUBFOLDER/0001-shell32-Set-SFGAO_HASSUBFOLDER-correctly-for-unixfs.patch
 	patch_apply shell32-SFGAO_HASSUBFOLDER/0002-shell32-Set-SFGAO_HASSUBFOLDER-correctly-for-normal-.patch
 fi
 
@@ -3246,18 +3241,6 @@ fi
 if test "$enable_shell32_Toolbar_Bitmaps" -eq 1; then
 	patch_apply shell32-Toolbar_Bitmaps/0001-shell32-Add-toolbar-bitmaps-compatible-with-IE6.patch
 	patch_apply shell32-Toolbar_Bitmaps/0002-shell32-Add-more-Tango-icons-to-the-IE-toolbar.patch
-fi
-
-# Patchset shell32-UnixFS
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#43109] Do not use unixfs for devices without mountpoint
-# |
-# | Modified files:
-# |   *	dlls/shell32/shfldr_desktop.c, dlls/shell32/tests/shlfolder.c
-# |
-if test "$enable_shell32_UnixFS" -eq 1; then
-	patch_apply shell32-UnixFS/0001-shell32-Do-not-use-unixfs-for-devices-without-mountp.patch
 fi
 
 # Patchset shlwapi-AssocGetPerceivedType
