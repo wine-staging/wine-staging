@@ -185,6 +185,7 @@ patch_enable_all ()
 	enable_programs_systeminfo="$1"
 	enable_riched20_Class_Tests="$1"
 	enable_riched20_IText_Interface="$1"
+	enable_sapi_ISpObjectToken_CreateInstance="$1"
 	enable_secur32_InitializeSecurityContextW="$1"
 	enable_server_File_Permissions="$1"
 	enable_server_Key_State="$1"
@@ -593,6 +594,9 @@ patch_enable ()
 			;;
 		riched20-IText_Interface)
 			enable_riched20_IText_Interface="$2"
+			;;
+		sapi-ISpObjectToken-CreateInstance)
+			enable_sapi_ISpObjectToken_CreateInstance="$2"
 			;;
 		secur32-InitializeSecurityContextW)
 			enable_secur32_InitializeSecurityContextW="$2"
@@ -3014,6 +3018,21 @@ fi
 if test "$enable_riched20_IText_Interface" -eq 1; then
 	patch_apply riched20-IText_Interface/0003-riched20-Stub-for-ITextPara-interface-and-implement-.patch
 	patch_apply riched20-IText_Interface/0010-riched20-Silence-repeated-FIXMEs-triggered-by-Adobe-.patch
+fi
+
+# Patchset sapi-ISpObjectToken-CreateInstance
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#49641] sapi: Implement ISpObjectToken-CreateInstance
+# |
+# | Modified files:
+# |   *	dlls/sapi/token.c, include/sapi.idl
+# |
+if test "$enable_sapi_ISpObjectToken_CreateInstance" -eq 1; then
+	patch_apply sapi-ISpObjectToken-CreateInstance/0001-include-Add-ISpAudio-interface.patch
+	patch_apply sapi-ISpObjectToken-CreateInstance/0002-sapi-ISpObjectToken-SetId-Support-create-parameter.patch
+	patch_apply sapi-ISpObjectToken-CreateInstance/0003-sapi-ISpObjectTokenCategory-SetId-Support-create-par.patch
+	patch_apply sapi-ISpObjectToken-CreateInstance/0004-sapi-ISpObjectToken-CreateInstance-support-ISpAudio.patch
 fi
 
 # Patchset secur32-InitializeSecurityContextW
