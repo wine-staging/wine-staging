@@ -121,6 +121,7 @@ patch_enable_all ()
 	enable_dwrite_FontFallback="$1"
 	enable_eventfd_synchronization="$1"
 	enable_explorer_Video_Registry_Key="$1"
+	enable_fltmgr_sys_FltBuildDefaultSecurityDescriptor="$1"
 	enable_fonts_Missing_Fonts="$1"
 	enable_gdi32_rotation="$1"
 	enable_gdiplus_Performance_Improvements="$1"
@@ -399,6 +400,9 @@ patch_enable ()
 			;;
 		explorer-Video_Registry_Key)
 			enable_explorer_Video_Registry_Key="$2"
+			;;
+		fltmgr.sys-FltBuildDefaultSecurityDescriptor)
+			enable_fltmgr_sys_FltBuildDefaultSecurityDescriptor="$2"
 			;;
 		fonts-Missing_Fonts)
 			enable_fonts_Missing_Fonts="$2"
@@ -1222,13 +1226,6 @@ if test "$enable_winex11_WM_WINDOWPOSCHANGING" -eq 1; then
 	enable_winex11__NET_ACTIVE_WINDOW=1
 fi
 
-if test "$enable_winedevice_Default_Drivers" -eq 1; then
-	if test "$enable_ntoskrnl_Stubs" -gt 1; then
-		abort "Patchset ntoskrnl-Stubs disabled, but winedevice-Default_Drivers depends on that."
-	fi
-	enable_ntoskrnl_Stubs=1
-fi
-
 if test "$enable_wined3d_Indexed_Vertex_Blending" -eq 1; then
 	if test "$enable_wined3d_SWVP_shaders" -gt 1; then
 		abort "Patchset wined3d-SWVP-shaders disabled, but wined3d-Indexed_Vertex_Blending depends on that."
@@ -1340,6 +1337,20 @@ if test "$enable_imm32_com_initialization" -eq 1; then
 		abort "Patchset winex11-_NET_ACTIVE_WINDOW disabled, but imm32-com-initialization depends on that."
 	fi
 	enable_winex11__NET_ACTIVE_WINDOW=1
+fi
+
+if test "$enable_fltmgr_sys_FltBuildDefaultSecurityDescriptor" -eq 1; then
+	if test "$enable_winedevice_Default_Drivers" -gt 1; then
+		abort "Patchset winedevice-Default_Drivers disabled, but fltmgr.sys-FltBuildDefaultSecurityDescriptor depends on that."
+	fi
+	enable_winedevice_Default_Drivers=1
+fi
+
+if test "$enable_winedevice_Default_Drivers" -eq 1; then
+	if test "$enable_ntoskrnl_Stubs" -gt 1; then
+		abort "Patchset ntoskrnl-Stubs disabled, but winedevice-Default_Drivers depends on that."
+	fi
+	enable_ntoskrnl_Stubs=1
 fi
 
 if test "$enable_eventfd_synchronization" -eq 1; then
@@ -2154,6 +2165,52 @@ if test "$enable_explorer_Video_Registry_Key" -eq 1; then
 	patch_apply explorer-Video_Registry_Key/0001-explorer-Create-CurrentControlSet-Control-Video-regi.patch
 fi
 
+# Patchset ntoskrnl-Stubs
+# |
+# | Modified files:
+# |   *	dlls/ntoskrnl.exe/ntoskrnl.c, dlls/ntoskrnl.exe/ntoskrnl.exe.spec
+# |
+if test "$enable_ntoskrnl_Stubs" -eq 1; then
+	patch_apply ntoskrnl-Stubs/0009-ntoskrnl.exe-Implement-MmMapLockedPages-and-MmUnmapL.patch
+	patch_apply ntoskrnl-Stubs/0011-ntoskrnl.exe-Add-IoGetDeviceAttachmentBaseRef-stub.patch
+fi
+
+# Patchset winedevice-Default_Drivers
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	ntoskrnl-Stubs
+# |
+# | Modified files:
+# |   *	configure.ac, dlls/dxgkrnl.sys/Makefile.in, dlls/dxgkrnl.sys/dxgkrnl.sys.spec, dlls/dxgkrnl.sys/main.c,
+# | 	dlls/dxgmms1.sys/Makefile.in, dlls/dxgmms1.sys/dxgmms1.sys.spec, dlls/dxgmms1.sys/main.c,
+# | 	dlls/ntoskrnl.exe/tests/driver.c, dlls/win32k.sys/Makefile.in, dlls/win32k.sys/main.c, dlls/win32k.sys/win32k.sys.spec,
+# | 	loader/wine.inf.in, programs/winedevice/device.c, tools/make_specfiles
+# |
+if test "$enable_winedevice_Default_Drivers" -eq 1; then
+	patch_apply winedevice-Default_Drivers/0001-win32k.sys-Add-stub-driver.patch
+	patch_apply winedevice-Default_Drivers/0002-dxgkrnl.sys-Add-stub-driver.patch
+	patch_apply winedevice-Default_Drivers/0003-dxgmms1.sys-Add-stub-driver.patch
+	patch_apply winedevice-Default_Drivers/0004-programs-winedevice-Load-some-common-drivers-and-fix.patch
+fi
+
+# Patchset fltmgr.sys-FltBuildDefaultSecurityDescriptor
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	ntoskrnl-Stubs, winedevice-Default_Drivers
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#49089] fltmgr.sys: Implement FltBuildDefaultSecurityDescriptor
+# |
+# | Modified files:
+# |   *	dlls/fltmgr.sys/Makefile.in, dlls/fltmgr.sys/fltmgr.sys.spec, dlls/fltmgr.sys/main.c,
+# | 	dlls/ntoskrnl.exe/tests/Makefile.in, dlls/ntoskrnl.exe/tests/driver.c, include/ddk/fltkernel.h
+# |
+if test "$enable_fltmgr_sys_FltBuildDefaultSecurityDescriptor" -eq 1; then
+	patch_apply fltmgr.sys-FltBuildDefaultSecurityDescriptor/0001-fltmgr.sys-Implement-FltBuildDefaultSecurityDescript.patch
+	patch_apply fltmgr.sys-FltBuildDefaultSecurityDescriptor/0002-fltmgr.sys-Create-import-library.patch
+	patch_apply fltmgr.sys-FltBuildDefaultSecurityDescriptor/0003-ntoskrnl.exe-Add-FltBuildDefaultSecurityDescriptor-t.patch
+fi
+
 # Patchset fonts-Missing_Fonts
 # |
 # | This patchset fixes the following Wine bugs:
@@ -2738,16 +2795,6 @@ fi
 # |
 if test "$enable_ntdll_ext4_case_folder" -eq 1; then
 	patch_apply ntdll-ext4-case-folder/0002-ntdll-server-Mark-drive_c-as-case-insensitive-when-c.patch
-fi
-
-# Patchset ntoskrnl-Stubs
-# |
-# | Modified files:
-# |   *	dlls/ntoskrnl.exe/ntoskrnl.c, dlls/ntoskrnl.exe/ntoskrnl.exe.spec
-# |
-if test "$enable_ntoskrnl_Stubs" -eq 1; then
-	patch_apply ntoskrnl-Stubs/0009-ntoskrnl.exe-Implement-MmMapLockedPages-and-MmUnmapL.patch
-	patch_apply ntoskrnl-Stubs/0011-ntoskrnl.exe-Add-IoGetDeviceAttachmentBaseRef-stub.patch
 fi
 
 # Patchset nvcuda-CUDA_Support
@@ -3823,24 +3870,6 @@ fi
 # |
 if test "$enable_winedbg_Process_Arguments" -eq 1; then
 	patch_apply winedbg-Process_Arguments/0001-programs-winedbg-Print-process-arguments-in-info-thr.patch
-fi
-
-# Patchset winedevice-Default_Drivers
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntoskrnl-Stubs
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/dxgkrnl.sys/Makefile.in, dlls/dxgkrnl.sys/dxgkrnl.sys.spec, dlls/dxgkrnl.sys/main.c,
-# | 	dlls/dxgmms1.sys/Makefile.in, dlls/dxgmms1.sys/dxgmms1.sys.spec, dlls/dxgmms1.sys/main.c,
-# | 	dlls/ntoskrnl.exe/tests/driver.c, dlls/win32k.sys/Makefile.in, dlls/win32k.sys/main.c, dlls/win32k.sys/win32k.sys.spec,
-# | 	loader/wine.inf.in, programs/winedevice/device.c, tools/make_specfiles
-# |
-if test "$enable_winedevice_Default_Drivers" -eq 1; then
-	patch_apply winedevice-Default_Drivers/0001-win32k.sys-Add-stub-driver.patch
-	patch_apply winedevice-Default_Drivers/0002-dxgkrnl.sys-Add-stub-driver.patch
-	patch_apply winedevice-Default_Drivers/0003-dxgmms1.sys-Add-stub-driver.patch
-	patch_apply winedevice-Default_Drivers/0004-programs-winedevice-Load-some-common-drivers-and-fix.patch
 fi
 
 # Patchset winemac.drv-no-flicker-patch
