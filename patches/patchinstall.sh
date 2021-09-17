@@ -271,6 +271,7 @@ patch_enable_all ()
 	enable_winex11_wglShareLists="$1"
 	enable_winex11_drv_Query_server_position="$1"
 	enable_wininet_Cleanup="$1"
+	enable_wininet_handle_403_error="$1"
 	enable_winmm_mciSendCommandA="$1"
 	enable_wintab32_improvements="$1"
 	enable_wintrust_WTHelperGetProvCertFromChain="$1"
@@ -850,6 +851,9 @@ patch_enable ()
 			;;
 		wininet-Cleanup)
 			enable_wininet_Cleanup="$2"
+			;;
+		wininet-handle-403-error)
+			enable_wininet_handle_403_error="$2"
 			;;
 		winmm-mciSendCommandA)
 			enable_winmm_mciSendCommandA="$2"
@@ -4080,6 +4084,18 @@ if test "$enable_wininet_Cleanup" -eq 1; then
 	patch_apply wininet-Cleanup/0003-wininet-tests-Check-cookie-behaviour-when-overriding.patch
 	patch_apply wininet-Cleanup/0004-wininet-Strip-filename-if-no-path-is-set-in-cookie.patch
 	patch_apply wininet-Cleanup/0005-wininet-Replacing-header-fields-should-fail-if-they-.patch
+fi
+
+# Patchset wininet-handle-403-error
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#47505] Stop LevelHead disconnection on startup.
+# |
+# | Modified files:
+# |   *	dlls/wininet/http.c, dlls/wininet/tests/http.c
+# |
+if test "$enable_wininet_handle_403_error" -eq 1; then
+	patch_apply wininet-handle-403-error/0001-wininet-Set-context-length-for-http-status-403.patch
 fi
 
 # Patchset winmm-mciSendCommandA
