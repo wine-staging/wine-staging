@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "f232252951fec637758f6b2c4eeda1c0e0650310"
+	echo "8547aac2dcfcae9060d0a630c9f80af7bcaf19b4"
 }
 
 # Show version information
@@ -137,7 +137,6 @@ patch_enable_all ()
 	enable_krnl386_exe16_Invalid_Console_Handles="$1"
 	enable_libs_Unicode_Collation="$1"
 	enable_loader_KeyboardLayouts="$1"
-	enable_mfplat_streaming_support="$1"
 	enable_mmsystem_dll16_MIDIHDR_Refcount="$1"
 	enable_mountmgr_DosDevices="$1"
 	enable_mscoree_CorValidateImage="$1"
@@ -448,9 +447,6 @@ patch_enable ()
 			;;
 		loader-KeyboardLayouts)
 			enable_loader_KeyboardLayouts="$2"
-			;;
-		mfplat-streaming-support)
-			enable_mfplat_streaming_support="$2"
 			;;
 		mmsystem.dll16-MIDIHDR_Refcount)
 			enable_mmsystem_dll16_MIDIHDR_Refcount="$2"
@@ -2376,58 +2372,6 @@ fi
 if test "$enable_loader_KeyboardLayouts" -eq 1; then
 	patch_apply loader-KeyboardLayouts/0001-loader-Add-Keyboard-Layouts-registry-enteries.patch
 	patch_apply loader-KeyboardLayouts/0002-user32-Improve-GetKeyboardLayoutList.patch
-fi
-
-# Patchset mfplat-streaming-support
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#49692] Multiple applications need a Media Foundation media source implementation
-# |
-# | Modified files:
-# |   *	dlls/mf/topology.c, dlls/mfplat/main.c, dlls/winegstreamer/Makefile.in, dlls/winegstreamer/audioconvert.c,
-# | 	dlls/winegstreamer/colorconvert.c, dlls/winegstreamer/decode_transform.c, dlls/winegstreamer/gst_private.h,
-# | 	dlls/winegstreamer/media_source.c, dlls/winegstreamer/mfplat.c, dlls/winegstreamer/quartz_parser.c,
-# | 	dlls/winegstreamer/wg_parser.c, dlls/winegstreamer/winegstreamer_classes.idl, include/mfidl.idl, include/wmcodecdsp.idl
-# |
-if test "$enable_mfplat_streaming_support" -eq 1; then
-	patch_apply mfplat-streaming-support/0001-winegstreamer-Activate-source-pad-in-push-mode-if-it.patch
-	patch_apply mfplat-streaming-support/0002-winegstreamer-Push-stream-start-and-segment-events-i.patch
-	patch_apply mfplat-streaming-support/0003-winegstreamer-Introduce-H.264-decoder-transform.patch
-	patch_apply mfplat-streaming-support/0004-winegstreamer-Implement-GetInputAvailableType-for-de.patch
-	patch_apply mfplat-streaming-support/0005-winegstreamer-Implement-GetOutputAvailableType-for-d.patch
-	patch_apply mfplat-streaming-support/0006-winegstreamer-Implement-SetInputType-for-decode-tran.patch
-	patch_apply mfplat-streaming-support/0007-winegstreamer-Implement-SetOutputType-for-decode-tra.patch
-	patch_apply mfplat-streaming-support/0008-winegstreamer-Implement-Get-Input-Output-StreamInfo-.patch
-	patch_apply mfplat-streaming-support/0009-winegstreamer-Add-push-mode-path-for-wg_parser.patch
-	patch_apply mfplat-streaming-support/0010-winegstreamer-Implement-Process-Input-Output-for-dec.patch
-	patch_apply mfplat-streaming-support/0011-winestreamer-Implement-ProcessMessage-for-decoder-tr.patch
-	patch_apply mfplat-streaming-support/0012-winegstreamer-Semi-stub-GetAttributes-for-decoder-tr.patch
-	patch_apply mfplat-streaming-support/0013-winegstreamer-Register-the-H.264-decoder-transform.patch
-	patch_apply mfplat-streaming-support/0014-winegstreamer-Introduce-AAC-decoder-transform.patch
-	patch_apply mfplat-streaming-support/0015-winegstreamer-Register-the-AAC-decoder-transform.patch
-	patch_apply mfplat-streaming-support/0016-winegstreamer-Rename-GStreamer-objects-to-be-more-ge.patch
-	patch_apply mfplat-streaming-support/0017-winegstreamer-Report-streams-backwards-in-media-sour.patch
-	patch_apply mfplat-streaming-support/0018-winegstreamer-Implement-Process-Input-Output-for-aud.patch
-	patch_apply mfplat-streaming-support/0019-winegstreamer-Implement-Get-Input-Output-StreamInfo-.patch
-	patch_apply mfplat-streaming-support/0020-winegstreamer-Semi-stub-Get-Attributes-functions-for.patch
-	patch_apply mfplat-streaming-support/0021-winegstreamer-Introduce-color-conversion-transform.patch
-	patch_apply mfplat-streaming-support/0022-winegstreamer-Register-the-color-conversion-transfor.patch
-	patch_apply mfplat-streaming-support/0023-winegstreamer-Implement-GetInputAvailableType-for-co.patch
-	patch_apply mfplat-streaming-support/0024-winegstreamer-Implement-SetInputType-for-color-conve.patch
-	patch_apply mfplat-streaming-support/0025-winegstreamer-Implement-GetOutputAvailableType-for-c.patch
-	patch_apply mfplat-streaming-support/0026-winegstreamer-Implement-SetOutputType-for-color-conv.patch
-	patch_apply mfplat-streaming-support/0027-winegstreamer-Implement-Process-Input-Output-for-col.patch
-	patch_apply mfplat-streaming-support/0028-winegstreamer-Implement-ProcessMessage-for-color-con.patch
-	patch_apply mfplat-streaming-support/0029-winegstreamer-Implement-Get-Input-Output-StreamInfo-.patch
-	patch_apply mfplat-streaming-support/0030-mf-topology-Forward-failure-from-SetOutputType-when-.patch
-	patch_apply mfplat-streaming-support/0031-winegstreamer-Handle-flush-command-in-audio-converst.patch
-	patch_apply mfplat-streaming-support/0032-winegstreamer-In-the-default-configuration-select-on.patch
-	patch_apply mfplat-streaming-support/0033-winegstreamer-Implement-MF_SD_LANGUAGE.patch
-	patch_apply mfplat-streaming-support/0034-winegstreamer-Only-require-videobox-element-for-pars.patch
-	patch_apply mfplat-streaming-support/0035-winegstreamer-Don-t-rely-on-max_size-in-unseekable-p.patch
-	patch_apply mfplat-streaming-support/0036-winegstreamer-Implement-MFT_MESSAGE_COMMAND_FLUSH-fo.patch
-	patch_apply mfplat-streaming-support/0037-winegstreamer-Default-Frame-size-if-one-isn-t-availa.patch
-	patch_apply mfplat-streaming-support/0038-mfplat-Stub-out-MFCreateDXGIDeviceManager-to-avoid-t.patch
 fi
 
 # Patchset mmsystem.dll16-MIDIHDR_Refcount
