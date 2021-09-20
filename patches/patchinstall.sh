@@ -170,7 +170,6 @@ patch_enable_all ()
 	enable_ntdll_Serial_Port_Detection="$1"
 	enable_ntdll_Syscall_Emulation="$1"
 	enable_ntdll_WRITECOPY="$1"
-	enable_ntdll_Zero_mod_name="$1"
 	enable_ntdll_ext4_case_folder="$1"
 	enable_ntoskrnl_Stubs="$1"
 	enable_nvapi_Stub_DLL="$1"
@@ -551,9 +550,6 @@ patch_enable ()
 			;;
 		ntdll-WRITECOPY)
 			enable_ntdll_WRITECOPY="$2"
-			;;
-		ntdll-Zero_mod_name)
-			enable_ntdll_Zero_mod_name="$2"
 			;;
 		ntdll-ext4-case-folder)
 			enable_ntdll_ext4_case_folder="$2"
@@ -2867,15 +2863,6 @@ fi
 # |
 if test "$enable_ntdll_Syscall_Emulation" -eq 1; then
 	patch_apply ntdll-Syscall_Emulation/0001-ntdll-Support-x86_64-syscall-emulation.patch
-fi
-
-# Patchset ntdll-Zero_mod_name
-# |
-# | Modified files:
-# |   *	dlls/ntdll/loader.c
-# |
-if test "$enable_ntdll_Zero_mod_name" -eq 1; then
-	patch_apply ntdll-Zero_mod_name/0001-ntdll-Initialize-mod_name-to-zero.patch
 fi
 
 # Patchset ntdll-ext4-case-folder
