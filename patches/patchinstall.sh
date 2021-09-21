@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "975d0632a19efd41338cb73a97f1b0bdbe7bc0cc"
+	echo "e482605548b124a7863f6b09395b3a850ae741cc"
 }
 
 # Show version information
@@ -3098,12 +3098,9 @@ fi
 # |   *	[#49641] sapi: Implement ISpObjectToken-CreateInstance
 # |
 # | Modified files:
-# |   *	dlls/sapi/token.c, include/sapi.idl
+# |   *	dlls/sapi/token.c
 # |
 if test "$enable_sapi_ISpObjectToken_CreateInstance" -eq 1; then
-	patch_apply sapi-ISpObjectToken-CreateInstance/0001-include-Add-ISpAudio-interface.patch
-	patch_apply sapi-ISpObjectToken-CreateInstance/0002-sapi-ISpObjectToken-SetId-Support-create-parameter.patch
-	patch_apply sapi-ISpObjectToken-CreateInstance/0003-sapi-ISpObjectTokenCategory-SetId-Support-create-par.patch
 	patch_apply sapi-ISpObjectToken-CreateInstance/0004-sapi-ISpObjectToken-CreateInstance-support-ISpAudio.patch
 fi
 
