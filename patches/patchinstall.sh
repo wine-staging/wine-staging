@@ -187,6 +187,7 @@ patch_enable_all ()
 	enable_riched20_Class_Tests="$1"
 	enable_riched20_IText_Interface="$1"
 	enable_sapi_ISpObjectToken_CreateInstance="$1"
+	enable_sapi_iteration_tokens="$1"
 	enable_secur32_InitializeSecurityContextW="$1"
 	enable_server_File_Permissions="$1"
 	enable_server_Key_State="$1"
@@ -601,6 +602,9 @@ patch_enable ()
 			;;
 		sapi-ISpObjectToken-CreateInstance)
 			enable_sapi_ISpObjectToken_CreateInstance="$2"
+			;;
+		sapi-iteration-tokens)
+			enable_sapi_iteration_tokens="$2"
 			;;
 		secur32-InitializeSecurityContextW)
 			enable_secur32_InitializeSecurityContextW="$2"
@@ -1300,6 +1304,13 @@ if test "$enable_server_File_Permissions" -eq 1; then
 		abort "Patchset ntdll-Junction_Points disabled, but server-File_Permissions depends on that."
 	fi
 	enable_ntdll_Junction_Points=1
+fi
+
+if test "$enable_sapi_iteration_tokens" -eq 1; then
+	if test "$enable_sapi_ISpObjectToken_CreateInstance" -gt 1; then
+		abort "Patchset sapi-ISpObjectToken-CreateInstance disabled, but sapi-iteration-tokens depends on that."
+	fi
+	enable_sapi_ISpObjectToken_CreateInstance=1
 fi
 
 if test "$enable_oleaut32_OLEPictureImpl_SaveAsFile" -eq 1; then
@@ -3102,6 +3113,28 @@ fi
 # |
 if test "$enable_sapi_ISpObjectToken_CreateInstance" -eq 1; then
 	patch_apply sapi-ISpObjectToken-CreateInstance/0004-sapi-ISpObjectToken-CreateInstance-support-ISpAudio.patch
+fi
+
+# Patchset sapi-iteration-tokens
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	sapi-ISpObjectToken-CreateInstance
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#51775] sapi: Allow iteration of Token objects.
+# |
+# | Modified files:
+# |   *	dlls/sapi/sapi.rgs, dlls/sapi/token.c, include/sapi.idl
+# |
+if test "$enable_sapi_iteration_tokens" -eq 1; then
+	patch_apply sapi-iteration-tokens/0001-sapi-Implement-ISpRegDataKey-CreateKey.patch
+	patch_apply sapi-iteration-tokens/0002-include-Add-SPSTREAMFORMAT-enum-values.patch
+	patch_apply sapi-iteration-tokens/0003-sapi-Implement-ISpRegDataKey-GetStringValue.patch
+	patch_apply sapi-iteration-tokens/0004-sapi-EnumTokens-setup-enumeration-members.patch
+	patch_apply sapi-iteration-tokens/0005-sapi-Implement-ISpObjectTokenEnumBuilder-Item.patch
+	patch_apply sapi-iteration-tokens/0006-sapi-Implement-ISpObjectToken-GetId.patch
+	patch_apply sapi-iteration-tokens/0007-sapi-Implement-ISpObjectToken-OpenKey.patch
+	patch_apply sapi-iteration-tokens/0008-sapi-Add-default-voice-registry-key.patch
 fi
 
 # Patchset secur32-InitializeSecurityContextW
