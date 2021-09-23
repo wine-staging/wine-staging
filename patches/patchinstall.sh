@@ -4213,10 +4213,11 @@ fi
 # |   *	[#47505] Stop LevelHead disconnection on startup.
 # |
 # | Modified files:
-# |   *	dlls/wininet/http.c, dlls/wininet/tests/http.c
+# |   *	dlls/wininet/http.c, dlls/wininet/internet.h, dlls/wininet/tests/http.c
 # |
 if test "$enable_wininet_handle_403_error" -eq 1; then
 	patch_apply wininet-handle-403-error/0001-wininet-Set-context-length-for-http-status-403.patch
+	patch_apply wininet-handle-403-error/0002-wininet-Allow-up-to-4K-for-data-buffers.patch
 fi
 
 # Patchset winmm-mciSendCommandA
