@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "9f6e39e8b945466180080d470e1272ba4f807b3a"
+	echo "6b724c3dd8d1ae83e90d4e7e9ec191016fabc7d0"
 }
 
 # Show version information
@@ -87,7 +87,6 @@ patch_enable_all ()
 	enable_Staging="$1"
 	enable_advapi32_LsaLookupPrivilegeName="$1"
 	enable_api_ms_win_Stub_DLLs="$1"
-	enable_api_ms_win_core_psapi_K32GetModuleInformation="$1"
 	enable_bcrypt_ECDHSecretAgreement="$1"
 	enable_cmd_launch_association="$1"
 	enable_comctl32_rebar_capture="$1"
@@ -302,9 +301,6 @@ patch_enable ()
 			;;
 		api-ms-win-Stub_DLLs)
 			enable_api_ms_win_Stub_DLLs="$2"
-			;;
-		api-ms-win-core-psapi-K32GetModuleInformation)
-			enable_api_ms_win_core_psapi_K32GetModuleInformation="$2"
 			;;
 		bcrypt-ECDHSecretAgreement)
 			enable_bcrypt_ECDHSecretAgreement="$2"
@@ -1522,20 +1518,6 @@ if test "$enable_api_ms_win_Stub_DLLs" -eq 1; then
 	patch_apply api-ms-win-Stub_DLLs/0010-ext-ms-win-appmodel-usercontext-l1-1-0-Add-dll-and-a.patch
 	patch_apply api-ms-win-Stub_DLLs/0012-ext-ms-win-xaml-pal-l1-1-0-Add-stub-for-GetThemeServ.patch
 	patch_apply api-ms-win-Stub_DLLs/0027-uiautomationcore-Add-dll-and-stub-some-functions.patch
-fi
-
-# Patchset api-ms-win-core-psapi-K32GetModuleInformation
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#51199] Add missing api-ms-win-core-psapi forwards
-# |
-# | Modified files:
-# |   *	dlls/api-ms-win-core-psapi-ansi-l1-1-0/api-ms-win-core-psapi-ansi-l1-1-0.spec, dlls/api-ms-win-core-psapi-l1-1-0/api-ms-
-# | 	win-core-psapi-l1-1-0.spec
-# |
-if test "$enable_api_ms_win_core_psapi_K32GetModuleInformation" -eq 1; then
-	patch_apply api-ms-win-core-psapi-K32GetModuleInformation/0001-api-ms-win-core-psapi-l1-1-0-Add-K32GetModuleBaseNam.patch
-	patch_apply api-ms-win-core-psapi-K32GetModuleInformation/0002-api-ms-win-core-psapi-ansi-l1-1-0-add-K32GetModuleBa.patch
 fi
 
 # Patchset bcrypt-ECDHSecretAgreement
