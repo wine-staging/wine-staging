@@ -155,7 +155,6 @@ patch_enable_all ()
 	enable_ntdll_FileFsFullSizeInformation="$1"
 	enable_ntdll_ForceBottomUpAlloc="$1"
 	enable_ntdll_HashLinks="$1"
-	enable_ntdll_Heap_Improvements="$1"
 	enable_ntdll_Hide_Wine_Exports="$1"
 	enable_ntdll_Junction_Points="$1"
 	enable_ntdll_Manifest_Range="$1"
@@ -505,9 +504,6 @@ patch_enable ()
 			;;
 		ntdll-HashLinks)
 			enable_ntdll_HashLinks="$2"
-			;;
-		ntdll-Heap_Improvements)
-			enable_ntdll_Heap_Improvements="$2"
 			;;
 		ntdll-Hide_Wine_Exports)
 			enable_ntdll_Hide_Wine_Exports="$2"
@@ -2715,19 +2711,6 @@ fi
 if test "$enable_ntdll_HashLinks" -eq 1; then
 	patch_apply ntdll-HashLinks/0001-ntdll-Implement-HashLinks-field-in-LDR-module-data.patch
 	patch_apply ntdll-HashLinks/0002-ntdll-Use-HashLinks-when-searching-for-a-dll-using-t.patch
-fi
-
-# Patchset ntdll-Heap_Improvements
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#43224] Improvement for heap allocation performance
-# |
-# | Modified files:
-# |   *	dlls/ntdll/heap.c
-# |
-if test "$enable_ntdll_Heap_Improvements" -eq 1; then
-	patch_apply ntdll-Heap_Improvements/0001-ntdll-Add-helper-function-to-delete-free-blocks.patch
-	patch_apply ntdll-Heap_Improvements/0002-ntdll-Improve-heap-allocation-performance.patch
 fi
 
 # Patchset ntdll-Hide_Wine_Exports
