@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "6b724c3dd8d1ae83e90d4e7e9ec191016fabc7d0"
+	echo "2660cd9fcbb23897b041c43bcac1dc2a7aa3c01f"
 }
 
 # Show version information
@@ -2451,7 +2451,6 @@ fi
 # |
 if test "$enable_mfplat_reverts" -eq 1; then
 	patch_apply mfplat-reverts/0001-Revert-winegstreamer-Fix-return-code-in-init_gst-fai.patch
-	patch_apply mfplat-reverts/0002-Revert-winegstreamer-Replace-source-pad-interface-wi.patch
 	patch_apply mfplat-reverts/0003-Revert-winegstreamer-Allocate-source-media-buffers-i.patch
 	patch_apply mfplat-reverts/0004-Revert-winegstreamer-Duplicate-source-shutdown-path-.patch
 	patch_apply mfplat-reverts/0005-Revert-winegstreamer-Properly-clean-up-from-failure-.patch
