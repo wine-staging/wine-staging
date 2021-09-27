@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "2660cd9fcbb23897b041c43bcac1dc2a7aa3c01f"
+	echo "de7adacedbdd78fd1ed8ee0986a78670e11a60bc"
 }
 
 # Show version information
@@ -3088,11 +3088,10 @@ fi
 # |   *	[#51775] sapi: Allow iteration of Token objects.
 # |
 # | Modified files:
-# |   *	dlls/sapi/sapi.rgs, dlls/sapi/token.c, include/sapi.idl
+# |   *	dlls/sapi/sapi.rgs, dlls/sapi/token.c
 # |
 if test "$enable_sapi_iteration_tokens" -eq 1; then
 	patch_apply sapi-iteration-tokens/0001-sapi-Implement-ISpRegDataKey-CreateKey.patch
-	patch_apply sapi-iteration-tokens/0002-include-Add-SPSTREAMFORMAT-enum-values.patch
 	patch_apply sapi-iteration-tokens/0003-sapi-Implement-ISpRegDataKey-GetStringValue.patch
 	patch_apply sapi-iteration-tokens/0004-sapi-EnumTokens-setup-enumeration-members.patch
 	patch_apply sapi-iteration-tokens/0005-sapi-Implement-ISpObjectTokenEnumBuilder-Item.patch
