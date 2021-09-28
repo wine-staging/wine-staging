@@ -3088,7 +3088,7 @@ fi
 # |   *	[#51775] sapi: Allow iteration of Token objects.
 # |
 # | Modified files:
-# |   *	dlls/sapi/sapi.rgs, dlls/sapi/token.c
+# |   *	dlls/sapi/sapi.rgs, dlls/sapi/tests/token.c, dlls/sapi/token.c
 # |
 if test "$enable_sapi_iteration_tokens" -eq 1; then
 	patch_apply sapi-iteration-tokens/0001-sapi-Implement-ISpRegDataKey-CreateKey.patch
@@ -3098,6 +3098,7 @@ if test "$enable_sapi_iteration_tokens" -eq 1; then
 	patch_apply sapi-iteration-tokens/0006-sapi-Implement-ISpObjectToken-GetId.patch
 	patch_apply sapi-iteration-tokens/0007-sapi-Implement-ISpObjectToken-OpenKey.patch
 	patch_apply sapi-iteration-tokens/0008-sapi-Add-default-voice-registry-key.patch
+	patch_apply sapi-iteration-tokens/0009-sapi-Return-dump-object-in-ISpObjectTokenEnumBuilder.patch
 fi
 
 # Patchset secur32-InitializeSecurityContextW
