@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "08b01d8271fe15c7680a957778d506221d7d94eb"
+	echo "aa629c4c7225166f4ee46476d98702df2e142711"
 }
 
 # Show version information
@@ -1523,8 +1523,8 @@ fi
 # | 	implementation)
 # |
 # | Modified files:
-# |   *	configure.ac, dlls/bcrypt/Makefile.in, dlls/bcrypt/bcrypt_internal.h, dlls/bcrypt/bcrypt_main.c, dlls/bcrypt/gcrypt.c,
-# | 	dlls/bcrypt/gnutls.c, dlls/bcrypt/macos.c, dlls/bcrypt/tests/bcrypt.c, dlls/bcrypt/unixlib.c
+# |   *	configure.ac, dlls/bcrypt/Makefile.in, dlls/bcrypt/bcrypt_internal.h, dlls/bcrypt/bcrypt_main.c, dlls/bcrypt/gnutls.c,
+# | 	dlls/bcrypt/tests/bcrypt.c
 # |
 if test "$enable_bcrypt_ECDHSecretAgreement" -eq 1; then
 	patch_apply bcrypt-ECDHSecretAgreement/0001-bcrypt-Allow-multiple-backends-to-coexist.patch
@@ -4177,10 +4177,9 @@ fi
 # |   *	[#47505] Stop LevelHead disconnection on startup.
 # |
 # | Modified files:
-# |   *	dlls/wininet/http.c, dlls/wininet/internet.h, dlls/wininet/tests/http.c
+# |   *	dlls/wininet/internet.h
 # |
 if test "$enable_wininet_handle_403_error" -eq 1; then
-	patch_apply wininet-handle-403-error/0001-wininet-Set-context-length-for-http-status-403.patch
 	patch_apply wininet-handle-403-error/0002-wininet-Allow-up-to-4K-for-data-buffers.patch
 fi
 
