@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "aa629c4c7225166f4ee46476d98702df2e142711"
+	echo "a87abdbe85779adf6a2a7897bd88984587880693"
 }
 
 # Show version information
@@ -1523,8 +1523,8 @@ fi
 # | 	implementation)
 # |
 # | Modified files:
-# |   *	configure.ac, dlls/bcrypt/Makefile.in, dlls/bcrypt/bcrypt_internal.h, dlls/bcrypt/bcrypt_main.c, dlls/bcrypt/gnutls.c,
-# | 	dlls/bcrypt/tests/bcrypt.c
+# |   *	configure.ac, dlls/bcrypt/Makefile.in, dlls/bcrypt/bcrypt_internal.h, dlls/bcrypt/bcrypt_main.c, dlls/bcrypt/gcrypt.c,
+# | 	dlls/bcrypt/gnutls.c, dlls/bcrypt/tests/bcrypt.c, dlls/bcrypt/unixlib.c
 # |
 if test "$enable_bcrypt_ECDHSecretAgreement" -eq 1; then
 	patch_apply bcrypt-ECDHSecretAgreement/0001-bcrypt-Allow-multiple-backends-to-coexist.patch
@@ -2446,11 +2446,15 @@ fi
 # | 	dlls/winegstreamer/wg_parser.c
 # |
 if test "$enable_mfplat_reverts" -eq 1; then
-	patch_apply mfplat-reverts/0001-Revert-winegstreamer-Fix-return-code-in-init_gst-fai.patch
-	patch_apply mfplat-reverts/0003-Revert-winegstreamer-Allocate-source-media-buffers-i.patch
-	patch_apply mfplat-reverts/0004-Revert-winegstreamer-Duplicate-source-shutdown-path-.patch
-	patch_apply mfplat-reverts/0005-Revert-winegstreamer-Properly-clean-up-from-failure-.patch
-	patch_apply mfplat-reverts/0006-Revert-winegstreamer-Factor-out-more-of-the-init_gst.patch
+	patch_apply mfplat-reverts/0001-Revert-winegstreamer-Remove-the-no-longer-used-start.patch
+	patch_apply mfplat-reverts/0002-Revert-winegstreamer-Set-unlimited-buffering-using-a.patch
+	patch_apply mfplat-reverts/0003-Revert-winegstreamer-Initialize-GStreamer-in-wg_pars.patch
+	patch_apply mfplat-reverts/0004-Revert-winegstreamer-Use-a-single-wg_parser_create-e.patch
+	patch_apply mfplat-reverts/0005-Revert-winegstreamer-Fix-return-code-in-init_gst-fai.patch
+	patch_apply mfplat-reverts/0006-Revert-winegstreamer-Allocate-source-media-buffers-i.patch
+	patch_apply mfplat-reverts/0007-Revert-winegstreamer-Duplicate-source-shutdown-path-.patch
+	patch_apply mfplat-reverts/0008-Revert-winegstreamer-Properly-clean-up-from-failure-.patch
+	patch_apply mfplat-reverts/0009-Revert-winegstreamer-Factor-out-more-of-the-init_gst.patch
 fi
 
 # Patchset mfplat-streaming-support
