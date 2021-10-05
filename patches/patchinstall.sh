@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "5a8dcb062793fbb68997e1b54ebc2666a2b2834d"
+	echo "ed38d12833bb1957a915ac63128957dacf2bc245"
 }
 
 # Show version information
@@ -2442,19 +2442,23 @@ fi
 # Patchset mfplat-reverts
 # |
 # | Modified files:
-# |   *	dlls/winegstreamer/gst_private.h, dlls/winegstreamer/media_source.c, dlls/winegstreamer/quartz_parser.c,
+# |   *	dlls/winegstreamer/Makefile.in, dlls/winegstreamer/gst_private.h, dlls/winegstreamer/main.c,
+# | 	dlls/winegstreamer/media_source.c, dlls/winegstreamer/quartz_parser.c, dlls/winegstreamer/unixlib.h,
 # | 	dlls/winegstreamer/wg_parser.c
 # |
 if test "$enable_mfplat_reverts" -eq 1; then
-	patch_apply mfplat-reverts/0001-Revert-winegstreamer-Remove-the-no-longer-used-start.patch
-	patch_apply mfplat-reverts/0002-Revert-winegstreamer-Set-unlimited-buffering-using-a.patch
-	patch_apply mfplat-reverts/0003-Revert-winegstreamer-Initialize-GStreamer-in-wg_pars.patch
-	patch_apply mfplat-reverts/0004-Revert-winegstreamer-Use-a-single-wg_parser_create-e.patch
-	patch_apply mfplat-reverts/0005-Revert-winegstreamer-Fix-return-code-in-init_gst-fai.patch
-	patch_apply mfplat-reverts/0006-Revert-winegstreamer-Allocate-source-media-buffers-i.patch
-	patch_apply mfplat-reverts/0007-Revert-winegstreamer-Duplicate-source-shutdown-path-.patch
-	patch_apply mfplat-reverts/0008-Revert-winegstreamer-Properly-clean-up-from-failure-.patch
-	patch_apply mfplat-reverts/0009-Revert-winegstreamer-Factor-out-more-of-the-init_gst.patch
+	patch_apply mfplat-reverts/0001-Revert-winegstreamer-Convert-the-Unix-library-to-the.patch
+	patch_apply mfplat-reverts/0002-Revert-winegstreamer-Return-void-from-wg_parser_stre.patch
+	patch_apply mfplat-reverts/0003-Revert-winegstreamer-Move-Unix-library-definitions-i.patch
+	patch_apply mfplat-reverts/0004-Revert-winegstreamer-Remove-the-no-longer-used-start.patch
+	patch_apply mfplat-reverts/0005-Revert-winegstreamer-Set-unlimited-buffering-using-a.patch
+	patch_apply mfplat-reverts/0006-Revert-winegstreamer-Initialize-GStreamer-in-wg_pars.patch
+	patch_apply mfplat-reverts/0007-Revert-winegstreamer-Use-a-single-wg_parser_create-e.patch
+	patch_apply mfplat-reverts/0008-Revert-winegstreamer-Fix-return-code-in-init_gst-fai.patch
+	patch_apply mfplat-reverts/0009-Revert-winegstreamer-Allocate-source-media-buffers-i.patch
+	patch_apply mfplat-reverts/0010-Revert-winegstreamer-Duplicate-source-shutdown-path-.patch
+	patch_apply mfplat-reverts/0011-Revert-winegstreamer-Properly-clean-up-from-failure-.patch
+	patch_apply mfplat-reverts/0012-Revert-winegstreamer-Factor-out-more-of-the-init_gst.patch
 fi
 
 # Patchset mfplat-streaming-support
