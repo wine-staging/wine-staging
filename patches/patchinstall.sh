@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "ed38d12833bb1957a915ac63128957dacf2bc245"
+	echo "3660176e09bc02e71586b4cf42f58c9498481af6"
 }
 
 # Show version information
@@ -128,7 +128,6 @@ patch_enable_all ()
 	enable_imm32_message_on_focus="$1"
 	enable_include_winsock="$1"
 	enable_inseng_Implementation="$1"
-	enable_iphlpapi_System_Ping="$1"
 	enable_kernel32_CopyFileEx="$1"
 	enable_kernel32_Debugger="$1"
 	enable_kernel32_Job_Tests="$1"
@@ -423,9 +422,6 @@ patch_enable ()
 			;;
 		inseng-Implementation)
 			enable_inseng_Implementation="$2"
-			;;
-		iphlpapi-System_Ping)
-			enable_iphlpapi_System_Ping="$2"
 			;;
 		kernel32-CopyFileEx)
 			enable_kernel32_CopyFileEx="$2"
@@ -2330,18 +2326,6 @@ if test "$enable_inseng_Implementation" -eq 1; then
 	patch_apply inseng-Implementation/0001-inseng-Implement-CIF-reader-and-download-functions.patch
 fi
 
-# Patchset iphlpapi-System_Ping
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#8332] Fallback to system ping command when CAP_NET_RAW is not available
-# |
-# | Modified files:
-# |   *	dlls/iphlpapi/icmp.c
-# |
-if test "$enable_iphlpapi_System_Ping" -eq 1; then
-	patch_apply iphlpapi-System_Ping/0001-iphlpapi-Fallback-to-system-ping-when-ICMP-permissio.patch
-fi
-
 # Patchset kernel32-CopyFileEx
 # |
 # | This patchset fixes the following Wine bugs:
@@ -2447,18 +2431,23 @@ fi
 # | 	dlls/winegstreamer/wg_parser.c
 # |
 if test "$enable_mfplat_reverts" -eq 1; then
-	patch_apply mfplat-reverts/0001-Revert-winegstreamer-Convert-the-Unix-library-to-the.patch
-	patch_apply mfplat-reverts/0002-Revert-winegstreamer-Return-void-from-wg_parser_stre.patch
-	patch_apply mfplat-reverts/0003-Revert-winegstreamer-Move-Unix-library-definitions-i.patch
-	patch_apply mfplat-reverts/0004-Revert-winegstreamer-Remove-the-no-longer-used-start.patch
-	patch_apply mfplat-reverts/0005-Revert-winegstreamer-Set-unlimited-buffering-using-a.patch
-	patch_apply mfplat-reverts/0006-Revert-winegstreamer-Initialize-GStreamer-in-wg_pars.patch
-	patch_apply mfplat-reverts/0007-Revert-winegstreamer-Use-a-single-wg_parser_create-e.patch
-	patch_apply mfplat-reverts/0008-Revert-winegstreamer-Fix-return-code-in-init_gst-fai.patch
-	patch_apply mfplat-reverts/0009-Revert-winegstreamer-Allocate-source-media-buffers-i.patch
-	patch_apply mfplat-reverts/0010-Revert-winegstreamer-Duplicate-source-shutdown-path-.patch
-	patch_apply mfplat-reverts/0011-Revert-winegstreamer-Properly-clean-up-from-failure-.patch
-	patch_apply mfplat-reverts/0012-Revert-winegstreamer-Factor-out-more-of-the-init_gst.patch
+	patch_apply mfplat-reverts/0001-Revert-winegstreamer-Trace-the-unfiltered-caps-in-si.patch
+	patch_apply mfplat-reverts/0002-Revert-winegstreamer-Avoid-seeking-past-the-end-of-a.patch
+	patch_apply mfplat-reverts/0003-Revert-winegstreamer-Avoid-passing-a-NULL-buffer-to-.patch
+	patch_apply mfplat-reverts/0004-Revert-winegstreamer-Use-array_reserve-to-reallocate.patch
+	patch_apply mfplat-reverts/0005-Revert-winegstreamer-Handle-zero-length-reads-in-src.patch
+	patch_apply mfplat-reverts/0006-Revert-winegstreamer-Convert-the-Unix-library-to-the.patch
+	patch_apply mfplat-reverts/0007-Revert-winegstreamer-Return-void-from-wg_parser_stre.patch
+	patch_apply mfplat-reverts/0008-Revert-winegstreamer-Move-Unix-library-definitions-i.patch
+	patch_apply mfplat-reverts/0009-Revert-winegstreamer-Remove-the-no-longer-used-start.patch
+	patch_apply mfplat-reverts/0010-Revert-winegstreamer-Set-unlimited-buffering-using-a.patch
+	patch_apply mfplat-reverts/0011-Revert-winegstreamer-Initialize-GStreamer-in-wg_pars.patch
+	patch_apply mfplat-reverts/0012-Revert-winegstreamer-Use-a-single-wg_parser_create-e.patch
+	patch_apply mfplat-reverts/0013-Revert-winegstreamer-Fix-return-code-in-init_gst-fai.patch
+	patch_apply mfplat-reverts/0014-Revert-winegstreamer-Allocate-source-media-buffers-i.patch
+	patch_apply mfplat-reverts/0015-Revert-winegstreamer-Duplicate-source-shutdown-path-.patch
+	patch_apply mfplat-reverts/0016-Revert-winegstreamer-Properly-clean-up-from-failure-.patch
+	patch_apply mfplat-reverts/0017-Revert-winegstreamer-Factor-out-more-of-the-init_gst.patch
 fi
 
 # Patchset mfplat-streaming-support
