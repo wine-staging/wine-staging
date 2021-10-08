@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "3660176e09bc02e71586b4cf42f58c9498481af6"
+	echo "5636088871714f2a2de9e543eb66f944ce188edc"
 }
 
 # Show version information
@@ -87,7 +87,6 @@ patch_enable_all ()
 	enable_Staging="$1"
 	enable_advapi32_LsaLookupPrivilegeName="$1"
 	enable_api_ms_win_Stub_DLLs="$1"
-	enable_bcrypt_ECDHSecretAgreement="$1"
 	enable_cmd_launch_association="$1"
 	enable_comctl32_rebar_capture="$1"
 	enable_comctl32_version_6="$1"
@@ -136,8 +135,6 @@ patch_enable_all ()
 	enable_krnl386_exe16_Invalid_Console_Handles="$1"
 	enable_libs_Unicode_Collation="$1"
 	enable_loader_KeyboardLayouts="$1"
-	enable_mfplat_reverts="$1"
-	enable_mfplat_streaming_support="$1"
 	enable_mmsystem_dll16_MIDIHDR_Refcount="$1"
 	enable_mountmgr_DosDevices="$1"
 	enable_mscoree_CorValidateImage="$1"
@@ -271,7 +268,6 @@ patch_enable_all ()
 	enable_winex11_wglShareLists="$1"
 	enable_winex11_drv_Query_server_position="$1"
 	enable_wininet_Cleanup="$1"
-	enable_wininet_handle_403_error="$1"
 	enable_winmm_mciSendCommandA="$1"
 	enable_wintab32_improvements="$1"
 	enable_wintrust_WTHelperGetProvCertFromChain="$1"
@@ -299,9 +295,6 @@ patch_enable ()
 			;;
 		api-ms-win-Stub_DLLs)
 			enable_api_ms_win_Stub_DLLs="$2"
-			;;
-		bcrypt-ECDHSecretAgreement)
-			enable_bcrypt_ECDHSecretAgreement="$2"
 			;;
 		cmd-launch-association)
 			enable_cmd_launch_association="$2"
@@ -446,12 +439,6 @@ patch_enable ()
 			;;
 		loader-KeyboardLayouts)
 			enable_loader_KeyboardLayouts="$2"
-			;;
-		mfplat-reverts)
-			enable_mfplat_reverts="$2"
-			;;
-		mfplat-streaming-support)
-			enable_mfplat_streaming_support="$2"
 			;;
 		mmsystem.dll16-MIDIHDR_Refcount)
 			enable_mmsystem_dll16_MIDIHDR_Refcount="$2"
@@ -851,9 +838,6 @@ patch_enable ()
 			;;
 		wininet-Cleanup)
 			enable_wininet_Cleanup="$2"
-			;;
-		wininet-handle-403-error)
-			enable_wininet_handle_403_error="$2"
 			;;
 		winmm-mciSendCommandA)
 			enable_winmm_mciSendCommandA="$2"
@@ -1343,13 +1327,6 @@ if test "$enable_ntdll_WRITECOPY" -eq 1; then
 	enable_ntdll_ForceBottomUpAlloc=1
 fi
 
-if test "$enable_mfplat_streaming_support" -eq 1; then
-	if test "$enable_mfplat_reverts" -gt 1; then
-		abort "Patchset mfplat-reverts disabled, but mfplat-streaming-support depends on that."
-	fi
-	enable_mfplat_reverts=1
-fi
-
 if test "$enable_imm32_com_initialization" -eq 1; then
 	if test "$enable_winex11__NET_ACTIVE_WINDOW" -gt 1; then
 		abort "Patchset winex11-_NET_ACTIVE_WINDOW disabled, but imm32-com-initialization depends on that."
@@ -1510,22 +1487,6 @@ if test "$enable_api_ms_win_Stub_DLLs" -eq 1; then
 	patch_apply api-ms-win-Stub_DLLs/0010-ext-ms-win-appmodel-usercontext-l1-1-0-Add-dll-and-a.patch
 	patch_apply api-ms-win-Stub_DLLs/0012-ext-ms-win-xaml-pal-l1-1-0-Add-stub-for-GetThemeServ.patch
 	patch_apply api-ms-win-Stub_DLLs/0027-uiautomationcore-Add-dll-and-stub-some-functions.patch
-fi
-
-# Patchset bcrypt-ECDHSecretAgreement
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#47699] Multiple games fail to connect to online services (missing BCryptSecretAgreement / BCryptDeriveKey
-# | 	implementation)
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/bcrypt/Makefile.in, dlls/bcrypt/bcrypt_internal.h, dlls/bcrypt/bcrypt_main.c, dlls/bcrypt/gcrypt.c,
-# | 	dlls/bcrypt/gnutls.c, dlls/bcrypt/tests/bcrypt.c, dlls/bcrypt/unixlib.c
-# |
-if test "$enable_bcrypt_ECDHSecretAgreement" -eq 1; then
-	patch_apply bcrypt-ECDHSecretAgreement/0001-bcrypt-Allow-multiple-backends-to-coexist.patch
-	patch_apply bcrypt-ECDHSecretAgreement/0002-bcrypt-Implement-BCryptSecretAgreement-with-libgcryp.patch
-	patch_apply bcrypt-ECDHSecretAgreement/0003-bcrypt-Implement-BCRYPT_KDF_HASH.patch
 fi
 
 # Patchset cmd-launch-association
@@ -2242,7 +2203,7 @@ fi
 # |   *	[#35331] gdi32: fix for rotated ellipse
 # |
 # | Modified files:
-# |   *	dlls/gdi32/dibdrv/graphics.c, dlls/gdi32/gdi_private.h
+# |   *	dlls/win32u/dibdrv/graphics.c
 # |
 if test "$enable_gdi32_rotation" -eq 1; then
 	patch_apply gdi32-rotation/0001-gdi32-fix-for-rotated-Arc-ArcTo-Chord-and-Pie-drawin.patch
@@ -2421,88 +2382,6 @@ fi
 if test "$enable_loader_KeyboardLayouts" -eq 1; then
 	patch_apply loader-KeyboardLayouts/0001-loader-Add-Keyboard-Layouts-registry-enteries.patch
 	patch_apply loader-KeyboardLayouts/0002-user32-Improve-GetKeyboardLayoutList.patch
-fi
-
-# Patchset mfplat-reverts
-# |
-# | Modified files:
-# |   *	dlls/winegstreamer/Makefile.in, dlls/winegstreamer/gst_private.h, dlls/winegstreamer/main.c,
-# | 	dlls/winegstreamer/media_source.c, dlls/winegstreamer/quartz_parser.c, dlls/winegstreamer/unixlib.h,
-# | 	dlls/winegstreamer/wg_parser.c
-# |
-if test "$enable_mfplat_reverts" -eq 1; then
-	patch_apply mfplat-reverts/0001-Revert-winegstreamer-Trace-the-unfiltered-caps-in-si.patch
-	patch_apply mfplat-reverts/0002-Revert-winegstreamer-Avoid-seeking-past-the-end-of-a.patch
-	patch_apply mfplat-reverts/0003-Revert-winegstreamer-Avoid-passing-a-NULL-buffer-to-.patch
-	patch_apply mfplat-reverts/0004-Revert-winegstreamer-Use-array_reserve-to-reallocate.patch
-	patch_apply mfplat-reverts/0005-Revert-winegstreamer-Handle-zero-length-reads-in-src.patch
-	patch_apply mfplat-reverts/0006-Revert-winegstreamer-Convert-the-Unix-library-to-the.patch
-	patch_apply mfplat-reverts/0007-Revert-winegstreamer-Return-void-from-wg_parser_stre.patch
-	patch_apply mfplat-reverts/0008-Revert-winegstreamer-Move-Unix-library-definitions-i.patch
-	patch_apply mfplat-reverts/0009-Revert-winegstreamer-Remove-the-no-longer-used-start.patch
-	patch_apply mfplat-reverts/0010-Revert-winegstreamer-Set-unlimited-buffering-using-a.patch
-	patch_apply mfplat-reverts/0011-Revert-winegstreamer-Initialize-GStreamer-in-wg_pars.patch
-	patch_apply mfplat-reverts/0012-Revert-winegstreamer-Use-a-single-wg_parser_create-e.patch
-	patch_apply mfplat-reverts/0013-Revert-winegstreamer-Fix-return-code-in-init_gst-fai.patch
-	patch_apply mfplat-reverts/0014-Revert-winegstreamer-Allocate-source-media-buffers-i.patch
-	patch_apply mfplat-reverts/0015-Revert-winegstreamer-Duplicate-source-shutdown-path-.patch
-	patch_apply mfplat-reverts/0016-Revert-winegstreamer-Properly-clean-up-from-failure-.patch
-	patch_apply mfplat-reverts/0017-Revert-winegstreamer-Factor-out-more-of-the-init_gst.patch
-fi
-
-# Patchset mfplat-streaming-support
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	mfplat-reverts
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#49692] Multiple applications need a Media Foundation media source implementation
-# |
-# | Modified files:
-# |   *	dlls/mf/topology.c, dlls/mfplat/main.c, dlls/winegstreamer/Makefile.in, dlls/winegstreamer/audioconvert.c,
-# | 	dlls/winegstreamer/colorconvert.c, dlls/winegstreamer/decode_transform.c, dlls/winegstreamer/gst_private.h,
-# | 	dlls/winegstreamer/media_source.c, dlls/winegstreamer/mfplat.c, dlls/winegstreamer/quartz_parser.c,
-# | 	dlls/winegstreamer/wg_parser.c, dlls/winegstreamer/winegstreamer_classes.idl, include/mfidl.idl, include/wmcodecdsp.idl
-# |
-if test "$enable_mfplat_streaming_support" -eq 1; then
-	patch_apply mfplat-streaming-support/0001-winegstreamer-Activate-source-pad-in-push-mode-if-it.patch
-	patch_apply mfplat-streaming-support/0002-winegstreamer-Push-stream-start-and-segment-events-i.patch
-	patch_apply mfplat-streaming-support/0003-winegstreamer-Introduce-H.264-decoder-transform.patch
-	patch_apply mfplat-streaming-support/0004-winegstreamer-Implement-GetInputAvailableType-for-de.patch
-	patch_apply mfplat-streaming-support/0005-winegstreamer-Implement-GetOutputAvailableType-for-d.patch
-	patch_apply mfplat-streaming-support/0006-winegstreamer-Implement-SetInputType-for-decode-tran.patch
-	patch_apply mfplat-streaming-support/0007-winegstreamer-Implement-SetOutputType-for-decode-tra.patch
-	patch_apply mfplat-streaming-support/0008-winegstreamer-Implement-Get-Input-Output-StreamInfo-.patch
-	patch_apply mfplat-streaming-support/0009-winegstreamer-Add-push-mode-path-for-wg_parser.patch
-	patch_apply mfplat-streaming-support/0010-winegstreamer-Implement-Process-Input-Output-for-dec.patch
-	patch_apply mfplat-streaming-support/0011-winestreamer-Implement-ProcessMessage-for-decoder-tr.patch
-	patch_apply mfplat-streaming-support/0012-winegstreamer-Semi-stub-GetAttributes-for-decoder-tr.patch
-	patch_apply mfplat-streaming-support/0013-winegstreamer-Register-the-H.264-decoder-transform.patch
-	patch_apply mfplat-streaming-support/0014-winegstreamer-Introduce-AAC-decoder-transform.patch
-	patch_apply mfplat-streaming-support/0015-winegstreamer-Register-the-AAC-decoder-transform.patch
-	patch_apply mfplat-streaming-support/0016-winegstreamer-Rename-GStreamer-objects-to-be-more-ge.patch
-	patch_apply mfplat-streaming-support/0017-winegstreamer-Report-streams-backwards-in-media-sour.patch
-	patch_apply mfplat-streaming-support/0018-winegstreamer-Implement-Process-Input-Output-for-aud.patch
-	patch_apply mfplat-streaming-support/0019-winegstreamer-Implement-Get-Input-Output-StreamInfo-.patch
-	patch_apply mfplat-streaming-support/0020-winegstreamer-Semi-stub-Get-Attributes-functions-for.patch
-	patch_apply mfplat-streaming-support/0021-winegstreamer-Introduce-color-conversion-transform.patch
-	patch_apply mfplat-streaming-support/0022-winegstreamer-Register-the-color-conversion-transfor.patch
-	patch_apply mfplat-streaming-support/0023-winegstreamer-Implement-GetInputAvailableType-for-co.patch
-	patch_apply mfplat-streaming-support/0024-winegstreamer-Implement-SetInputType-for-color-conve.patch
-	patch_apply mfplat-streaming-support/0025-winegstreamer-Implement-GetOutputAvailableType-for-c.patch
-	patch_apply mfplat-streaming-support/0026-winegstreamer-Implement-SetOutputType-for-color-conv.patch
-	patch_apply mfplat-streaming-support/0027-winegstreamer-Implement-Process-Input-Output-for-col.patch
-	patch_apply mfplat-streaming-support/0028-winegstreamer-Implement-ProcessMessage-for-color-con.patch
-	patch_apply mfplat-streaming-support/0029-winegstreamer-Implement-Get-Input-Output-StreamInfo-.patch
-	patch_apply mfplat-streaming-support/0030-mf-topology-Forward-failure-from-SetOutputType-when-.patch
-	patch_apply mfplat-streaming-support/0031-winegstreamer-Handle-flush-command-in-audio-converst.patch
-	patch_apply mfplat-streaming-support/0032-winegstreamer-In-the-default-configuration-select-on.patch
-	patch_apply mfplat-streaming-support/0033-winegstreamer-Implement-MF_SD_LANGUAGE.patch
-	patch_apply mfplat-streaming-support/0034-winegstreamer-Only-require-videobox-element-for-pars.patch
-	patch_apply mfplat-streaming-support/0035-winegstreamer-Don-t-rely-on-max_size-in-unseekable-p.patch
-	patch_apply mfplat-streaming-support/0036-winegstreamer-Implement-MFT_MESSAGE_COMMAND_FLUSH-fo.patch
-	patch_apply mfplat-streaming-support/0037-winegstreamer-Default-Frame-size-if-one-isn-t-availa.patch
-	patch_apply mfplat-streaming-support/0038-mfplat-Stub-out-MFCreateDXGIDeviceManager-to-avoid-t.patch
 fi
 
 # Patchset mmsystem.dll16-MIDIHDR_Refcount
@@ -4166,18 +4045,6 @@ if test "$enable_wininet_Cleanup" -eq 1; then
 	patch_apply wininet-Cleanup/0003-wininet-tests-Check-cookie-behaviour-when-overriding.patch
 	patch_apply wininet-Cleanup/0004-wininet-Strip-filename-if-no-path-is-set-in-cookie.patch
 	patch_apply wininet-Cleanup/0005-wininet-Replacing-header-fields-should-fail-if-they-.patch
-fi
-
-# Patchset wininet-handle-403-error
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#47505] Stop LevelHead disconnection on startup.
-# |
-# | Modified files:
-# |   *	dlls/wininet/internet.h
-# |
-if test "$enable_wininet_handle_403_error" -eq 1; then
-	patch_apply wininet-handle-403-error/0002-wininet-Allow-up-to-4K-for-data-buffers.patch
 fi
 
 # Patchset winmm-mciSendCommandA
