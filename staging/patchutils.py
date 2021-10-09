@@ -240,7 +240,8 @@ def _read_single_patch(fp, header, oldname=None, newname=None):
             raise NotImplementedError("Patch copy header not implemented yet.")
 
         elif line.startswith("rename "):
-            raise NotImplementedError("Patch rename header not implemented yet.")
+            pass
+#            raise NotImplementedError("Patch rename header not implemented yet.")
 
         elif line.startswith("similarity index") or line.startswith("dissimilarity index"):
             pass # ignore
