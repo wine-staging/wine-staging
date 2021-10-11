@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "7554bd4b41a1429517eb86fd20dbe813cdd0550a"
+	echo "dfeded6460ce067fe1c0540306c2964a170bed2a"
 }
 
 # Show version information
@@ -109,11 +109,6 @@ patch_enable_all ()
 	enable_ddraw_IDirect3DTexture2_Load="$1"
 	enable_ddraw_Silence_FIXMEs="$1"
 	enable_ddraw_version_check="$1"
-	enable_dinput_SetActionMap_genre="$1"
-	enable_dinput_axis_recalc="$1"
-	enable_dinput_joy_mappings="$1"
-	enable_dinput_reconnect_joystick="$1"
-	enable_dinput_remap_joystick="$1"
 	enable_dsound_EAX="$1"
 	enable_dsound_Fast_Mixer="$1"
 	enable_dwrite_FontFallback="$1"
@@ -363,21 +358,6 @@ patch_enable ()
 			;;
 		ddraw-version-check)
 			enable_ddraw_version_check="$2"
-			;;
-		dinput-SetActionMap-genre)
-			enable_dinput_SetActionMap_genre="$2"
-			;;
-		dinput-axis-recalc)
-			enable_dinput_axis_recalc="$2"
-			;;
-		dinput-joy-mappings)
-			enable_dinput_joy_mappings="$2"
-			;;
-		dinput-reconnect-joystick)
-			enable_dinput_reconnect_joystick="$2"
-			;;
-		dinput-remap-joystick)
-			enable_dinput_remap_joystick="$2"
 			;;
 		dsound-EAX)
 			enable_dsound_EAX="$2"
@@ -1407,13 +1387,6 @@ if test "$enable_dsound_EAX" -eq 1; then
 	enable_dsound_Fast_Mixer=1
 fi
 
-if test "$enable_dinput_SetActionMap_genre" -eq 1; then
-	if test "$enable_dinput_joy_mappings" -gt 1; then
-		abort "Patchset dinput-joy-mappings disabled, but dinput-SetActionMap-genre depends on that."
-	fi
-	enable_dinput_joy_mappings=1
-fi
-
 if test "$enable_ddraw_version_check" -eq 1; then
 	if test "$enable_ddraw_Device_Caps" -gt 1; then
 		abort "Patchset ddraw-Device_Caps disabled, but ddraw-version-check depends on that."
@@ -1781,74 +1754,6 @@ fi
 # |
 if test "$enable_ddraw_version_check" -eq 1; then
 	patch_apply ddraw-version-check/0001-ddraw-Return-correct-devices-based-off-requested-Dir.patch
-fi
-
-# Patchset dinput-joy-mappings
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#34108] dinput: Improve support for user Joystick configuration.
-# |
-# | Modified files:
-# |   *	dlls/dinput/ansi.c, dlls/dinput/config.c, dlls/dinput/device.c, dlls/dinput/device_private.h, dlls/dinput/dinput_main.c,
-# | 	dlls/dinput/joystick.c, dlls/dinput8/tests/device.c
-# |
-if test "$enable_dinput_joy_mappings" -eq 1; then
-	patch_apply dinput-joy-mappings/0001-dinput-Load-users-Joystick-mappings.patch
-	patch_apply dinput-joy-mappings/0002-dinput-Allow-empty-Joystick-mappings.patch
-	patch_apply dinput-joy-mappings/0003-dinput-Support-username-in-Config-dialog.patch
-	patch_apply dinput-joy-mappings/0004-dinput-Dont-allow-Fixed-actions-to-be-changed.patch
-fi
-
-# Patchset dinput-SetActionMap-genre
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	dinput-joy-mappings
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#47326] dinput: Allow mapping of controls based of genre type.
-# |
-# | Modified files:
-# |   *	dlls/dinput/device.c
-# |
-if test "$enable_dinput_SetActionMap_genre" -eq 1; then
-	patch_apply dinput-SetActionMap-genre/0001-dinput-Allow-mapping-of-controls-based-of-Genre-type.patch
-fi
-
-# Patchset dinput-axis-recalc
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#41317] dinput: Recalculated Axis after deadzone change.
-# |
-# | Modified files:
-# |   *	dlls/dinput/joystick.c
-# |
-if test "$enable_dinput_axis_recalc" -eq 1; then
-	patch_apply dinput-axis-recalc/0001-dinput-Recalculated-Axis-after-deadzone-change.patch
-fi
-
-# Patchset dinput-reconnect-joystick
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#34297] dinput: Allow reconnecting to disconnected joysticks
-# |
-# | Modified files:
-# |   *	dlls/dinput/joystick_linuxinput.c
-# |
-if test "$enable_dinput_reconnect_joystick" -eq 1; then
-	patch_apply dinput-reconnect-joystick/0001-dinput-Allow-reconnecting-to-disconnected-joysticks.patch
-fi
-
-# Patchset dinput-remap-joystick
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#35815] dinput: Allow remapping of joystick buttons.
-# |
-# | Modified files:
-# |   *	dlls/dinput/joystick.c, dlls/dinput/joystick_linux.c, dlls/dinput/joystick_linuxinput.c, dlls/dinput/joystick_osx.c,
-# | 	dlls/dinput/joystick_private.h
-# |
-if test "$enable_dinput_remap_joystick" -eq 1; then
-	patch_apply dinput-remap-joystick/0001-dinput-Allow-remapping-of-joystick-buttons.patch
 fi
 
 # Patchset dsound-Fast_Mixer
