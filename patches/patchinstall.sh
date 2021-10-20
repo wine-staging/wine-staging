@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "530c1839603bd3caa1b9d17fe458b5bd341ccfc9"
+	echo "f712a98d12d091c5437159a291857dfb9f0cea7c"
 }
 
 # Show version information
@@ -128,8 +128,6 @@ patch_enable_all ()
 	enable_krnl386_exe16_Invalid_Console_Handles="$1"
 	enable_libs_Unicode_Collation="$1"
 	enable_loader_KeyboardLayouts="$1"
-	enable_mfplat_reverts="$1"
-	enable_mfplat_streaming_support="$1"
 	enable_mmsystem_dll16_MIDIHDR_Refcount="$1"
 	enable_mountmgr_DosDevices="$1"
 	enable_mscoree_CorValidateImage="$1"
@@ -413,12 +411,6 @@ patch_enable ()
 			;;
 		loader-KeyboardLayouts)
 			enable_loader_KeyboardLayouts="$2"
-			;;
-		mfplat-reverts)
-			enable_mfplat_reverts="$2"
-			;;
-		mfplat-streaming-support)
-			enable_mfplat_streaming_support="$2"
 			;;
 		mmsystem.dll16-MIDIHDR_Refcount)
 			enable_mmsystem_dll16_MIDIHDR_Refcount="$2"
@@ -1305,13 +1297,6 @@ if test "$enable_ntdll_WRITECOPY" -eq 1; then
 		abort "Patchset ntdll-ForceBottomUpAlloc disabled, but ntdll-WRITECOPY depends on that."
 	fi
 	enable_ntdll_ForceBottomUpAlloc=1
-fi
-
-if test "$enable_mfplat_streaming_support" -eq 1; then
-	if test "$enable_mfplat_reverts" -gt 1; then
-		abort "Patchset mfplat-reverts disabled, but mfplat-streaming-support depends on that."
-	fi
-	enable_mfplat_reverts=1
 fi
 
 if test "$enable_fltmgr_sys_FltBuildDefaultSecurityDescriptor" -eq 1; then
@@ -2244,95 +2229,6 @@ fi
 if test "$enable_loader_KeyboardLayouts" -eq 1; then
 	patch_apply loader-KeyboardLayouts/0001-loader-Add-Keyboard-Layouts-registry-enteries.patch
 	patch_apply loader-KeyboardLayouts/0002-user32-Improve-GetKeyboardLayoutList.patch
-fi
-
-# Patchset mfplat-reverts
-# |
-# | Modified files:
-# |   *	dlls/winegstreamer/Makefile.in, dlls/winegstreamer/gst_private.h, dlls/winegstreamer/main.c,
-# | 	dlls/winegstreamer/media_source.c, dlls/winegstreamer/quartz_parser.c, dlls/winegstreamer/unixlib.h,
-# | 	dlls/winegstreamer/wg_parser.c, dlls/winegstreamer/winegstreamer.spec, dlls/winegstreamer/wm_asyncreader.c,
-# | 	dlls/winegstreamer/wm_syncreader.c, dlls/wmvcore/Makefile.in, dlls/wmvcore/reader.c, dlls/wmvcore/syncreader.c,
-# | 	dlls/wmvcore/wmvcore_main.c
-# |
-if test "$enable_mfplat_reverts" -eq 1; then
-	patch_apply mfplat-reverts/0001-Revert-winegstreamer-Get-rid-of-the-WMReader-typedef.patch
-	patch_apply mfplat-reverts/0002-Revert-wmvcore-Move-the-async-reader-implementation-.patch
-	patch_apply mfplat-reverts/0003-Revert-winegstreamer-Get-rid-of-the-WMSyncReader-typ.patch
-	patch_apply mfplat-reverts/0004-Revert-wmvcore-Move-the-sync-reader-implementation-t.patch
-	patch_apply mfplat-reverts/0005-Revert-winegstreamer-Translate-GST_AUDIO_CHANNEL_POS.patch
-	patch_apply mfplat-reverts/0006-Revert-winegstreamer-Trace-the-unfiltered-caps-in-si.patch
-	patch_apply mfplat-reverts/0007-Revert-winegstreamer-Avoid-seeking-past-the-end-of-a.patch
-	patch_apply mfplat-reverts/0008-Revert-winegstreamer-Avoid-passing-a-NULL-buffer-to-.patch
-	patch_apply mfplat-reverts/0009-Revert-winegstreamer-Use-array_reserve-to-reallocate.patch
-	patch_apply mfplat-reverts/0010-Revert-winegstreamer-Handle-zero-length-reads-in-src.patch
-	patch_apply mfplat-reverts/0011-Revert-winegstreamer-Convert-the-Unix-library-to-the.patch
-	patch_apply mfplat-reverts/0012-Revert-winegstreamer-Return-void-from-wg_parser_stre.patch
-	patch_apply mfplat-reverts/0013-Revert-winegstreamer-Move-Unix-library-definitions-i.patch
-	patch_apply mfplat-reverts/0014-Revert-winegstreamer-Remove-the-no-longer-used-start.patch
-	patch_apply mfplat-reverts/0015-Revert-winegstreamer-Set-unlimited-buffering-using-a.patch
-	patch_apply mfplat-reverts/0016-Revert-winegstreamer-Initialize-GStreamer-in-wg_pars.patch
-	patch_apply mfplat-reverts/0017-Revert-winegstreamer-Use-a-single-wg_parser_create-e.patch
-	patch_apply mfplat-reverts/0018-Revert-winegstreamer-Fix-return-code-in-init_gst-fai.patch
-	patch_apply mfplat-reverts/0019-Revert-winegstreamer-Allocate-source-media-buffers-i.patch
-	patch_apply mfplat-reverts/0020-Revert-winegstreamer-Duplicate-source-shutdown-path-.patch
-	patch_apply mfplat-reverts/0021-Revert-winegstreamer-Properly-clean-up-from-failure-.patch
-	patch_apply mfplat-reverts/0022-Revert-winegstreamer-Factor-out-more-of-the-init_gst.patch
-fi
-
-# Patchset mfplat-streaming-support
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	mfplat-reverts
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#49692] Multiple applications need a Media Foundation media source implementation
-# |
-# | Modified files:
-# |   *	dlls/mf/topology.c, dlls/mfplat/main.c, dlls/winegstreamer/Makefile.in, dlls/winegstreamer/audioconvert.c,
-# | 	dlls/winegstreamer/colorconvert.c, dlls/winegstreamer/decode_transform.c, dlls/winegstreamer/gst_private.h,
-# | 	dlls/winegstreamer/media_source.c, dlls/winegstreamer/mfplat.c, dlls/winegstreamer/quartz_parser.c,
-# | 	dlls/winegstreamer/wg_parser.c, dlls/winegstreamer/winegstreamer_classes.idl, include/mfidl.idl, include/wmcodecdsp.idl
-# |
-if test "$enable_mfplat_streaming_support" -eq 1; then
-	patch_apply mfplat-streaming-support/0001-winegstreamer-Activate-source-pad-in-push-mode-if-it.patch
-	patch_apply mfplat-streaming-support/0002-winegstreamer-Push-stream-start-and-segment-events-i.patch
-	patch_apply mfplat-streaming-support/0003-winegstreamer-Introduce-H.264-decoder-transform.patch
-	patch_apply mfplat-streaming-support/0004-winegstreamer-Implement-GetInputAvailableType-for-de.patch
-	patch_apply mfplat-streaming-support/0005-winegstreamer-Implement-GetOutputAvailableType-for-d.patch
-	patch_apply mfplat-streaming-support/0006-winegstreamer-Implement-SetInputType-for-decode-tran.patch
-	patch_apply mfplat-streaming-support/0007-winegstreamer-Implement-SetOutputType-for-decode-tra.patch
-	patch_apply mfplat-streaming-support/0008-winegstreamer-Implement-Get-Input-Output-StreamInfo-.patch
-	patch_apply mfplat-streaming-support/0009-winegstreamer-Add-push-mode-path-for-wg_parser.patch
-	patch_apply mfplat-streaming-support/0010-winegstreamer-Implement-Process-Input-Output-for-dec.patch
-	patch_apply mfplat-streaming-support/0011-winestreamer-Implement-ProcessMessage-for-decoder-tr.patch
-	patch_apply mfplat-streaming-support/0012-winegstreamer-Semi-stub-GetAttributes-for-decoder-tr.patch
-	patch_apply mfplat-streaming-support/0013-winegstreamer-Register-the-H.264-decoder-transform.patch
-	patch_apply mfplat-streaming-support/0014-winegstreamer-Introduce-AAC-decoder-transform.patch
-	patch_apply mfplat-streaming-support/0015-winegstreamer-Register-the-AAC-decoder-transform.patch
-	patch_apply mfplat-streaming-support/0016-winegstreamer-Rename-GStreamer-objects-to-be-more-ge.patch
-	patch_apply mfplat-streaming-support/0017-winegstreamer-Report-streams-backwards-in-media-sour.patch
-	patch_apply mfplat-streaming-support/0018-winegstreamer-Implement-Process-Input-Output-for-aud.patch
-	patch_apply mfplat-streaming-support/0019-winegstreamer-Implement-Get-Input-Output-StreamInfo-.patch
-	patch_apply mfplat-streaming-support/0020-winegstreamer-Semi-stub-Get-Attributes-functions-for.patch
-	patch_apply mfplat-streaming-support/0021-winegstreamer-Introduce-color-conversion-transform.patch
-	patch_apply mfplat-streaming-support/0022-winegstreamer-Register-the-color-conversion-transfor.patch
-	patch_apply mfplat-streaming-support/0023-winegstreamer-Implement-GetInputAvailableType-for-co.patch
-	patch_apply mfplat-streaming-support/0024-winegstreamer-Implement-SetInputType-for-color-conve.patch
-	patch_apply mfplat-streaming-support/0025-winegstreamer-Implement-GetOutputAvailableType-for-c.patch
-	patch_apply mfplat-streaming-support/0026-winegstreamer-Implement-SetOutputType-for-color-conv.patch
-	patch_apply mfplat-streaming-support/0027-winegstreamer-Implement-Process-Input-Output-for-col.patch
-	patch_apply mfplat-streaming-support/0028-winegstreamer-Implement-ProcessMessage-for-color-con.patch
-	patch_apply mfplat-streaming-support/0029-winegstreamer-Implement-Get-Input-Output-StreamInfo-.patch
-	patch_apply mfplat-streaming-support/0030-mf-topology-Forward-failure-from-SetOutputType-when-.patch
-	patch_apply mfplat-streaming-support/0031-winegstreamer-Handle-flush-command-in-audio-converst.patch
-	patch_apply mfplat-streaming-support/0032-winegstreamer-In-the-default-configuration-select-on.patch
-	patch_apply mfplat-streaming-support/0033-winegstreamer-Implement-MF_SD_LANGUAGE.patch
-	patch_apply mfplat-streaming-support/0034-winegstreamer-Only-require-videobox-element-for-pars.patch
-	patch_apply mfplat-streaming-support/0035-winegstreamer-Don-t-rely-on-max_size-in-unseekable-p.patch
-	patch_apply mfplat-streaming-support/0036-winegstreamer-Implement-MFT_MESSAGE_COMMAND_FLUSH-fo.patch
-	patch_apply mfplat-streaming-support/0037-winegstreamer-Default-Frame-size-if-one-isn-t-availa.patch
-	patch_apply mfplat-streaming-support/0038-mfplat-Stub-out-MFCreateDXGIDeviceManager-to-avoid-t.patch
 fi
 
 # Patchset mmsystem.dll16-MIDIHDR_Refcount
