@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "f712a98d12d091c5437159a291857dfb9f0cea7c"
+	echo "fdc2d415b0dd5c12c83156bd41161ff135d25105"
 }
 
 # Show version information
@@ -2429,7 +2429,7 @@ fi
 # Patchset ntdll-HashLinks
 # |
 # | Modified files:
-# |   *	dlls/kernel32/tests/loader.c, dlls/ntdll/loader.c, include/winternl.h
+# |   *	dlls/kernel32/tests/loader.c, dlls/ntdll/loader.c
 # |
 if test "$enable_ntdll_HashLinks" -eq 1; then
 	patch_apply ntdll-HashLinks/0001-ntdll-Implement-HashLinks-field-in-LDR-module-data.patch
