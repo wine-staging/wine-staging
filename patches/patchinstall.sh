@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "faf645d01632e4cf7ef056a86a675a12df39a80e"
+	echo "ababea0fd7036ab13ec17d31afbd584c39f62696"
 }
 
 # Show version information
@@ -217,7 +217,6 @@ patch_enable_all ()
 	enable_user32_message_order="$1"
 	enable_user32_msgbox_Support_WM_COPY_mesg="$1"
 	enable_user32_rawinput_mouse="$1"
-	enable_user32_rawinput_mouse_experimental="$1"
 	enable_user32_recursive_activation="$1"
 	enable_uxtheme_CloseThemeClass="$1"
 	enable_version_VerQueryValue="$1"
@@ -678,9 +677,6 @@ patch_enable ()
 			;;
 		user32-rawinput-mouse)
 			enable_user32_rawinput_mouse="$2"
-			;;
-		user32-rawinput-mouse-experimental)
-			enable_user32_rawinput_mouse_experimental="$2"
 			;;
 		user32-recursive-activation)
 			enable_user32_recursive_activation="$2"
@@ -1191,13 +1187,6 @@ if test "$enable_wined3d_Indexed_Vertex_Blending" -eq 1; then
 		abort "Patchset wined3d-SWVP-shaders disabled, but wined3d-Indexed_Vertex_Blending depends on that."
 	fi
 	enable_wined3d_SWVP_shaders=1
-fi
-
-if test "$enable_user32_rawinput_mouse_experimental" -eq 1; then
-	if test "$enable_user32_rawinput_mouse" -gt 1; then
-		abort "Patchset user32-rawinput-mouse disabled, but user32-rawinput-mouse-experimental depends on that."
-	fi
-	enable_user32_rawinput_mouse=1
 fi
 
 if test "$enable_stdole32_tlb_SLTG_Typelib" -eq 1; then
@@ -3375,24 +3364,6 @@ if test "$enable_user32_rawinput_mouse" -eq 1; then
 	patch_apply user32-rawinput-mouse/0006-user32-Set-SEND_HWMSG_RAWINPUT-flags-only-when-RAWIN.patch
 	patch_apply user32-rawinput-mouse/0007-user32-Support-sending-RIM_TYPEMOUSE-through-__wine_.patch
 	patch_apply user32-rawinput-mouse/0008-winex11.drv-Listen-to-RawMotion-and-RawButton-events.patch
-fi
-
-# Patchset user32-rawinput-mouse-experimental
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	user32-rawinput-mouse
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#45882] - Raw Input should use untransformed mouse values (affects Overwatch, several Source games).
-# |
-# | Modified files:
-# |   *	dlls/user32/rawinput.c, dlls/winex11.drv/mouse.c, dlls/winex11.drv/window.c, dlls/winex11.drv/x11drv.h,
-# | 	dlls/winex11.drv/x11drv_main.c, server/queue.c
-# |
-if test "$enable_user32_rawinput_mouse_experimental" -eq 1; then
-	patch_apply user32-rawinput-mouse-experimental/0001-winex11.drv-Add-support-for-absolute-RawMotion-event.patch
-	patch_apply user32-rawinput-mouse-experimental/0002-winex11.drv-Send-relative-RawMotion-events-unprocess.patch
-	patch_apply user32-rawinput-mouse-experimental/0003-winex11.drv-Accumulate-mouse-movement-to-avoid-round.patch
 fi
 
 # Patchset user32-recursive-activation
