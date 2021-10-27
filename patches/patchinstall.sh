@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "e73bb07ff59d0d0b7925df3d642299689275b0a8"
+	echo "80a30625a70343cf6f38d80d02f640d684e27e6d"
 }
 
 # Show version information
@@ -2455,20 +2455,15 @@ fi
 # |   *	[#50292] Process-local synchronization objects use private interfaces into the Unix library
 # |
 # | Modified files:
-# |   *	dlls/ntdll/Makefile.in, dlls/ntdll/critsection.c, dlls/ntdll/ntdll.spec, dlls/ntdll/sync.c,
-# | 	dlls/ntdll/tests/Makefile.in, dlls/ntdll/tests/om.c, dlls/ntdll/tests/sync.c, dlls/ntdll/unix/loader.c,
-# | 	dlls/ntdll/unix/sync.c, dlls/ntdll/unix/unix_private.h, dlls/ntdll/unixlib.h, dlls/wow64/sync.c, dlls/wow64/syscall.h,
-# | 	include/winternl.h
+# |   *	dlls/ntdll/ntdll.spec, dlls/ntdll/sync.c, dlls/ntdll/tests/sync.c, dlls/ntdll/unix/loader.c, dlls/ntdll/unix/sync.c,
+# | 	dlls/ntdll/unix/unix_private.h, dlls/ntdll/unixlib.h, dlls/wow64/sync.c, dlls/wow64/syscall.h, include/winternl.h
 # |
 if test "$enable_ntdll_NtAlertThreadByThreadId" -eq 1; then
-	patch_apply ntdll-NtAlertThreadByThreadId/0001-ntdll-tests-Move-some-tests-to-a-new-sync.c-file.patch
-	patch_apply ntdll-NtAlertThreadByThreadId/0002-ntdll-tests-Add-some-tests-for-Rtl-resources.patch
 	patch_apply ntdll-NtAlertThreadByThreadId/0003-ntdll-Implement-NtAlertThreadByThreadId-and-NtWaitFo.patch
 	patch_apply ntdll-NtAlertThreadByThreadId/0004-ntdll-tests-Add-basic-tests-for-thread-id-alert-func.patch
 	patch_apply ntdll-NtAlertThreadByThreadId/0005-ntdll-Implement-thread-ID-alerts-using-futexes-if-po.patch
 	patch_apply ntdll-NtAlertThreadByThreadId/0006-ntdll-Implement-thread-ID-alerts-using-Mach-semaphor.patch
 	patch_apply ntdll-NtAlertThreadByThreadId/0007-ntdll-Reimplement-Win32-futexes-on-top-of-thread-ID-.patch
-	patch_apply ntdll-NtAlertThreadByThreadId/0008-ntdll-Merge-critsection.c-into-sync.c.patch
 	patch_apply ntdll-NtAlertThreadByThreadId/0009-ntdll-Reimplement-the-critical-section-fast-path-on-.patch
 	patch_apply ntdll-NtAlertThreadByThreadId/0010-ntdll-Get-rid-of-the-direct-futex-path-for-condition.patch
 	patch_apply ntdll-NtAlertThreadByThreadId/0011-ntdll-Reimplement-SRW-locks-on-top-of-Win32-futexes.patch
