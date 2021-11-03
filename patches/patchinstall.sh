@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "0b79e2caa6f224fc0da672886c07f4f32dda4682"
+	echo "46367d1ecc8a016ab7c7af9ec107e33c6d46fc26"
 }
 
 # Show version information
@@ -142,7 +142,6 @@ patch_enable_all ()
 	enable_ntdll_DOS_Attributes="$1"
 	enable_ntdll_Exception="$1"
 	enable_ntdll_FileFsFullSizeInformation="$1"
-	enable_ntdll_ForceBottomUpAlloc="$1"
 	enable_ntdll_HashLinks="$1"
 	enable_ntdll_Hide_Wine_Exports="$1"
 	enable_ntdll_Junction_Points="$1"
@@ -453,9 +452,6 @@ patch_enable ()
 			;;
 		ntdll-FileFsFullSizeInformation)
 			enable_ntdll_FileFsFullSizeInformation="$2"
-			;;
-		ntdll-ForceBottomUpAlloc)
-			enable_ntdll_ForceBottomUpAlloc="$2"
 			;;
 		ntdll-HashLinks)
 			enable_ntdll_HashLinks="$2"
@@ -1292,13 +1288,6 @@ if test "$enable_ntdll_Builtin_Prot" -eq 1; then
 	enable_ntdll_WRITECOPY=1
 fi
 
-if test "$enable_ntdll_WRITECOPY" -eq 1; then
-	if test "$enable_ntdll_ForceBottomUpAlloc" -gt 1; then
-		abort "Patchset ntdll-ForceBottomUpAlloc disabled, but ntdll-WRITECOPY depends on that."
-	fi
-	enable_ntdll_ForceBottomUpAlloc=1
-fi
-
 if test "$enable_fltmgr_sys_FltBuildDefaultSecurityDescriptor" -eq 1; then
 	if test "$enable_winedevice_Default_Drivers" -gt 1; then
 		abort "Patchset winedevice-Default_Drivers disabled, but fltmgr.sys-FltBuildDefaultSecurityDescriptor depends on that."
@@ -1941,7 +1930,7 @@ fi
 # |   *	[#36692] Many multi-threaded applications have poor performance due to heavy use of synchronization primitives
 # |
 # | Modified files:
-# |   *	README.esync, configure, configure.ac, dlls/kernel32/tests/sync.c, dlls/ntdll/Makefile.in, dlls/ntdll/unix/esync.c,
+# |   *	README.esync, configure.ac, dlls/kernel32/tests/sync.c, dlls/ntdll/Makefile.in, dlls/ntdll/unix/esync.c,
 # | 	dlls/ntdll/unix/esync.h, dlls/ntdll/unix/loader.c, dlls/ntdll/unix/server.c, dlls/ntdll/unix/sync.c,
 # | 	dlls/ntdll/unix/unix_private.h, dlls/ntdll/unix/virtual.c, dlls/rpcrt4/rpc_server.c, include/config.h.in,
 # | 	server/Makefile.in, server/async.c, server/atom.c, server/change.c, server/clipboard.c, server/completion.c,
@@ -2337,27 +2326,7 @@ if test "$enable_ntdll_ApiSetMap" -eq 1; then
 	patch_apply ntdll-ApiSetMap/0001-ntdll-Add-dummy-apiset-to-PEB.patch
 fi
 
-# Patchset ntdll-ForceBottomUpAlloc
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#48175] AION (64 bit) - crashes in crysystem.dll.CryFree() due to high memory pointers allocated
-# |   *	[#46568] 64-bit msxml6.dll from Microsoft Core XML Services 6.0 redist package fails to load (Wine doesn't respect
-# | 	44-bit user-mode VA limitation from Windows < 8.1)
-# |
-# | Modified files:
-# |   *	dlls/ntdll/unix/virtual.c
-# |
-if test "$enable_ntdll_ForceBottomUpAlloc" -eq 1; then
-	patch_apply ntdll-ForceBottomUpAlloc/0001-ntdll-Increase-step-after-failed-map-attempt-in-try_.patch
-	patch_apply ntdll-ForceBottomUpAlloc/0002-ntdll-Increase-free-ranges-view-block-size-on-64-bit.patch
-	patch_apply ntdll-ForceBottomUpAlloc/0003-ntdll-Force-virtual-memory-allocation-order.patch
-	patch_apply ntdll-ForceBottomUpAlloc/0004-ntdll-Exclude-natively-mapped-areas-from-free-areas-.patch
-fi
-
 # Patchset ntdll-WRITECOPY
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-ForceBottomUpAlloc
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#29384] Multiple applications expect correct handling of WRITECOPY memory protection (Voobly fails to launch Age of
@@ -2382,7 +2351,7 @@ fi
 # Patchset ntdll-Builtin_Prot
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-ForceBottomUpAlloc, ntdll-WRITECOPY
+# |   *	ntdll-WRITECOPY
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#44650] Fix holes in ELF mappings
