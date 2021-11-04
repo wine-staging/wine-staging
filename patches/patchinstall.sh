@@ -91,6 +91,7 @@ patch_enable_all ()
 	enable_comctl32_rebar_capture="$1"
 	enable_comctl32_version_6="$1"
 	enable_comdlg32_lpstrFileTitle="$1"
+	enable_configure_dwarf4="$1"
 	enable_crypt32_CMS_Certificates="$1"
 	enable_cryptext_CryptExtOpenCER="$1"
 	enable_d3drm_IDirect3D3_support="$1"
@@ -301,6 +302,9 @@ patch_enable ()
 			;;
 		comdlg32-lpstrFileTitle)
 			enable_comdlg32_lpstrFileTitle="$2"
+			;;
+		configure-dwarf4)
+			enable_configure_dwarf4="$2"
 			;;
 		crypt32-CMS_Certificates)
 			enable_crypt32_CMS_Certificates="$2"
@@ -1497,6 +1501,15 @@ fi
 # |
 if test "$enable_comdlg32_lpstrFileTitle" -eq 1; then
 	patch_apply comdlg32-lpstrFileTitle/0001-comdlg32-Postpone-setting-ofn-lpstrFileTitle-to-work.patch
+fi
+
+# Patchset configure-dwarf4
+# |
+# | Modified files:
+# |   *	configure.ac
+# |
+if test "$enable_configure_dwarf4" -eq 1; then
+	patch_apply configure-dwarf4/0001-configure.ac-let-dwarf4-be-Wine-s-default-debug-form.patch
 fi
 
 # Patchset crypt32-CMS_Certificates
