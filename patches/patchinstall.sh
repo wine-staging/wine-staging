@@ -194,6 +194,7 @@ patch_enable_all ()
 	enable_shell32_SHFileOperation_Move="$1"
 	enable_shell32_SHGetStockIconInfo="$1"
 	enable_shell32_Toolbar_Bitmaps="$1"
+	enable_shell32_registry_lookup_app="$1"
 	enable_shlwapi_AssocGetPerceivedType="$1"
 	enable_shlwapi_UrlCanonicalize="$1"
 	enable_shlwapi_UrlCombine="$1"
@@ -609,6 +610,9 @@ patch_enable ()
 			;;
 		shell32-Toolbar_Bitmaps)
 			enable_shell32_Toolbar_Bitmaps="$2"
+			;;
+		shell32-registry-lookup-app)
+			enable_shell32_registry_lookup_app="$2"
 			;;
 		shlwapi-AssocGetPerceivedType)
 			enable_shlwapi_AssocGetPerceivedType="$2"
@@ -3039,6 +3043,18 @@ fi
 if test "$enable_shell32_Toolbar_Bitmaps" -eq 1; then
 	patch_apply shell32-Toolbar_Bitmaps/0001-shell32-Add-toolbar-bitmaps-compatible-with-IE6.patch
 	patch_apply shell32-Toolbar_Bitmaps/0002-shell32-Add-more-Tango-icons-to-the-IE-toolbar.patch
+fi
+
+# Patchset shell32-registry-lookup-app
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#51957] Append .exe, if registry lookup fails first.
+# |
+# | Modified files:
+# |   *	dlls/shell32/shlexec.c
+# |
+if test "$enable_shell32_registry_lookup_app" -eq 1; then
+	patch_apply shell32-registry-lookup-app/0001-shell32-Append-.exe-when-registry-lookup-fails-first.patch
 fi
 
 # Patchset shlwapi-AssocGetPerceivedType
