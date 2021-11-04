@@ -142,6 +142,7 @@ patch_enable_all ()
 	enable_ntdll_DOS_Attributes="$1"
 	enable_ntdll_Exception="$1"
 	enable_ntdll_FileFsFullSizeInformation="$1"
+	enable_ntdll_ForceBottomUpAlloc="$1"
 	enable_ntdll_HashLinks="$1"
 	enable_ntdll_Hide_Wine_Exports="$1"
 	enable_ntdll_Junction_Points="$1"
@@ -452,6 +453,9 @@ patch_enable ()
 			;;
 		ntdll-FileFsFullSizeInformation)
 			enable_ntdll_FileFsFullSizeInformation="$2"
+			;;
+		ntdll-ForceBottomUpAlloc)
+			enable_ntdll_ForceBottomUpAlloc="$2"
 			;;
 		ntdll-HashLinks)
 			enable_ntdll_HashLinks="$2"
@@ -1286,6 +1290,13 @@ if test "$enable_ntdll_Builtin_Prot" -eq 1; then
 		abort "Patchset ntdll-WRITECOPY disabled, but ntdll-Builtin_Prot depends on that."
 	fi
 	enable_ntdll_WRITECOPY=1
+fi
+
+if test "$enable_ntdll_WRITECOPY" -eq 1; then
+	if test "$enable_ntdll_ForceBottomUpAlloc" -gt 1; then
+		abort "Patchset ntdll-ForceBottomUpAlloc disabled, but ntdll-WRITECOPY depends on that."
+	fi
+	enable_ntdll_ForceBottomUpAlloc=1
 fi
 
 if test "$enable_fltmgr_sys_FltBuildDefaultSecurityDescriptor" -eq 1; then
@@ -2326,7 +2337,27 @@ if test "$enable_ntdll_ApiSetMap" -eq 1; then
 	patch_apply ntdll-ApiSetMap/0001-ntdll-Add-dummy-apiset-to-PEB.patch
 fi
 
+# Patchset ntdll-ForceBottomUpAlloc
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#48175] AION (64 bit) - crashes in crysystem.dll.CryFree() due to high memory pointers allocated
+# |   *	[#46568] 64-bit msxml6.dll from Microsoft Core XML Services 6.0 redist package fails to load (Wine doesn't respect
+# | 	44-bit user-mode VA limitation from Windows < 8.1)
+# |
+# | Modified files:
+# |   *	dlls/ntdll/unix/virtual.c
+# |
+if test "$enable_ntdll_ForceBottomUpAlloc" -eq 1; then
+	patch_apply ntdll-ForceBottomUpAlloc/0001-ntdll-Increase-step-after-failed-map-attempt-in-try_.patch
+	patch_apply ntdll-ForceBottomUpAlloc/0002-ntdll-Increase-free-ranges-view-block-size-on-64-bit.patch
+	patch_apply ntdll-ForceBottomUpAlloc/0003-ntdll-Force-virtual-memory-allocation-order.patch
+	patch_apply ntdll-ForceBottomUpAlloc/0004-ntdll-Exclude-natively-mapped-areas-from-free-areas-.patch
+fi
+
 # Patchset ntdll-WRITECOPY
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	ntdll-ForceBottomUpAlloc
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#29384] Multiple applications expect correct handling of WRITECOPY memory protection (Voobly fails to launch Age of
@@ -2351,7 +2382,7 @@ fi
 # Patchset ntdll-Builtin_Prot
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-WRITECOPY
+# |   *	ntdll-ForceBottomUpAlloc, ntdll-WRITECOPY
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#44650] Fix holes in ELF mappings
