@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "46367d1ecc8a016ab7c7af9ec107e33c6d46fc26"
+	echo "20f1a677b664b3d0d3dc038ffb9ab4f4e4aa6274"
 }
 
 # Show version information
@@ -1444,15 +1444,13 @@ fi
 # |   *	configure.ac, dlls/ext-ms-win-appmodel-usercontext-l1-1-0/Makefile.in, dlls/ext-ms-win-appmodel-usercontext-l1-1-0/ext-
 # | 	ms-win-appmodel-usercontext-l1-1-0.spec, dlls/ext-ms-win-appmodel-usercontext-l1-1-0/main.c, dlls/ext-ms-win-xaml-
 # | 	pal-l1-1-0/Makefile.in, dlls/ext-ms-win-xaml-pal-l1-1-0/ext-ms-win-xaml-pal-l1-1-0.spec, dlls/ext-ms-win-xaml-
-# | 	pal-l1-1-0/main.c, dlls/iertutil/Makefile.in, dlls/iertutil/iertutil.spec, dlls/iertutil/main.c,
-# | 	dlls/uiautomationcore/Makefile.in, dlls/uiautomationcore/uia_main.c
+# | 	pal-l1-1-0/main.c, dlls/iertutil/Makefile.in, dlls/iertutil/iertutil.spec, dlls/iertutil/main.c
 # |
 if test "$enable_api_ms_win_Stub_DLLs" -eq 1; then
 	patch_apply api-ms-win-Stub_DLLs/0006-iertutil-Add-dll-and-add-stub-for-ordinal-811.patch
 	patch_apply api-ms-win-Stub_DLLs/0009-ext-ms-win-xaml-pal-l1-1-0-Add-dll-and-add-stub-for-.patch
 	patch_apply api-ms-win-Stub_DLLs/0010-ext-ms-win-appmodel-usercontext-l1-1-0-Add-dll-and-a.patch
 	patch_apply api-ms-win-Stub_DLLs/0012-ext-ms-win-xaml-pal-l1-1-0-Add-stub-for-GetThemeServ.patch
-	patch_apply api-ms-win-Stub_DLLs/0027-uiautomationcore-Add-dll-and-stub-some-functions.patch
 fi
 
 # Patchset cmd-launch-association
