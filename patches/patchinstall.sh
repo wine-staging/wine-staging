@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "6a072b98c100f38a61fad00b6c96c86b3445efac"
+	echo "97d6cfd7059fbe55fdd24a04e8d9133848328d4e"
 }
 
 # Show version information
@@ -1422,7 +1422,7 @@ fi
 # Patchset Staging
 # |
 # | Modified files:
-# |   *	Makefile.in, dlls/ntdll/loader.c
+# |   *	Makefile.in, configure.ac, dlls/ntdll/loader.c
 # |
 if test "$enable_Staging" -eq 1; then
 	patch_apply Staging/0001-kernel32-Add-winediag-message-to-show-warning-that-t.patch
