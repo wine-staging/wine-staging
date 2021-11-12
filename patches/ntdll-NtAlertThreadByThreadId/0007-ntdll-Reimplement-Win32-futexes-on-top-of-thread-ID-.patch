@@ -1,4 +1,4 @@
-From 08cec34b6dccea0cf7e8f880911786fd385ed78a Mon Sep 17 00:00:00 2001
+From 4b2ad3bf49e77c6cb0e541329ac851d054e6f649 Mon Sep 17 00:00:00 2001
 From: Zebediah Figura <z.figura12@gmail.com>
 Date: Mon, 7 Jun 2021 16:26:18 -0500
 Subject: [PATCH] ntdll: Reimplement Win32 futexes on top of thread-ID alerts.
@@ -6,14 +6,14 @@ Subject: [PATCH] ntdll: Reimplement Win32 futexes on top of thread-ID alerts.
 Signed-off-by: Zebediah Figura <z.figura12@gmail.com>
 Signed-off-by: Zebediah Figura <zfigura@codeweavers.com>
 ---
- dlls/ntdll/sync.c        | 214 ++++++++++++++++++++++++++++++++++++++-
+ dlls/ntdll/sync.c        | 173 ++++++++++++++++++++++++++++++++++++++-
  dlls/ntdll/unix/loader.c |   3 -
- dlls/ntdll/unix/sync.c   | 162 -----------------------------
+ dlls/ntdll/unix/sync.c   | 162 ------------------------------------
  dlls/ntdll/unixlib.h     |   6 +-
- 4 files changed, 212 insertions(+), 173 deletions(-)
+ 4 files changed, 171 insertions(+), 173 deletions(-)
 
 diff --git a/dlls/ntdll/sync.c b/dlls/ntdll/sync.c
-index bfb30661864..db68a466d8a 100644
+index bfb30661864..adc03c9ff7a 100644
 --- a/dlls/ntdll/sync.c
 +++ b/dlls/ntdll/sync.c
 @@ -34,11 +34,18 @@
@@ -35,7 +35,7 @@ index bfb30661864..db68a466d8a 100644
  /******************************************************************
   *              RtlRunOnceInitialize (NTDLL.@)
   */
-@@ -863,13 +870,142 @@ NTSTATUS WINAPI RtlSleepConditionVariableSRW( RTL_CONDITION_VARIABLE *variable,
+@@ -863,13 +870,111 @@ NTSTATUS WINAPI RtlSleepConditionVariableSRW( RTL_CONDITION_VARIABLE *variable,
      return status;
  }
  
@@ -70,22 +70,6 @@ index bfb30661864..db68a466d8a 100644
 +    ULONG_PTR val = (ULONG_PTR)addr;
 +
 +    return &futex_queues[(val >> 4) % ARRAY_SIZE(futex_queues)];
-+}
-+
-+static void spin_rdlock( LONG *lock )
-+{
-+    for (;;)
-+    {
-+        LONG old = *lock;
-+        if (old != -1 && InterlockedCompareExchange( lock, old + 1, old ) == old)
-+            return;
-+        YieldProcessor();
-+    }
-+}
-+
-+static void spin_rdunlock( LONG *lock )
-+{
-+    InterlockedDecrement( lock );
 +}
 +
 +static void spin_wrlock( LONG *lock )
@@ -136,35 +120,20 @@ index bfb30661864..db68a466d8a 100644
 +    entry.tid = GetCurrentThreadId();
 +
 +    spin_wrlock( &queue->lock );
++
++    if (!compare_addr( addr, cmp, size ))
++    {
++        spin_wrunlock( &queue->lock );
++        return STATUS_SUCCESS;
++    }
++
 +    if (!queue->queue.next)
-+        list_init(&queue->queue);
++        list_init( &queue->queue );
 +    list_add_tail( &queue->queue, &entry.entry );
++
 +    spin_wrunlock( &queue->lock );
 +
-+    /* Ensure that the store above is ordered before the comparison below.
-+     * This barrier is paired with another in RtlWakeByAddress*().
-+     *
-+     * In more detail, given the following sequence:
-+     *
-+     * Thread A                                 Thread B
-+     * -----------------------------------------------------------------
-+     * RtlWaitOnAddress( &val );                val = 1;
-+     * queue thread                             RtlWakeByAddress( &val );
-+     * MemoryBarrier(); <---- paired with ----> MemoryBarrier();
-+     * compare_addr( &val );                    if (thread is queued)
-+     *
-+     * We must ensure that the thread is queued [through the above
-+     * InterlockedExchangePointer()] before reading "val", and that writes to
-+     * "val" by the application happen before we check for queued threads.
-+     * Otherwise, thread A can deadlock: "val" may appear unchanged, while
-+     * thread B observed that thread A was not queued.
-+     */
-+    MemoryBarrier();
-+
-+    if (compare_addr( addr, cmp, size ))
-+        ret = NtWaitForAlertByThreadId( NULL, timeout );
-+    else
-+        ret = STATUS_SUCCESS;
++    ret = NtWaitForAlertByThreadId( NULL, timeout );
 +
 +    spin_wrlock( &queue->lock );
 +    /* We may have already been removed by a call to RtlWakeAddressSingle(). */
@@ -179,7 +148,7 @@ index bfb30661864..db68a466d8a 100644
  }
  
  /***********************************************************************
-@@ -877,7 +1013,42 @@ NTSTATUS WINAPI RtlWaitOnAddress( const void *addr, const void *cmp, SIZE_T size
+@@ -877,7 +982,37 @@ NTSTATUS WINAPI RtlWaitOnAddress( const void *addr, const void *cmp, SIZE_T size
   */
  void WINAPI RtlWakeAddressAll( const void *addr )
  {
@@ -192,11 +161,6 @@ index bfb30661864..db68a466d8a 100644
 +    TRACE("%p\n", addr);
 +
 +    if (!addr) return;
-+
-+    /* Ensure that memory stores to "addr" are ordered before reading the
-+     * array below. Paired with another barrier in RtlWaitOnAddress() [q.v.].
-+     */
-+    MemoryBarrier();
 +
 +    spin_wrlock( &queue->lock );
 +
@@ -223,7 +187,7 @@ index bfb30661864..db68a466d8a 100644
  }
  
  /***********************************************************************
-@@ -885,5 +1056,42 @@ void WINAPI RtlWakeAddressAll( const void *addr )
+@@ -885,5 +1020,37 @@ void WINAPI RtlWakeAddressAll( const void *addr )
   */
  void WINAPI RtlWakeAddressSingle( const void *addr )
  {
@@ -235,11 +199,6 @@ index bfb30661864..db68a466d8a 100644
 +    TRACE("%p\n", addr);
 +
 +    if (!addr) return;
-+
-+    /* Ensure that memory stores to "addr" are ordered before reading the
-+     * array below. Paired with another barrier in RtlWaitOnAddress() [q.v.].
-+     */
-+    MemoryBarrier();
 +
 +    spin_wrlock( &queue->lock );
 +
@@ -268,10 +227,10 @@ index bfb30661864..db68a466d8a 100644
 +    if (tid) NtAlertThreadByThreadId( (HANDLE)(DWORD_PTR)tid );
  }
 diff --git a/dlls/ntdll/unix/loader.c b/dlls/ntdll/unix/loader.c
-index 7f36dc42579..05ae264297a 100644
+index a411b01a389..59bc978022c 100644
 --- a/dlls/ntdll/unix/loader.c
 +++ b/dlls/ntdll/unix/loader.c
-@@ -2145,9 +2145,6 @@ static struct unix_funcs unix_funcs =
+@@ -2146,9 +2146,6 @@ static struct unix_funcs unix_funcs =
      NtCurrentTeb,
  #endif
      RtlGetSystemTimePrecise,
@@ -282,10 +241,10 @@ index 7f36dc42579..05ae264297a 100644
      fast_RtlpUnWaitCriticalSection,
      fast_RtlDeleteCriticalSection,
 diff --git a/dlls/ntdll/unix/sync.c b/dlls/ntdll/unix/sync.c
-index cdc63c8a6ef..47a0a03b45f 100644
+index ce78c11fd4b..c37dbc5e96e 100644
 --- a/dlls/ntdll/unix/sync.c
 +++ b/dlls/ntdll/unix/sync.c
-@@ -73,10 +73,6 @@ WINE_DEFAULT_DEBUG_CHANNEL(sync);
+@@ -74,10 +74,6 @@ WINE_DEFAULT_DEBUG_CHANNEL(sync);
  
  HANDLE keyed_event = 0;
  
@@ -296,7 +255,7 @@ index cdc63c8a6ef..47a0a03b45f 100644
  static const char *debugstr_timeout( const LARGE_INTEGER *timeout )
  {
      if (!timeout) return "(infinite)";
-@@ -186,24 +182,6 @@ static void timespec_from_timeout( struct timespec *timespec, const LARGE_INTEGE
+@@ -187,24 +183,6 @@ static void timespec_from_timeout( struct timespec *timespec, const LARGE_INTEGE
  #endif
  
  
@@ -321,7 +280,7 @@ index cdc63c8a6ef..47a0a03b45f 100644
  /* create a struct security_descriptor and contained information in one contiguous piece of memory */
  NTSTATUS alloc_object_attributes( const OBJECT_ATTRIBUTES *attr, struct object_attributes **ret,
                                    data_size_t *ret_len )
-@@ -2977,71 +2955,6 @@ NTSTATUS CDECL fast_RtlWakeConditionVariable( RTL_CONDITION_VARIABLE *variable,
+@@ -3035,71 +3013,6 @@ NTSTATUS CDECL fast_RtlWakeConditionVariable( RTL_CONDITION_VARIABLE *variable,
      return STATUS_SUCCESS;
  }
  
@@ -393,7 +352,7 @@ index cdc63c8a6ef..47a0a03b45f 100644
  #else
  
  NTSTATUS CDECL fast_RtlTryAcquireSRWLockExclusive( RTL_SRWLOCK *lock )
-@@ -3084,79 +2997,4 @@ NTSTATUS CDECL fast_wait_cv( RTL_CONDITION_VARIABLE *variable, const void *value
+@@ -3142,79 +3055,4 @@ NTSTATUS CDECL fast_wait_cv( RTL_CONDITION_VARIABLE *variable, const void *value
      return STATUS_NOT_IMPLEMENTED;
  }
  
