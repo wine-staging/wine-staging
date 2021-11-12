@@ -254,8 +254,10 @@ patch_enable_all ()
 	enable_winex11_MWM_Decorations="$1"
 	enable_winex11_UpdateLayeredWindow="$1"
 	enable_winex11_Vulkan_support="$1"
+	enable_winex11_WM_WINDOWPOSCHANGING="$1"
 	enable_winex11_Window_Style="$1"
 	enable_winex11_XEMBED="$1"
+	enable_winex11__NET_ACTIVE_WINDOW="$1"
 	enable_winex11_ime_check_thread_data="$1"
 	enable_winex11_key_translation="$1"
 	enable_winex11_wglShareLists="$1"
@@ -790,11 +792,17 @@ patch_enable ()
 		winex11-Vulkan_support)
 			enable_winex11_Vulkan_support="$2"
 			;;
+		winex11-WM_WINDOWPOSCHANGING)
+			enable_winex11_WM_WINDOWPOSCHANGING="$2"
+			;;
 		winex11-Window_Style)
 			enable_winex11_Window_Style="$2"
 			;;
 		winex11-XEMBED)
 			enable_winex11_XEMBED="$2"
+			;;
+		winex11-_NET_ACTIVE_WINDOW)
+			enable_winex11__NET_ACTIVE_WINDOW="$2"
 			;;
 		winex11-ime-check-thread-data)
 			enable_winex11_ime_check_thread_data="$2"
@@ -1178,6 +1186,13 @@ patch_apply()
 	patch_apply_file "$patchdir/$1"
 }
 
+
+if test "$enable_winex11_WM_WINDOWPOSCHANGING" -eq 1; then
+	if test "$enable_winex11__NET_ACTIVE_WINDOW" -gt 1; then
+		abort "Patchset winex11-_NET_ACTIVE_WINDOW disabled, but winex11-WM_WINDOWPOSCHANGING depends on that."
+	fi
+	enable_winex11__NET_ACTIVE_WINDOW=1
+fi
 
 if test "$enable_wined3d_Indexed_Vertex_Blending" -eq 1; then
 	if test "$enable_wined3d_SWVP_shaders" -gt 1; then
@@ -3799,6 +3814,35 @@ fi
 # |
 if test "$enable_winex11_Vulkan_support" -eq 1; then
 	patch_apply winex11-Vulkan_support/0001-winex11-Specify-a-default-vulkan-driver-if-one-not-f.patch
+fi
+
+# Patchset winex11-_NET_ACTIVE_WINDOW
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#2155] Forward activate window requests to WM using _NET_ACTIVE_WINDOW
+# |
+# | Modified files:
+# |   *	dlls/user32/driver.c, dlls/user32/focus.c, dlls/win32u/driver.c, dlls/winex11.drv/event.c, dlls/winex11.drv/init.c,
+# | 	dlls/winex11.drv/window.c, dlls/winex11.drv/x11drv.h, dlls/winex11.drv/x11drv_main.c, include/wine/gdi_driver.h
+# |
+if test "$enable_winex11__NET_ACTIVE_WINDOW" -eq 1; then
+	patch_apply winex11-_NET_ACTIVE_WINDOW/0001-winex11.drv-Add-support-for-_NET_ACTIVE_WINDOW.patch
+	patch_apply winex11-_NET_ACTIVE_WINDOW/0002-user32-Before-asking-a-WM-to-activate-a-window-make-.patch
+fi
+
+# Patchset winex11-WM_WINDOWPOSCHANGING
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	winex11-_NET_ACTIVE_WINDOW
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#34594] Fix handling of WM_WINDOWPOS{CHANGING,CHANGED} for deactivated topmost window
+# |
+# | Modified files:
+# |   *	dlls/winex11.drv/event.c
+# |
+if test "$enable_winex11_WM_WINDOWPOSCHANGING" -eq 1; then
+	patch_apply winex11-WM_WINDOWPOSCHANGING/0001-winex11.drv-Send-WM_WINDOWPOSCHANGING-WM_WINDOWPOSCH.patch
 fi
 
 # Patchset winex11-Window_Style
