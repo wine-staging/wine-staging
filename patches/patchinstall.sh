@@ -250,6 +250,7 @@ patch_enable_all ()
 	enable_winemenubuilder_Desktop_Icon_Path="$1"
 	enable_winemenubuilder_integration="$1"
 	enable_wineps_drv_PostScript_Fixes="$1"
+	enable_winex11_CandidateWindowPos="$1"
 	enable_winex11_MWM_Decorations="$1"
 	enable_winex11_UpdateLayeredWindow="$1"
 	enable_winex11_Vulkan_support="$1"
@@ -776,6 +777,9 @@ patch_enable ()
 			;;
 		wineps.drv-PostScript_Fixes)
 			enable_wineps_drv_PostScript_Fixes="$2"
+			;;
+		winex11-CandidateWindowPos)
+			enable_winex11_CandidateWindowPos="$2"
 			;;
 		winex11-MWM_Decorations)
 			enable_winex11_MWM_Decorations="$2"
@@ -3745,6 +3749,19 @@ fi
 # |
 if test "$enable_wineps_drv_PostScript_Fixes" -eq 1; then
 	patch_apply wineps.drv-PostScript_Fixes/0004-wineps.drv-Add-support-for-GETFACENAME-and-DOWNLOADF.patch
+fi
+
+# Patchset winex11-CandidateWindowPos
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#30938] Update a XIM candidate position when cursor location changes
+# |
+# | Modified files:
+# |   *	dlls/user32/caret.c, dlls/user32/driver.c, dlls/win32u/driver.c, dlls/winex11.drv/init.c, dlls/winex11.drv/x11drv.h,
+# | 	dlls/winex11.drv/xim.c, include/wine/gdi_driver.h
+# |
+if test "$enable_winex11_CandidateWindowPos" -eq 1; then
+	patch_apply winex11-CandidateWindowPos/0001-winex11.drv-Update-a-candidate-window-s-position-wit.patch
 fi
 
 # Patchset winex11-MWM_Decorations
