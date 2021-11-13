@@ -110,6 +110,7 @@ patch_enable_all ()
 	enable_ddraw_IDirect3DTexture2_Load="$1"
 	enable_ddraw_Silence_FIXMEs="$1"
 	enable_ddraw_version_check="$1"
+	enable_dinput_joy_mappings="$1"
 	enable_dsound_EAX="$1"
 	enable_dsound_Fast_Mixer="$1"
 	enable_dwrite_FontFallback="$1"
@@ -359,6 +360,9 @@ patch_enable ()
 			;;
 		ddraw-version-check)
 			enable_ddraw_version_check="$2"
+			;;
+		dinput-joy-mappings)
+			enable_dinput_joy_mappings="$2"
 			;;
 		dsound-EAX)
 			enable_dsound_EAX="$2"
@@ -1741,6 +1745,23 @@ if test "$enable_ddraw_version_check" -eq 1; then
 	patch_apply ddraw-version-check/0001-ddraw-Return-correct-devices-based-off-requested-Dir.patch
 fi
 
+# Patchset dinput-joy-mappings
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#34108] dinput: Improve support for user Joystick configuration.
+# |   *	[#47326] dinput: Allow mapping of controls based of genre type.
+# |   *	[#35815] dinput: Allow remapping of joystick buttons.
+# |
+# | Modified files:
+# |   *	dlls/dinput/config.c, dlls/dinput/device.c, dlls/dinput/dinput_private.h, dlls/dinput8/tests/device.c
+# |
+if test "$enable_dinput_joy_mappings" -eq 1; then
+	patch_apply dinput-joy-mappings/0001-dinput-Allow-empty-Joystick-mappings.patch
+	patch_apply dinput-joy-mappings/0002-dinput-Support-username-in-Config-dialog.patch
+	patch_apply dinput-joy-mappings/0003-dinput-Dont-allow-Fixed-actions-to-be-changed.patch
+	patch_apply dinput-joy-mappings/0004-dinput-Allow-mapping-of-controls-based-of-Genre-type.patch
+fi
+
 # Patchset dsound-Fast_Mixer
 # |
 # | This patchset fixes the following Wine bugs:
@@ -3106,7 +3127,7 @@ fi
 # Patchset stdole32.idl-Typelib
 # |
 # | Modified files:
-# |   *	dlls/stdole32.tlb/std_ole_v1.idl
+# |   *	dlls/stdole32.tlb/std_ole_v1.idl, include/stdole32.idl
 # |
 if test "$enable_stdole32_idl_Typelib" -eq 1; then
 	patch_apply stdole32.idl-Typelib/0001-include-Make-stdole32.idl-a-public-component.patch
