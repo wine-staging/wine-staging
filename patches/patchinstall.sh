@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "b65ef71fc0a7044557e0ba530e3b95497644867c"
+	echo "161d61481f5d5ab8ee0b6237853af830e992afb1"
 }
 
 # Show version information
@@ -2260,7 +2260,7 @@ fi
 # |   *	[#47439] loader: Add Keyboard Layouts registry enteries.
 # |
 # | Modified files:
-# |   *	dlls/user32/input.c, dlls/user32/tests/input.c, loader/wine.inf.in
+# |   *	dlls/user32/input.c, dlls/user32/tests/input.c, dlls/win32u/input.c, loader/wine.inf.in
 # |
 if test "$enable_loader_KeyboardLayouts" -eq 1; then
 	patch_apply loader-KeyboardLayouts/0001-loader-Add-Keyboard-Layouts-registry-enteries.patch
@@ -2502,13 +2502,10 @@ fi
 # |   *	[#50292] Process-local synchronization objects use private interfaces into the Unix library
 # |
 # | Modified files:
-# |   *	dlls/ntdll/ntdll.spec, dlls/ntdll/sync.c, dlls/ntdll/tests/sync.c, dlls/ntdll/unix/loader.c, dlls/ntdll/unix/sync.c,
-# | 	dlls/ntdll/unix/unix_private.h, dlls/ntdll/unixlib.h, dlls/wow64/sync.c, dlls/wow64/syscall.h, include/winternl.h
+# |   *	dlls/ntdll/sync.c, dlls/ntdll/unix/loader.c, dlls/ntdll/unix/sync.c, dlls/ntdll/unix/unix_private.h,
+# | 	dlls/ntdll/unixlib.h
 # |
 if test "$enable_ntdll_NtAlertThreadByThreadId" -eq 1; then
-	patch_apply ntdll-NtAlertThreadByThreadId/0003-ntdll-Implement-NtAlertThreadByThreadId-and-NtWaitFo.patch
-	patch_apply ntdll-NtAlertThreadByThreadId/0004-ntdll-tests-Add-basic-tests-for-thread-id-alert-func.patch
-	patch_apply ntdll-NtAlertThreadByThreadId/0005-ntdll-Implement-thread-ID-alerts-using-futexes-if-po.patch
 	patch_apply ntdll-NtAlertThreadByThreadId/0006-ntdll-Implement-thread-ID-alerts-using-Mach-semaphor.patch
 	patch_apply ntdll-NtAlertThreadByThreadId/0007-ntdll-Reimplement-Win32-futexes-on-top-of-thread-ID-.patch
 	patch_apply ntdll-NtAlertThreadByThreadId/0009-ntdll-Reimplement-the-critical-section-fast-path-on-.patch
