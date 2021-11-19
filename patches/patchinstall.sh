@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "161d61481f5d5ab8ee0b6237853af830e992afb1"
+	echo "32fb017d4a22be38ca271bf387e466e958601355"
 }
 
 # Show version information
@@ -149,7 +149,6 @@ patch_enable_all ()
 	enable_ntdll_Hide_Wine_Exports="$1"
 	enable_ntdll_Junction_Points="$1"
 	enable_ntdll_Manifest_Range="$1"
-	enable_ntdll_NtAlertThreadByThreadId="$1"
 	enable_ntdll_NtQueryEaFile="$1"
 	enable_ntdll_NtQuerySection="$1"
 	enable_ntdll_NtSetLdtEntries="$1"
@@ -477,9 +476,6 @@ patch_enable ()
 			;;
 		ntdll-Manifest_Range)
 			enable_ntdll_Manifest_Range="$2"
-			;;
-		ntdll-NtAlertThreadByThreadId)
-			enable_ntdll_NtAlertThreadByThreadId="$2"
 			;;
 		ntdll-NtQueryEaFile)
 			enable_ntdll_NtQueryEaFile="$2"
@@ -2494,23 +2490,6 @@ fi
 # |
 if test "$enable_ntdll_Manifest_Range" -eq 1; then
 	patch_apply ntdll-Manifest_Range/0001-ntdll-Support-ISOLATIONAWARE_MANIFEST_RESOURCE_ID-ra.patch
-fi
-
-# Patchset ntdll-NtAlertThreadByThreadId
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#50292] Process-local synchronization objects use private interfaces into the Unix library
-# |
-# | Modified files:
-# |   *	dlls/ntdll/sync.c, dlls/ntdll/unix/loader.c, dlls/ntdll/unix/sync.c, dlls/ntdll/unix/unix_private.h,
-# | 	dlls/ntdll/unixlib.h
-# |
-if test "$enable_ntdll_NtAlertThreadByThreadId" -eq 1; then
-	patch_apply ntdll-NtAlertThreadByThreadId/0006-ntdll-Implement-thread-ID-alerts-using-Mach-semaphor.patch
-	patch_apply ntdll-NtAlertThreadByThreadId/0007-ntdll-Reimplement-Win32-futexes-on-top-of-thread-ID-.patch
-	patch_apply ntdll-NtAlertThreadByThreadId/0009-ntdll-Reimplement-the-critical-section-fast-path-on-.patch
-	patch_apply ntdll-NtAlertThreadByThreadId/0010-ntdll-Get-rid-of-the-direct-futex-path-for-condition.patch
-	patch_apply ntdll-NtAlertThreadByThreadId/0011-ntdll-Reimplement-SRW-locks-on-top-of-Win32-futexes.patch
 fi
 
 # Patchset ntdll-NtQuerySection
