@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "f374e9ccc8c9b9933520d006b879495bde4e7bb3"
+	echo "c0ea1ad37d3343c403d80ee18bf0d90c2699148b"
 }
 
 # Show version information
@@ -2539,7 +2539,7 @@ fi
 # |   *	[#39793] Do a device check before returning a default serial port name
 # |
 # | Modified files:
-# |   *	dlls/mountmgr.sys/device.c
+# |   *	dlls/mountmgr.sys/device.c, dlls/mountmgr.sys/unixlib.c, dlls/mountmgr.sys/unixlib.h
 # |
 if test "$enable_ntdll_Serial_Port_Detection" -eq 1; then
 	patch_apply ntdll-Serial_Port_Detection/0001-ntdll-Do-a-device-check-before-returning-a-default-s.patch
