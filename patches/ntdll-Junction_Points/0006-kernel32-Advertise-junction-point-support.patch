@@ -1,97 +1,213 @@
-From d8910a4f11afbe0299fffcde6ca34fcfdb86f9c0 Mon Sep 17 00:00:00 2001
+From 7a2585477f90f5e88a7745eea20f517a00b2175b Mon Sep 17 00:00:00 2001
 From: "Erich E. Hoover" <erich.e.hoover@wine-staging.com>
 Date: Sat, 12 Dec 2020 17:28:31 -0700
-Subject: [PATCH] kernel32: Advertise junction point support.
+Subject: kernel32: Advertise junction point support.
 
+Signed-off-by: Erich E. Hoover <erich.e.hoover@gmail.com>
 ---
- dlls/mountmgr.sys/device.c | 66 +++++++++++++++++++++++++++++++++++++-
- dlls/ntdll/tests/file.c    |  9 ++++--
- 2 files changed, 72 insertions(+), 3 deletions(-)
+ dlls/mountmgr.sys/device.c  | 33 ++++++++++++-
+ dlls/mountmgr.sys/unixlib.c | 97 +++++++++++++++++++++++++++++++++++++
+ dlls/mountmgr.sys/unixlib.h |  8 +++
+ dlls/ntdll/tests/file.c     |  9 +++-
+ 4 files changed, 144 insertions(+), 3 deletions(-)
 
 diff --git a/dlls/mountmgr.sys/device.c b/dlls/mountmgr.sys/device.c
-index d4f77012bbe..5cb133ebecd 100644
+index d4f77012bbe..6131e236e3a 100644
 --- a/dlls/mountmgr.sys/device.c
 +++ b/dlls/mountmgr.sys/device.c
-@@ -1615,6 +1615,69 @@ static NTSTATUS query_property( struct disk_device *device, IRP *irp )
-     return status;
+@@ -197,6 +197,36 @@ static void get_filesystem_serial( struct volume *volume )
+     volume->serial = strtoul( buffer, NULL, 16 );
  }
  
-+static DWORD get_fs_flags( struct volume *volume )
++/* get the flags for the volume by looking at the type of underlying filesystem */
++static DWORD get_filesystem_flags( struct volume *volume )
 +{
-+#if 0
-+/*#if defined(__NR_renameat2) || defined(RENAME_SWAP)*/
++    char fstypename[256];
++    ULONG size = sizeof(fstypename);
++    struct get_volume_filesystem_params params = { volume->device->unix_mount, fstypename, &size };
++
++    if (!volume->device->unix_mount) return 0;
++    if (MOUNTMGR_CALL( get_volume_filesystem, &params )) return 0;
++
++    if (!strcmp("apfs", fstypename) ||
++        !strcmp("nfs", fstypename) ||
++        !strcmp("cifs", fstypename) ||
++        !strcmp("ncpfs", fstypename) ||
++        !strcmp("tmpfs", fstypename) ||
++        !strcmp("cramfs", fstypename) ||
++        !strcmp("devfs", fstypename) ||
++        !strcmp("procfs", fstypename) ||
++        !strcmp("ext2", fstypename) ||
++        !strcmp("ext3", fstypename) ||
++        !strcmp("ext4", fstypename) ||
++        !strcmp("hfs", fstypename) ||
++        !strcmp("hpfs", fstypename) ||
++        !strcmp("ntfs", fstypename))
++    {
++        return FILE_SUPPORTS_REPARSE_POINTS;
++    }
++    return 0;
++}
++
+ 
+ /******************************************************************
+  *		VOLUME_FindCdRomDataBestVoldesc
+@@ -1695,7 +1725,8 @@ static NTSTATUS WINAPI harddisk_query_volume( DEVICE_OBJECT *device, IRP *irp )
+             break;
+         default:
+             fsname = L"NTFS";
+-            info->FileSystemAttributes = FILE_CASE_PRESERVED_NAMES | FILE_PERSISTENT_ACLS;
++            info->FileSystemAttributes = FILE_CASE_PRESERVED_NAMES | FILE_PERSISTENT_ACLS
++                                         | get_filesystem_flags( volume );
+             info->MaximumComponentNameLength = 255;
+             break;
+         }
+diff --git a/dlls/mountmgr.sys/unixlib.c b/dlls/mountmgr.sys/unixlib.c
+index 52a3fce66d6..73735c22d13 100644
+--- a/dlls/mountmgr.sys/unixlib.c
++++ b/dlls/mountmgr.sys/unixlib.c
+@@ -31,6 +31,21 @@
+ #include <stdlib.h>
+ #include <sys/stat.h>
+ #include <unistd.h>
++#ifdef HAVE_SYS_STATFS_H
++# include <sys/statfs.h>
++#endif
++#ifdef HAVE_SYS_SYSCALL_H
++# include <sys/syscall.h>
++#endif
++#ifdef HAVE_SYS_VFS_H
++# include <sys/vfs.h>
++#endif
++#ifdef HAVE_SYS_PARAM_H
++#include <sys/param.h>
++#endif
++#ifdef HAVE_SYS_MOUNT_H
++#include <sys/mount.h>
++#endif
+ 
+ #include "unixlib.h"
+ 
+@@ -311,6 +326,87 @@ static NTSTATUS read_volume_file( void *args )
+     return STATUS_SUCCESS;
+ }
+ 
++static NTSTATUS get_volume_filesystem( void *args )
++{
++#if defined(__NR_renameat2) || defined(RENAME_SWAP)
++    const struct get_volume_filesystem_params *params = args;
 +#if defined(HAVE_FSTATFS)
 +    struct statfs stfs;
 +#elif defined(HAVE_FSTATVFS)
 +    struct statvfs stfs;
 +#endif
-+    int fd;
++    const char *fstypename = "unknown";
++    int fd = -1;
 +
-+    if ((fd = open_volume_file( volume, "" )) == -1)
-+        return 0;
++    if (params->volume[0] != '/')
++    {
++        char *path = get_dosdevices_path( params->volume );
++        if (path) fd = open( path, O_RDONLY );
++        free( path );
++    }
++    else fd = open( params->volume, O_RDONLY );
++    if (fd == -1) return STATUS_NO_SUCH_FILE;
++
 +#if defined(HAVE_FSTATFS)
 +    if (fstatfs(fd, &stfs))
-+        return 0;
++        return STATUS_NO_SUCH_FILE;
 +#elif defined(HAVE_FSTATVFS)
 +    if (fstatvfs(fd, &stfs))
-+        return 0;
++        return STATUS_NO_SUCH_FILE;
 +#endif
 +    close( fd );
 +#if defined(HAVE_FSTATFS) && defined(linux)
 +    switch (stfs.f_type)
 +    {
 +    case 0x6969:      /* nfs */
++        fstypename = "nfs";
++        break;
 +    case 0xff534d42:  /* cifs */
++        fstypename = "cifs";
++        break;
 +    case 0x564c:      /* ncpfs */
++        fstypename = "ncpfs";
++        break;
 +    case 0x01021994:  /* tmpfs */
++        fstypename = "tmpfs";
++        break;
 +    case 0x28cd3d45:  /* cramfs */
++        fstypename = "cramfs";
++        break;
 +    case 0x1373:      /* devfs */
++        fstypename = "devfs";
++        break;
 +    case 0x9fa0:      /* procfs */
++        fstypename = "procfs";
++        break;
 +    case 0xef51:      /* old ext2 */
++        fstypename = "ext2";
++        break;
 +    case 0xef53:      /* ext2/3/4 */
++        fstypename = "ext2";
++        break;
 +    case 0x4244:      /* hfs */
++        fstypename = "hfs";
++        break;
 +    case 0xf995e849:  /* hpfs */
++        fstypename = "hpfs";
++        break;
 +    case 0x5346544e:  /* ntfs */
-+        return FILE_SUPPORTS_REPARSE_POINTS;
++        fstypename = "ntfs";
++        break;
 +    default:
 +        break;
 +    }
 +#elif defined(__FreeBSD__) || defined(__FreeBSD_kernel__) || defined(__OpenBSD__) || defined(__DragonFly__) || defined(__APPLE__) || defined(__NetBSD__)
-+    if (!strcmp("apfs", stfs.f_fstypename) ||
-+        !strcmp("nfs", stfs.f_fstypename) ||
-+        !strcmp("cifs", stfs.f_fstypename) ||
-+        !strcmp("ncpfs", stfs.f_fstypename) ||
-+        !strcmp("tmpfs", stfs.f_fstypename) ||
-+        !strcmp("cramfs", stfs.f_fstypename) ||
-+        !strcmp("devfs", stfs.f_fstypename) ||
-+        !strcmp("procfs", stfs.f_fstypename) ||
-+        !strcmp("ext2", stfs.f_fstypename) ||
-+        !strcmp("ext3", stfs.f_fstypename) ||
-+        !strcmp("ext4", stfs.f_fstypename) ||
-+        !strcmp("hfs", stfs.f_fstypename) ||
-+        !strcmp("hpfs", stfs.f_fstypename) ||
-+        !strcmp("ntfs", stfs.f_fstypename))
-+    {
-+        return FILE_SUPPORTS_REPARSE_POINTS;
-+    }
++    fstypename = stfs.f_fstypename;
 +#endif
++    lstrcpynA( params->fstypename, fstypename, *params->size );
++    return STATUS_SUCCESS;
++#else
++    return STATUS_NOT_IMPLEMENTED;
 +#endif
-+    return 0;
 +}
 +
- static NTSTATUS WINAPI harddisk_query_volume( DEVICE_OBJECT *device, IRP *irp )
+ static NTSTATUS match_unixdev( void *args )
  {
-     IO_STACK_LOCATION *irpsp = IoGetCurrentIrpStackLocation( irp );
-@@ -1695,7 +1758,8 @@ static NTSTATUS WINAPI harddisk_query_volume( DEVICE_OBJECT *device, IRP *irp )
-             break;
-         default:
-             fsname = L"NTFS";
--            info->FileSystemAttributes = FILE_CASE_PRESERVED_NAMES | FILE_PERSISTENT_ACLS;
-+            info->FileSystemAttributes = FILE_CASE_PRESERVED_NAMES | FILE_PERSISTENT_ACLS
-+                                         | get_fs_flags( volume );
-             info->MaximumComponentNameLength = 255;
-             break;
-         }
+     const struct match_unixdev_params *params = args;
+@@ -454,4 +550,5 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
+     write_credential,
+     delete_credential,
+     enumerate_credentials,
++    get_volume_filesystem,
+ };
+diff --git a/dlls/mountmgr.sys/unixlib.h b/dlls/mountmgr.sys/unixlib.h
+index e7846a764da..188cf93b091 100644
+--- a/dlls/mountmgr.sys/unixlib.h
++++ b/dlls/mountmgr.sys/unixlib.h
+@@ -91,6 +91,13 @@ struct read_volume_file_params
+     ULONG *size;
+ };
+ 
++struct get_volume_filesystem_params
++{
++    const char *volume;
++    void *fstypename;
++    ULONG *size;
++};
++
+ struct match_unixdev_params
+ {
+     const char *device;
+@@ -156,6 +163,7 @@ enum mountmgr_funcs
+     unix_write_credential,
+     unix_delete_credential,
+     unix_enumerate_credentials,
++    unix_get_volume_filesystem,
+ };
+ 
+ extern unixlib_handle_t mountmgr_handle;
 diff --git a/dlls/ntdll/tests/file.c b/dlls/ntdll/tests/file.c
 index c5b3b83802e..084398ba83d 100644
 --- a/dlls/ntdll/tests/file.c
@@ -121,5 +237,5 @@ index c5b3b83802e..084398ba83d 100644
      {
          skip("File system does not support reparse points.\n");
 -- 
-2.33.0
+2.17.1
 

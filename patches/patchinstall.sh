@@ -1852,9 +1852,10 @@ fi
 # |
 # | Modified files:
 # |   *	configure.ac, dlls/kernel32/path.c, dlls/kernel32/tests/path.c, dlls/kernelbase/file.c, dlls/mountmgr.sys/device.c,
-# | 	dlls/msvcp120/tests/msvcp120.c, dlls/msvcp140/tests/msvcp140.c, dlls/ntdll/tests/file.c, dlls/ntdll/unix/file.c,
-# | 	include/Makefile.in, include/ntifs.h, include/winnt.h, include/winternl.h, programs/cmd/builtins.c,
-# | 	programs/cmd/directory.c, server/fd.c, server/file.c, server/protocol.def
+# | 	dlls/mountmgr.sys/unixlib.c, dlls/mountmgr.sys/unixlib.h, dlls/msvcp120/tests/msvcp120.c,
+# | 	dlls/msvcp140/tests/msvcp140.c, dlls/ntdll/tests/file.c, dlls/ntdll/unix/file.c, include/Makefile.in, include/ntifs.h,
+# | 	include/winnt.h, include/winternl.h, programs/cmd/builtins.c, programs/cmd/directory.c, server/fd.c, server/file.c,
+# | 	server/protocol.def
 # |
 if test "$enable_ntdll_Junction_Points" -eq 1; then
 	patch_apply ntdll-Junction_Points/0001-ntdll-Add-support-for-junction-point-creation.patch
