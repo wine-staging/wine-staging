@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "3f6102080e632b9f4d8a97c0f0b1231fbd8e759b"
+	echo "835dfaab023175028161974c5cd8585b77df101c"
 }
 
 # Show version information
@@ -205,7 +205,6 @@ patch_enable_all ()
 	enable_user32_Dialog_Paint_Event="$1"
 	enable_user32_DrawTextExW="$1"
 	enable_user32_FlashWindowEx="$1"
-	enable_user32_GetSystemMetrics="$1"
 	enable_user32_Implement_CascadeWindows="$1"
 	enable_user32_LR_LOADFROMFILE="$1"
 	enable_user32_ListBox_Size="$1"
@@ -643,9 +642,6 @@ patch_enable ()
 			;;
 		user32-FlashWindowEx)
 			enable_user32_FlashWindowEx="$2"
-			;;
-		user32-GetSystemMetrics)
-			enable_user32_GetSystemMetrics="$2"
 			;;
 		user32-Implement-CascadeWindows)
 			enable_user32_Implement_CascadeWindows="$2"
@@ -3207,18 +3203,6 @@ fi
 # |
 if test "$enable_user32_FlashWindowEx" -eq 1; then
 	patch_apply user32-FlashWindowEx/0001-user32-Improve-FlashWindowEx-message-and-return-valu.patch
-fi
-
-# Patchset user32-GetSystemMetrics
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#18732] Make it possible to change media center / tablet pc status
-# |
-# | Modified files:
-# |   *	dlls/user32/sysparams.c
-# |
-if test "$enable_user32_GetSystemMetrics" -eq 1; then
-	patch_apply user32-GetSystemMetrics/0001-user32-Allow-changing-the-tablet-media-center-status.patch
 fi
 
 # Patchset user32-Implement-CascadeWindows
