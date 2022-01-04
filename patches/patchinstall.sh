@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "2318484e1e33cb30f00eb9a62cb9aa5f83e5dc99"
+	echo "529e4154a34a5a774fe7036552ffbb060740da90"
 }
 
 # Show version information
@@ -1732,7 +1732,7 @@ fi
 # |   *	[#35815] dinput: Allow remapping of joystick buttons.
 # |
 # | Modified files:
-# |   *	dlls/dinput/config.c, dlls/dinput/device.c, dlls/dinput/dinput_private.h, dlls/dinput8/tests/device.c
+# |   *	dlls/dinput/config.c, dlls/dinput/device.c, dlls/dinput/dinput_private.h, dlls/dinput/tests/device8.c
 # |
 if test "$enable_dinput_joy_mappings" -eq 1; then
 	patch_apply dinput-joy-mappings/0001-dinput-Allow-empty-Joystick-mappings.patch
