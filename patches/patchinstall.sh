@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "529e4154a34a5a774fe7036552ffbb060740da90"
+	echo "9ef5c9c0090f17df5bfd794485019fb8bf9a7e25"
 }
 
 # Show version information
@@ -2590,6 +2590,7 @@ if test "$enable_nvcuda_CUDA_Support" -eq 1; then
 	patch_apply nvcuda-CUDA_Support/0010-nvcuda-Search-for-dylib-library-on-Mac-OS-X.patch
 	patch_apply nvcuda-CUDA_Support/0011-nvcuda-Add-semi-stub-for-cuD3D10GetDevice.patch
 	patch_apply nvcuda-CUDA_Support/0012-nvcuda-Add-semi-stub-for-cuD3D11GetDevice-and-cuGrap.patch
+	patch_apply nvcuda-CUDA_Support/0013-nvcuda-Update-spec-file.patch
 fi
 
 # Patchset nvapi-Stub_DLL
