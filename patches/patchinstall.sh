@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "86eaf7eeb2603d1b13d18e3fe71a615e1ee14cee"
+	echo "76c9fc8a761c9faff72f97ab508a1afcb28eeb12"
 }
 
 # Show version information
@@ -2591,6 +2591,8 @@ if test "$enable_nvcuda_CUDA_Support" -eq 1; then
 	patch_apply nvcuda-CUDA_Support/0011-nvcuda-Add-semi-stub-for-cuD3D10GetDevice.patch
 	patch_apply nvcuda-CUDA_Support/0012-nvcuda-Add-semi-stub-for-cuD3D11GetDevice-and-cuGrap.patch
 	patch_apply nvcuda-CUDA_Support/0013-nvcuda-Update-spec-file.patch
+	patch_apply nvcuda-CUDA_Support/0014-nvcuda-Implement-cuDeviceGetUuid-and-cuDeviceGetLuid.patch
+	patch_apply nvcuda-CUDA_Support/0015-nvcuda-Expand-the-Unknown1-table.patch
 fi
 
 # Patchset nvapi-Stub_DLL
