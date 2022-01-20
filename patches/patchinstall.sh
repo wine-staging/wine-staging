@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "c7c729c0db7c3e246182a890de4c606f3e394d0e"
+	echo "6fe37b465649bfff2085ea871ffad0fff7ee7d61"
 }
 
 # Show version information
@@ -1370,8 +1370,8 @@ fi
 # | Modified files:
 # |   *	dlls/bcrypt/gnutls.c, dlls/d2d1/bitmap.c, dlls/d2d1/brush.c, dlls/d2d1/dc_render_target.c, dlls/d2d1/geometry.c,
 # | 	dlls/d2d1/hwnd_render_target.c, dlls/d2d1/state_block.c, dlls/d3d10/effect.c, dlls/d3d11/view.c, dlls/d3d8/texture.c,
-# | 	dlls/d3d9/texture.c, dlls/ddraw/viewport.c, dlls/dwrite/font.c, dlls/dwrite/layout.c, dlls/dxgi/output.c,
-# | 	dlls/msctf/range.c, dlls/msxml3/schema.c, dlls/ntdll/unix/virtual.c, dlls/oleaut32/oleaut.c, dlls/rpcrt4/cstub.c,
+# | 	dlls/d3d9/texture.c, dlls/ddraw/viewport.c, dlls/dwrite/font.c, dlls/dxgi/output.c, dlls/msctf/range.c,
+# | 	dlls/msxml3/schema.c, dlls/ntdll/unix/virtual.c, dlls/oleaut32/oleaut.c, dlls/rpcrt4/cstub.c,
 # | 	dlls/rpcrt4/ndr_marshall.c, dlls/rpcrt4/ndr_typelib.c, dlls/vbscript/vbdisp.c, dlls/wbemdisp/locator.c,
 # | 	dlls/windowscodecs/info.c, dlls/wsdapi/msgparams.c, include/wine/list.h, include/wine/rbtree.h, include/winnt.h
 # |
