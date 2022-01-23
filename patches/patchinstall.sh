@@ -237,6 +237,7 @@ patch_enable_all ()
 	enable_wined3d_SWVP_shaders="$1"
 	enable_wined3d_Silence_FIXMEs="$1"
 	enable_wined3d_WINED3DFMT_B8G8R8X8_UNORM="$1"
+	enable_wined3d_bindless_texture="$1"
 	enable_wined3d_mesa_texture_download="$1"
 	enable_wined3d_unset_flip_gdi="$1"
 	enable_wined3d_wined3d_guess_gl_vendor="$1"
@@ -740,6 +741,9 @@ patch_enable ()
 			;;
 		wined3d-WINED3DFMT_B8G8R8X8_UNORM)
 			enable_wined3d_WINED3DFMT_B8G8R8X8_UNORM="$2"
+			;;
+		wined3d-bindless-texture)
+			enable_wined3d_bindless_texture="$2"
 			;;
 		wined3d-mesa_texture_download)
 			enable_wined3d_mesa_texture_download="$2"
@@ -3635,6 +3639,19 @@ fi
 # |
 if test "$enable_wined3d_WINED3DFMT_B8G8R8X8_UNORM" -eq 1; then
 	patch_apply wined3d-WINED3DFMT_B8G8R8X8_UNORM/0001-wined3d-Implement-WINED3DFMT_B8G8R8X8_UNORM-to-WINED.patch
+fi
+
+# Patchset wined3d-bindless-texture
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#44514] - wined3d: Use bindless textures for GLSL shaders.
+# |
+# | Modified files:
+# |   *	dlls/wined3d/adapter_gl.c, dlls/wined3d/context_gl.c, dlls/wined3d/device.c, dlls/wined3d/glsl_shader.c,
+# | 	dlls/wined3d/texture.c, dlls/wined3d/view.c, dlls/wined3d/wined3d_gl.h, dlls/wined3d/wined3d_private.h
+# |
+if test "$enable_wined3d_bindless_texture" -eq 1; then
+	patch_apply wined3d-bindless-texture/0001-wined3d-Use-bindless-textures-for-GLSL-shaders.patch
 fi
 
 # Patchset wined3d-mesa_texture_download
