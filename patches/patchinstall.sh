@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "6fe37b465649bfff2085ea871ffad0fff7ee7d61"
+	echo "599ecd97a8fded8c00aa261535880a4d8b5d2693"
 }
 
 # Show version information
@@ -264,6 +264,7 @@ patch_enable_all ()
 	enable_winmm_mciSendCommandA="$1"
 	enable_wintab32_improvements="$1"
 	enable_wintrust_WTHelperGetProvCertFromChain="$1"
+	enable_ws2_32_SIO_IDEAL_SEND_BACKLOG_QUERY="$1"
 	enable_wscript_support_d_u_switches="$1"
 	enable_xactengine_initial="$1"
 	enable_xactengine3_7_Notification="$1"
@@ -819,6 +820,9 @@ patch_enable ()
 			;;
 		wintrust-WTHelperGetProvCertFromChain)
 			enable_wintrust_WTHelperGetProvCertFromChain="$2"
+			;;
+		ws2_32-SIO_IDEAL_SEND_BACKLOG_QUERY)
+			enable_ws2_32_SIO_IDEAL_SEND_BACKLOG_QUERY="$2"
 			;;
 		wscript-support-d-u-switches)
 			enable_wscript_support_d_u_switches="$2"
@@ -3940,6 +3944,18 @@ fi
 # |
 if test "$enable_wintrust_WTHelperGetProvCertFromChain" -eq 1; then
 	patch_apply wintrust-WTHelperGetProvCertFromChain/0001-wintrust-Add-parameter-check-in-WTHelperGetProvCertF.patch
+fi
+
+# Patchset ws2_32-SIO_IDEAL_SEND_BACKLOG_QUERY
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#49412] ws2_32: Support WSAIoctl SIO_IDEAL_SEND_BACKLOG_QUERY
+# |
+# | Modified files:
+# |   *	dlls/ntdll/unix/socket.c, dlls/ws2_32/socket.c, dlls/ws2_32/tests/sock.c, include/wine/afd.h
+# |
+if test "$enable_ws2_32_SIO_IDEAL_SEND_BACKLOG_QUERY" -eq 1; then
+	patch_apply ws2_32-SIO_IDEAL_SEND_BACKLOG_QUERY/0001-ws2_32-Return-a-valid-value-for-WSAIoctl-SIO_IDEAL_S.patch
 fi
 
 # Patchset wscript-support-d-u-switches
