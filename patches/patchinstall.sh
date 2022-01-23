@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "599ecd97a8fded8c00aa261535880a4d8b5d2693"
+	echo "c09a5da157585d171ad896e9862db00d505e4363"
 }
 
 # Show version information
@@ -269,6 +269,7 @@ patch_enable_all ()
 	enable_xactengine_initial="$1"
 	enable_xactengine3_7_Notification="$1"
 	enable_xactengine3_7_PrepareWave="$1"
+	enable_xactengine3_7_callbacks="$1"
 }
 
 # Enable or disable a specific patchset
@@ -836,6 +837,9 @@ patch_enable ()
 		xactengine3_7-PrepareWave)
 			enable_xactengine3_7_PrepareWave="$2"
 			;;
+		xactengine3_7-callbacks)
+			enable_xactengine3_7_callbacks="$2"
+			;;
 		*)
 			return 1
 			;;
@@ -1182,6 +1186,13 @@ patch_apply()
 	patch_apply_file "$patchdir/$1"
 }
 
+
+if test "$enable_xactengine3_7_callbacks" -eq 1; then
+	if test "$enable_xactengine3_7_Notification" -gt 1; then
+		abort "Patchset xactengine3_7-Notification disabled, but xactengine3_7-callbacks depends on that."
+	fi
+	enable_xactengine3_7_Notification=1
+fi
 
 if test "$enable_winex11_WM_WINDOWPOSCHANGING" -eq 1; then
 	if test "$enable_winex11__NET_ACTIVE_WINDOW" -gt 1; then
@@ -4012,6 +4023,23 @@ fi
 if test "$enable_xactengine3_7_PrepareWave" -eq 1; then
 	patch_apply xactengine3_7-PrepareWave/0002-xactengine3_7-Implement-IXACT3Engine-PrepareStreamin.patch
 	patch_apply xactengine3_7-PrepareWave/0003-xactengine3_7-Implement-IXACT3Engine-PrepareInMemory.patch
+fi
+
+# Patchset xactengine3_7-callbacks
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	xactengine3_7-Notification
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#49678] - xactengine: Implement callback notifications.
+# |
+# | Modified files:
+# |   *	dlls/xactengine3_7/xact_dll.c, libs/faudio/include/FACT.h, libs/faudio/src/FACT.c, libs/faudio/src/FACT_internal.h
+# |
+if test "$enable_xactengine3_7_callbacks" -eq 1; then
+	patch_apply xactengine3_7-callbacks/0001-Add-support-for-private-contexts.patch
+	patch_apply xactengine3_7-callbacks/0002-xactengine3_7-notifications.patch
+	patch_apply xactengine3_7-callbacks/0003-Send-NOTIFY_CUESTOP-when-Stop-is-called.patch
 fi
 
 if test "$enable_autoconf" -eq 1; then
