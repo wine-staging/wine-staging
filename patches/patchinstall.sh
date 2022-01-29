@@ -4058,6 +4058,7 @@ if test "$enable_xactengine3_7_callbacks" -eq 1; then
 	patch_apply xactengine3_7-callbacks/0001-Add-support-for-private-contexts.patch
 	patch_apply xactengine3_7-callbacks/0002-xactengine3_7-notifications.patch
 	patch_apply xactengine3_7-callbacks/0003-Send-NOTIFY_CUESTOP-when-Stop-is-called.patch
+	patch_apply xactengine3_7-callbacks/0004-xactengine3_7-Fix-for-older-compilers.patch
 fi
 
 if test "$enable_autoconf" -eq 1; then
