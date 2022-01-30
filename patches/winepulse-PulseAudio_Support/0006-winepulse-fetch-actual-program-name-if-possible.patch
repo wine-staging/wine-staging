@@ -1,34 +1,44 @@
-From 8cfb9cdbf9448fbd2234a52ff69ac2921702996c Mon Sep 17 00:00:00 2001
+From 5b1db5456a018cc39938effae3c1bf05bd7618f9 Mon Sep 17 00:00:00 2001
 From: Mark Harmstone <mark@harmstone.com>
 Date: Sun, 21 Dec 2014 23:49:41 +0000
 Subject: [PATCH] winepulse: fetch actual program name if possible
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
 
 Changes by Sebastian Lackner <sebastian@fds-team.de>:
 * Improved error handling, fix memory leak
 * Remove check for UTF16, there are several examples where this doesn't work
   (for example with VLC media player)
 * Simplify algorithm to choose best translation.
+
+Changes by Gabriel Ivăncescu <gabrielopcode@gmail.com>:
+* Move the bulk of it into get_application_name, since it needs the path.
+* Pass an argument to query the program name or not, to avoid querying it
+  during test_connect, so it matches the previous behavior.
 ---
  dlls/winepulse.drv/Makefile.in |   2 +-
- dlls/winepulse.drv/mmdevdrv.c  | 124 ++++++++++++++++++++++++++++++---
- 2 files changed, 117 insertions(+), 9 deletions(-)
+ dlls/winepulse.drv/mmdevdrv.c  | 107 +++++++++++++++++++++++++++++++--
+ 2 files changed, 104 insertions(+), 5 deletions(-)
 
 diff --git a/dlls/winepulse.drv/Makefile.in b/dlls/winepulse.drv/Makefile.in
-index d6600632360..2448789dedf 100644
+index c71b2833d13..d4b40e66644 100644
 --- a/dlls/winepulse.drv/Makefile.in
 +++ b/dlls/winepulse.drv/Makefile.in
-@@ -1,5 +1,5 @@
+@@ -1,7 +1,7 @@
+ EXTRADEFS = -DWINE_NO_LONG_TYPES
  MODULE    = winepulse.drv
+ UNIXLIB   = winepulse.so
 -IMPORTS   = dxguid uuid winmm user32 advapi32 ole32
 +IMPORTS   = dxguid uuid winmm user32 advapi32 ole32 version
- EXTRALIBS = $(PULSE_LIBS) $(PTHREAD_LIBS)
+ EXTRALIBS = $(PULSE_LIBS) $(PTHREAD_LIBS) -lm
  EXTRAINCL = $(PULSE_CFLAGS)
  
 diff --git a/dlls/winepulse.drv/mmdevdrv.c b/dlls/winepulse.drv/mmdevdrv.c
-index 510797a2edc..46f20ce419d 100644
+index 072d27e16ac..3559baf7a80 100644
 --- a/dlls/winepulse.drv/mmdevdrv.c
 +++ b/dlls/winepulse.drv/mmdevdrv.c
-@@ -43,6 +43,7 @@
+@@ -30,6 +30,7 @@
  #include "wine/list.h"
  
  #include "ole2.h"
@@ -36,143 +46,138 @@ index 510797a2edc..46f20ce419d 100644
  #include "dshow.h"
  #include "dsound.h"
  #include "propsys.h"
-@@ -559,6 +560,109 @@ static void pulse_probe_settings(pa_mainloop *ml, pa_context *ctx, int render, W
-         fmt->SubFormat = KSDATAFORMAT_SUBTYPE_PCM;
+@@ -240,13 +241,111 @@ static DWORD CALLBACK pulse_mainloop_thread(void *event)
+     return 0;
  }
  
+-static char *get_application_name(void)
 +typedef struct tagLANGANDCODEPAGE
 +{
-+  WORD wLanguage;
-+  WORD wCodePage;
++    WORD wLanguage;
++    WORD wCodePage;
 +} LANGANDCODEPAGE;
 +
 +static BOOL query_productname(void *data, LANGANDCODEPAGE *lang, LPVOID *buffer, DWORD *len)
 +{
-+    static const WCHAR productnameW[] = {'\\','S','t','r','i','n','g','F','i','l','e','I','n','f','o',
-+                                         '\\','%','0','4','x','%','0','4','x',
-+                                         '\\','P','r','o','d','u','c','t','N','a','m','e',0};
 +    WCHAR pn[37];
-+    sprintfW(pn, productnameW, lang->wLanguage, lang->wCodePage);
++    swprintf(pn, ARRAY_SIZE(pn), L"\\StringFileInfo\\%04x%04x\\ProductName", lang->wLanguage, lang->wCodePage);
 +    return VerQueryValueW(data, pn, buffer, len) && *len;
 +}
 +
-+static char* get_programname(WCHAR *path)
-+{
-+    static const WCHAR translationW[] = {'\\','V','a','r','F','i','l','e','I','n','f','o',
-+                                         '\\','T','r','a','n','s','l','a','t','i','o','n',0};
-+    UINT translate_size, productname_size;
-+    LANGANDCODEPAGE *translate;
-+    LPVOID productname;
-+    BOOL found = FALSE;
-+    void *data = NULL;
-+    char *ret = NULL;
-+    unsigned int i;
-+    LCID locale;
-+    DWORD size;
-+
-+    size = GetFileVersionInfoSizeW(path, NULL);
-+    if (!size)
-+        goto out;
-+
-+    data = HeapAlloc(GetProcessHeap(), 0, size);
-+    if (!data)
-+        goto out;
-+
-+    if (!GetFileVersionInfoW(path, 0, size, data))
-+        goto out;
-+
-+    if (!VerQueryValueW(data, translationW, (LPVOID *)&translate, &translate_size))
-+        goto out;
-+
-+    /* no translations found */
-+    if (translate_size < sizeof(LANGANDCODEPAGE))
-+        goto out;
-+
-+    /* The following code will try to find the best translation. We first search for an
-+     * exact match of the language, then a match of the language PRIMARYLANGID, then we
-+     * search for a LANG_NEUTRAL match, and if that still doesn't work we pick the
-+     * first entry which contains a proper productname. */
-+
-+    locale = GetThreadLocale();
-+
-+    for (i = 0; i < translate_size / sizeof(LANGANDCODEPAGE); i++) {
-+        if (translate[i].wLanguage == locale &&
-+                query_productname(data, &translate[i], &productname, &productname_size)) {
-+            found = TRUE;
-+            break;
-+        }
-+    }
-+
-+    if (!found) {
-+        for (i = 0; i < translate_size / sizeof(LANGANDCODEPAGE); i++) {
-+            if (PRIMARYLANGID(translate[i].wLanguage) == PRIMARYLANGID(locale) &&
-+                    query_productname(data, &translate[i], &productname, &productname_size)) {
-+                found = TRUE;
-+                break;
-+            }
-+        }
-+    }
-+
-+    if (!found) {
-+        for (i = 0; i < translate_size / sizeof(LANGANDCODEPAGE); i++) {
-+            if (PRIMARYLANGID(translate[i].wLanguage) == LANG_NEUTRAL &&
-+                    query_productname(data, &translate[i], &productname, &productname_size)) {
-+                found = TRUE;
-+                break;
-+            }
-+        }
-+    }
-+
-+    if (!found) {
-+        for (i = 0; i < translate_size / sizeof(LANGANDCODEPAGE); i++) {
-+            if (query_productname(data, &translate[i], &productname, &productname_size)) {
-+                found = TRUE;
-+                break;
-+            }
-+        }
-+    }
-+
-+    if (found) {
-+        int len = WideCharToMultiByte(CP_UTF8, 0, productname, -1, NULL, 0, NULL, NULL);
-+        ret = pa_xmalloc(len);
-+        if (ret) WideCharToMultiByte(CP_UTF8, 0, productname, -1, ret, len, NULL, NULL);
-+    }
-+
-+out:
-+    HeapFree(GetProcessHeap(), 0, data);
-+    return ret;
-+}
-+
- static HRESULT pulse_connect(void)
++static char *get_application_name(BOOL query_program_name)
  {
-     int len;
-@@ -582,14 +686,18 @@ static HRESULT pulse_connect(void)
-         pa_context_unref(pulse_ctx);
+     WCHAR path[MAX_PATH], *name;
++    char *str = NULL;
+     size_t len;
+-    char *str;
  
      GetModuleFileNameW(NULL, path, ARRAY_SIZE(path));
--    name = strrchrW(path, '\\');
--    if (!name)
--        name = path;
--    else
--        name++;
--    len = WideCharToMultiByte(CP_UNIXCP, 0, name, -1, NULL, 0, NULL, NULL);
--    str = pa_xmalloc(len);
--    WideCharToMultiByte(CP_UNIXCP, 0, name, -1, str, len, NULL, NULL);
-+    str = get_programname(path);
-+    if (!str) {
-+        name = strrchrW(path, '\\');
-+        if (!name)
-+            name = path;
-+        else
-+            name++;
-+        len = WideCharToMultiByte(CP_UNIXCP, 0, name, -1, NULL, 0, NULL, NULL);
-+        str = pa_xmalloc(len);
-+        WideCharToMultiByte(CP_UNIXCP, 0, name, -1, str, len, NULL, NULL);
++
++    if (query_program_name)
++    {
++        UINT translate_size, productname_size;
++        LANGANDCODEPAGE *translate;
++        LPVOID productname;
++        BOOL found = FALSE;
++        void *data = NULL;
++        unsigned int i;
++        LCID locale;
++        DWORD size;
++
++        size = GetFileVersionInfoSizeW(path, NULL);
++        if (!size)
++            goto skip;
++
++        data = malloc(size);
++        if (!data)
++            goto skip;
++
++        if (!GetFileVersionInfoW(path, 0, size, data))
++            goto skip;
++
++        if (!VerQueryValueW(data, L"\\VarFileInfo\\Translation", (LPVOID *)&translate, &translate_size))
++            goto skip;
++
++        /* no translations found */
++        if (translate_size < sizeof(LANGANDCODEPAGE))
++            goto skip;
++
++        /* The following code will try to find the best translation. We first search for an
++         * exact match of the language, then a match of the language PRIMARYLANGID, then we
++         * search for a LANG_NEUTRAL match, and if that still doesn't work we pick the
++         * first entry which contains a proper productname. */
++
++        locale = GetThreadLocale();
++
++        for (i = 0; i < translate_size / sizeof(LANGANDCODEPAGE); i++) {
++            if (translate[i].wLanguage == locale &&
++                    query_productname(data, &translate[i], &productname, &productname_size)) {
++                found = TRUE;
++                break;
++            }
++        }
++
++        if (!found) {
++            for (i = 0; i < translate_size / sizeof(LANGANDCODEPAGE); i++) {
++                if (PRIMARYLANGID(translate[i].wLanguage) == PRIMARYLANGID(locale) &&
++                        query_productname(data, &translate[i], &productname, &productname_size)) {
++                    found = TRUE;
++                    break;
++                }
++            }
++        }
++
++        if (!found) {
++            for (i = 0; i < translate_size / sizeof(LANGANDCODEPAGE); i++) {
++                if (PRIMARYLANGID(translate[i].wLanguage) == LANG_NEUTRAL &&
++                        query_productname(data, &translate[i], &productname, &productname_size)) {
++                    found = TRUE;
++                    break;
++                }
++            }
++        }
++
++        if (!found) {
++            for (i = 0; i < translate_size / sizeof(LANGANDCODEPAGE); i++) {
++                if (query_productname(data, &translate[i], &productname, &productname_size)) {
++                    found = TRUE;
++                    break;
++                }
++            }
++        }
++
++        if (found) {
++            len = WideCharToMultiByte(CP_UTF8, 0, productname, -1, NULL, 0, NULL, NULL);
++            str = malloc(len);
++            if (str) WideCharToMultiByte(CP_UTF8, 0, productname, -1, str, len, NULL, NULL);
++        }
++
++    skip:
++        free(data);
++        if (str) return str;
 +    }
 +
-     TRACE("Name: %s\n", str);
-     pulse_ctx = pa_context_new(pa_mainloop_get_api(pulse_ml), str);
-     pa_xfree(str);
+     name = wcsrchr(path, '\\');
+     if (!name)
+         name = path;
+@@ -375,7 +474,7 @@ int WINAPI AUDDRV_GetPriority(void)
+     struct test_connect_params params;
+     char *name;
+ 
+-    params.name   = name = get_application_name();
++    params.name   = name = get_application_name(FALSE);
+     params.config = &pulse_config;
+     pulse_call(test_connect, &params);
+     free(name);
+@@ -759,7 +858,7 @@ static HRESULT WINAPI AudioClient_Initialize(IAudioClient3 *iface,
+         CloseHandle(event);
+     }
+ 
+-    params.name = name = get_application_name();
++    params.name = name = get_application_name(TRUE);
+     params.device   = This->device[0] ? This->device : NULL;
+     params.dataflow = This->dataflow;
+     params.mode     = mode;
 -- 
-2.17.1
+2.34.1
 

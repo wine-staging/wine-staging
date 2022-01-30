@@ -1,199 +1,333 @@
-From 4f994a5499335f908debff6be84e49733c94144b Mon Sep 17 00:00:00 2001
+From d5ab784623b3ea451cf2ceca466662e320958ede Mon Sep 17 00:00:00 2001
 From: Mark Harmstone <mark@harmstone.com>
 Date: Thu, 4 Dec 2014 21:36:42 +0000
 Subject: [PATCH] winepulse: implement GetPropValue
 
+Changes by Gabriel Ivăncescu <gabrielopcode@gmail.com>:
+* Rebased with unixlib separation.
+* Cache the pulse device names for a given GUID.
 ---
- dlls/winepulse.drv/mmdevdrv.c | 116 ++++++++++++++++++++++++++++++++--
- 1 file changed, 109 insertions(+), 7 deletions(-)
+ dlls/winepulse.drv/mmdevdrv.c | 92 ++++++++++++++++++++++++++++++++++-
+ dlls/winepulse.drv/pulse.c    | 69 ++++++++++++++++++++++++--
+ dlls/winepulse.drv/unixlib.h  | 18 +++++++
+ 3 files changed, 173 insertions(+), 6 deletions(-)
 
 diff --git a/dlls/winepulse.drv/mmdevdrv.c b/dlls/winepulse.drv/mmdevdrv.c
-index 5c471d3c13b..b7ae9aeaabf 100644
+index c8856ff..072d27e 100644
 --- a/dlls/winepulse.drv/mmdevdrv.c
 +++ b/dlls/winepulse.drv/mmdevdrv.c
-@@ -83,6 +83,8 @@ static struct list g_sessions = LIST_INIT(g_sessions);
- typedef struct _PhysDevice {
-     struct list entry;
-     GUID guid;
-+    EndpointFormFactor form;
-+    WCHAR device[128];
-     WCHAR name[0];
- } PhysDevice;
+@@ -63,6 +63,14 @@ static struct pulse_config pulse_config;
  
-@@ -674,14 +676,67 @@ static BOOL get_device_guid(EDataFlow flow, const char *device, GUID *guid)
-     return TRUE;
- }
+ static HANDLE pulse_thread;
+ static struct list g_sessions = LIST_INIT(g_sessions);
++static struct list g_devices_cache = LIST_INIT(g_devices_cache);
++
++struct device_cache {
++    struct list entry;
++    GUID guid;
++    EDataFlow dataflow;
++    char device[0];
++};
  
--static void pulse_add_device(struct list *list, GUID *guid, const char *name)
-+static BOOL get_device_path(pa_proplist *p, int index, GUID *guid, WCHAR path[128])
+ static GUID pulse_render_guid =
+ { 0xfd47d9cc, 0x4218, 0x4135, { 0x9c, 0xe2, 0x0c, 0x19, 0x5c, 0x87, 0x40, 0x5b } };
+@@ -88,6 +96,10 @@ BOOL WINAPI DllMain(HINSTANCE dll, DWORD reason, void *reserved)
+         if (__wine_unix_call(pulse_handle, process_attach, NULL))
+             return FALSE;
+     } else if (reason == DLL_PROCESS_DETACH) {
++        struct device_cache *device, *device_next;
++
++        LIST_FOR_EACH_ENTRY_SAFE(device, device_next, &g_devices_cache, struct device_cache, entry)
++            free(device);
+         __wine_unix_call(pulse_handle, process_detach, NULL);
+         if (pulse_thread) {
+             WaitForSingleObject(pulse_thread, INFINITE);
+@@ -372,6 +384,7 @@ int WINAPI AUDDRV_GetPriority(void)
+ 
+ static BOOL get_pulse_name_by_guid(const GUID *guid, char *name, DWORD name_size, EDataFlow *flow)
  {
-+    static const WCHAR usbformatW[] = { '{','1','}','.','U','S','B','\\','V','I','D','_',
-+        '%','0','4','X','&','P','I','D','_','%','0','4','X','\\',
-+        '%','u','&','%','0','8','X',0 }; /* "{1}.USB\VID_%04X&PID_%04X\%u&%08X" */
-+    static const WCHAR pciformatW[] = { '{','1','}','.','H','D','A','U','D','I','O','\\','F','U','N','C','_','0','1','&',
-+        'V','E','N','_','%','0','4','X','&','D','E','V','_',
-+        '%','0','4','X','\\','%','u','&','%','0','8','X',0 }; /* "{1}.HDAUDIO\FUNC_01&VEN_%04X&DEV_%04X\%u&%08X" */
++    struct device_cache *device;
+     DWORD key_name_size;
+     WCHAR key_name[258];
+     DWORD index = 0;
+@@ -386,6 +399,15 @@ static BOOL get_pulse_name_by_guid(const GUID *guid, char *name, DWORD name_size
+         return TRUE;
+     }
+ 
++    /* Check the cache first */
++    LIST_FOR_EACH_ENTRY(device, &g_devices_cache, struct device_cache, entry) {
++        if (!IsEqualGUID(guid, &device->guid))
++            continue;
++        *flow = device->dataflow;
++        strcpy(name, device->device);
++        return TRUE;
++    }
 +
-+    USHORT vendor_id, product_id;
-+    const char *buffer;
-+    UINT serial_number;
-+    BOOL is_usb;
+     if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Wine\\Drivers\\winepulse.drv\\devices",
+             0, KEY_READ | KEY_WOW64_64KEY, &key) != ERROR_SUCCESS) {
+         ERR("No devices found in registry?\n");
+@@ -397,6 +419,7 @@ static BOOL get_pulse_name_by_guid(const GUID *guid, char *name, DWORD name_size
+         LSTATUS status;
+         GUID reg_guid;
+         HKEY dev_key;
++        int len;
+ 
+         key_name_size = ARRAY_SIZE(key_name);
+         if (RegEnumKeyExW(key, index++, key_name, &key_name_size, NULL,
+@@ -426,7 +449,17 @@ static BOOL get_pulse_name_by_guid(const GUID *guid, char *name, DWORD name_size
+                 return FALSE;
+             }
+ 
+-            return WideCharToMultiByte(CP_UNIXCP, 0, key_name + 2, -1, name, name_size, NULL, NULL);
++            if (!(len = WideCharToMultiByte(CP_UNIXCP, 0, key_name + 2, -1, name, name_size, NULL, NULL)))
++                return FALSE;
 +
-+    buffer = pa_proplist_gets(p, PA_PROP_DEVICE_BUS);
-+    if (!buffer)
-+        return FALSE;
-+
-+    if (!strcmp(buffer,"usb"))
-+        is_usb = TRUE;
-+    else if (!strcmp(buffer,"pci"))
-+        is_usb = FALSE;
-+    else
-+        return FALSE;
-+
-+    buffer = pa_proplist_gets(p, PA_PROP_DEVICE_VENDOR_ID);
-+    if (buffer)
-+        vendor_id = strtol(buffer, NULL, 16);
-+    else
-+        return FALSE;
-+
-+    buffer = pa_proplist_gets(p, PA_PROP_DEVICE_PRODUCT_ID);
-+    if (buffer)
-+        product_id = strtol(buffer, NULL, 16);
-+    else
-+        return FALSE;
-+
-+    /* As hardly any audio devices have serial numbers, Windows instead
-+    appears to use a persistent random number. We emulate this here
-+    by instead using the last 8 hex digits of the GUID. */
-+    serial_number = (guid->Data4[4] << 24) | (guid->Data4[5] << 16) | (guid->Data4[6] << 8) | guid->Data4[7];
-+
-+    if (is_usb)
-+        sprintfW( path, usbformatW, vendor_id, product_id, index, serial_number);
-+    else
-+        sprintfW( path, pciformatW, vendor_id, product_id, index, serial_number);
-+
-+    return TRUE;
-+}
-+
-+static void pulse_add_device(struct list *list, GUID *guid, EndpointFormFactor form, WCHAR device[128], const char *name)
-+{
-+    static const WCHAR emptyW[] = {0};
-     int len = MultiByteToWideChar(CP_UNIXCP, 0, name, -1, NULL, 0);
-     if (len) {
-         PhysDevice *dev = HeapAlloc(GetProcessHeap(), 0, offsetof(PhysDevice, name[len]));
-         if (dev) {
--            MultiByteToWideChar(CP_UNIXCP, 0, name, -1, dev->name, len);
-             dev->guid = *guid;
-+            dev->form = form;
-+            strcpyW(dev->device, device ? device : emptyW);
-+            MultiByteToWideChar(CP_UNIXCP, 0, name, -1, dev->name, len);
-             list_add_tail(list, &dev->entry);
++            device = malloc(offsetof(struct device_cache, device[len]));
++            if (device) {
++                device->guid = reg_guid;
++                device->dataflow = *flow;
++                strcpy(device->device, name);
++                list_add_tail(&g_devices_cache, &device->entry);
++            }
++            return TRUE;
          }
      }
-@@ -689,6 +744,7 @@ static void pulse_add_device(struct list *list, GUID *guid, const char *name)
  
- static void pulse_phys_speakers_cb(pa_context *c, const pa_sink_info *i, int eol, void *userdata)
- {
-+    WCHAR device[128];
-     GUID guid;
- 
-     if (i) {
-@@ -698,18 +754,25 @@ static void pulse_phys_speakers_cb(pa_context *c, const pa_sink_info *i, int eol
- 
-         if (!get_device_guid(eRender, i->name, &guid))
-             CoCreateGuid(&guid);
--        pulse_add_device(&g_phys_speakers, &guid, i->description);
-+        if (!get_device_path(i->proplist, i->index, &guid, device))
-+            device[0] = 0;
-+        pulse_add_device(&g_phys_speakers, &guid, Speakers, device, i->description);
-     }
- }
- 
- static void pulse_phys_sources_cb(pa_context *c, const pa_source_info *i, int eol, void *userdata)
- {
-+    EndpointFormFactor form;
-+    WCHAR device[128];
-     GUID guid;
- 
-     if (i) {
-+        form = (i->monitor_of_sink == PA_INVALID_INDEX) ? Microphone : LineLevel;
-         if (!get_device_guid(eCapture, i->name, &guid))
-             CoCreateGuid(&guid);
--        pulse_add_device(&g_phys_sources, &guid, i->description);
-+        if (!get_device_path(i->proplist, i->index, &guid, device))
-+            device[0] = 0;
-+        pulse_add_device(&g_phys_sources, &guid, form, device, i->description);
-     }
- }
- 
-@@ -780,8 +843,8 @@ static HRESULT pulse_test_connect(void)
-     pulse_probe_settings(ml, ctx, 0, &pulse_fmt[1]);
- 
-     g_phys_speakers_mask = 0;
--    pulse_add_device(&g_phys_speakers, &pulse_render_guid, "Pulseaudio");
--    pulse_add_device(&g_phys_sources, &pulse_capture_guid, "Pulseaudio");
-+    pulse_add_device(&g_phys_speakers, &pulse_render_guid, Speakers, NULL, "Pulseaudio");
-+    pulse_add_device(&g_phys_sources, &pulse_capture_guid, Microphone, NULL, "Pulseaudio");
- 
-     o = pa_context_get_sink_info_list(ctx, &pulse_phys_speakers_cb, NULL);
-     if (o) {
-@@ -3889,8 +3952,36 @@ HRESULT WINAPI AUDDRV_GetAudioSessionManager(IMMDevice *device,
+@@ -2491,8 +2524,49 @@ HRESULT WINAPI AUDDRV_GetAudioSessionManager(IMMDevice *device,
      return S_OK;
  }
  
-+static const PROPERTYKEY devicepath_key = { /* undocumented? - {b3f8fa53-0004-438e-9003-51a46e139bfc},2 */
-+    {0xb3f8fa53, 0x0004, 0x438e, {0x90, 0x03, 0x51, 0xa4, 0x6e, 0x13, 0x9b, 0xfc}}, 2
-+};
-+
-+static HRESULT pulse_device_get_prop_value(PhysDevice *dev, const PROPERTYKEY *prop, PROPVARIANT *out)
++static HRESULT get_device_path(struct get_device_info_params *params, GUID *guid, PROPVARIANT *out)
 +{
-+    if (IsEqualPropertyKey(*prop, devicepath_key)) {
-+        if (!dev->device[0])
-+            return E_FAIL;
++    UINT serial_number;
++    const WCHAR *fmt;
++    WCHAR path[128];
++    int len;
 +
-+        out->vt = VT_LPWSTR;
-+        out->pwszVal = CoTaskMemAlloc((strlenW(dev->device) + 1) * sizeof(WCHAR));
-+        if (!out->pwszVal)
-+            return E_OUTOFMEMORY;
-+
-+        strcpyW(out->pwszVal, dev->device);
-+        return S_OK;
-+    } else if (IsEqualPropertyKey(*prop, PKEY_AudioEndpoint_FormFactor)) {
-+        out->vt = VT_UI4;
-+        out->ulVal = dev->form;
-+        return S_OK;
++    switch (params->bus_type) {
++    case phys_device_bus_pci:
++        fmt = L"{1}.HDAUDIO\\FUNC_01&VEN_%04X&DEV_%04X\\%u&%08X";
++        break;
++    case phys_device_bus_usb:
++        fmt = L"{1}.USB\\VID_%04X&PID_%04X\\%u&%08X";
++        break;
++    default:
++        return E_FAIL;
 +    }
 +
-+    return E_NOTIMPL;
++    /* As hardly any audio devices have serial numbers, Windows instead
++       appears to use a persistent random number. We emulate this here
++       by instead using the last 8 hex digits of the GUID. */
++    serial_number = (guid->Data4[4] << 24) | (guid->Data4[5] << 16) | (guid->Data4[6] << 8) | guid->Data4[7];
++
++    len = swprintf(path, ARRAY_SIZE(path), fmt, params->vendor_id, params->product_id, params->index, serial_number);
++    if (len < 0)
++        return E_FAIL;
++
++    out->vt = VT_LPWSTR;
++    out->pwszVal = CoTaskMemAlloc((len + 1) * sizeof(WCHAR));
++    if (!out->pwszVal)
++        return E_OUTOFMEMORY;
++
++    wcscpy(out->pwszVal, path);
++    return S_OK;
 +}
 +
  HRESULT WINAPI AUDDRV_GetPropValue(GUID *guid, const PROPERTYKEY *prop, PROPVARIANT *out)
  {
-+    PhysDevice *dev;
++    static const PROPERTYKEY devicepath_key = { /* undocumented? - {b3f8fa53-0004-438e-9003-51a46e139bfc},2 */
++        {0xb3f8fa53, 0x0004, 0x438e, {0x90, 0x03, 0x51, 0xa4, 0x6e, 0x13, 0x9b, 0xfc}}, 2
++    };
++    struct get_device_info_params params;
 +
      TRACE("%s, (%s,%u), %p\n", wine_dbgstr_guid(guid), wine_dbgstr_guid(&prop->fmtid), prop->pid, out);
  
      if (IsEqualGUID(guid, &pulse_render_guid) && IsEqualPropertyKey(*prop, PKEY_AudioEndpoint_PhysicalSpeakers)) {
-@@ -3900,7 +3991,18 @@ HRESULT WINAPI AUDDRV_GetPropValue(GUID *guid, const PROPERTYKEY *prop, PROPVARI
+@@ -2502,5 +2576,21 @@ HRESULT WINAPI AUDDRV_GetPropValue(GUID *guid, const PROPERTYKEY *prop, PROPVARI
          return out->ulVal ? S_OK : E_FAIL;
      }
  
--    return E_NOTIMPL;
-+    LIST_FOR_EACH_ENTRY(dev, &g_phys_speakers, PhysDevice, entry) {
-+        if (IsEqualGUID(guid, &dev->guid))
-+            return pulse_device_get_prop_value(dev, prop, out);
++    if (!get_pulse_name_by_guid(guid, params.device, sizeof(params.device), &params.dataflow))
++        return E_FAIL;
++
++    pulse_call(get_device_info, &params);
++    if (params.result != S_OK)
++        return params.result;
++
++    if (IsEqualPropertyKey(*prop, devicepath_key))
++        return get_device_path(&params, guid, out);
++
++    if (IsEqualPropertyKey(*prop, PKEY_AudioEndpoint_FormFactor)) {
++        out->vt = VT_UI4;
++        out->ulVal = params.form;
++        return S_OK;
 +    }
 +
-+    LIST_FOR_EACH_ENTRY(dev, &g_phys_sources, PhysDevice, entry) {
-+        if (IsEqualGUID(guid, &dev->guid))
-+            return pulse_device_get_prop_value(dev, prop, out);
-+    }
-+
-+    WARN("Unknown GUID %s\n", debugstr_guid(guid));
-+    return E_FAIL;
+     return E_NOTIMPL;
+ }
+diff --git a/dlls/winepulse.drv/pulse.c b/dlls/winepulse.drv/pulse.c
+index 76e4935..951a7bf 100644
+--- a/dlls/winepulse.drv/pulse.c
++++ b/dlls/winepulse.drv/pulse.c
+@@ -84,6 +84,10 @@ typedef struct _ACPacket
+ 
+ typedef struct _PhysDevice {
+     struct list entry;
++    enum phys_device_bus_type bus_type;
++    USHORT vendor_id, product_id;
++    EndpointFormFactor form;
++    UINT index;
+     char device[0];
+ } PhysDevice;
+ 
+@@ -465,7 +469,33 @@ done:
+     free(wname);
  }
  
+-static void pulse_add_device(struct list *list, const char *device)
++static void fill_device_info(PhysDevice *dev, pa_proplist *p)
++{
++    const char *buffer;
++
++    dev->bus_type = phys_device_bus_invalid;
++    dev->vendor_id = 0;
++    dev->product_id = 0;
++
++    if (!p)
++        return;
++
++    if ((buffer = pa_proplist_gets(p, PA_PROP_DEVICE_BUS))) {
++        if (!strcmp(buffer, "usb"))
++            dev->bus_type = phys_device_bus_usb;
++        else if (!strcmp(buffer, "pci"))
++            dev->bus_type = phys_device_bus_pci;
++    }
++
++    if ((buffer = pa_proplist_gets(p, PA_PROP_DEVICE_VENDOR_ID)))
++        dev->vendor_id = strtol(buffer, NULL, 16);
++
++    if ((buffer = pa_proplist_gets(p, PA_PROP_DEVICE_PRODUCT_ID)))
++        dev->product_id = strtol(buffer, NULL, 16);
++}
++
++static void pulse_add_device(struct list *list, pa_proplist *proplist, int index, EndpointFormFactor form,
++        const char *device)
+ {
+     DWORD len = strlen(device);
+     PhysDevice *dev = malloc(offsetof(PhysDevice, device[len + 1]));
+@@ -473,6 +503,9 @@ static void pulse_add_device(struct list *list, const char *device)
+     if (!dev)
+         return;
+     memcpy(dev->device, device, len + 1);
++    dev->form = form;
++    dev->index = index;
++    fill_device_info(dev, proplist);
  
+     list_add_tail(list, &dev->entry);
+ }
+@@ -485,7 +518,7 @@ static void pulse_phys_speakers_cb(pa_context *c, const pa_sink_info *i, int eol
+         g_phys_speakers_mask |= pulse_channel_map_to_channel_mask(&i->channel_map);
+ 
+         store_device_info(eRender, i->name, i->description);
+-        pulse_add_device(&g_phys_speakers, i->name);
++        pulse_add_device(&g_phys_speakers, i->proplist, i->index, Speakers, i->name);
+     }
+ }
+ 
+@@ -493,7 +526,8 @@ static void pulse_phys_sources_cb(pa_context *c, const pa_source_info *i, int eo
+ {
+     if (i && i->name && i->name[0]) {
+         store_device_info(eCapture, i->name, i->description);
+-        pulse_add_device(&g_phys_sources, i->name);
++        pulse_add_device(&g_phys_sources, i->proplist, i->index,
++                (i->monitor_of_sink == PA_INVALID_INDEX) ? Microphone : LineLevel, i->name);
+     }
+ }
+ 
+@@ -720,8 +754,8 @@ static NTSTATUS pulse_test_connect(void *args)
+     devices_key = open_devices_key();
+     g_phys_speakers_mask = 0;
+ 
+-    pulse_add_device(&g_phys_speakers, "");
+-    pulse_add_device(&g_phys_sources, "");
++    pulse_add_device(&g_phys_speakers, NULL, 0, Speakers, "");
++    pulse_add_device(&g_phys_sources, NULL, 0, Microphone, "");
+ 
+     o = pa_context_get_sink_info_list(ctx, &pulse_phys_speakers_cb, NULL);
+     if (o) {
+@@ -765,6 +799,30 @@ fail:
+     return STATUS_SUCCESS;
+ }
+ 
++static NTSTATUS pulse_get_device_info(void *args)
++{
++    struct get_device_info_params *params = args;
++    const struct list *const list = (params->dataflow == eRender) ? &g_phys_speakers : &g_phys_sources;
++    const char *device = params->device;
++    PhysDevice *dev;
++
++    LIST_FOR_EACH_ENTRY(dev, list, PhysDevice, entry) {
++        if (!strcmp(device, dev->device)) {
++            params->bus_type     = dev->bus_type;
++            params->vendor_id    = dev->vendor_id;
++            params->product_id   = dev->product_id;
++            params->index        = dev->index;
++            params->form         = dev->form;
++            params->result       = S_OK;
++            return STATUS_SUCCESS;
++        }
++    }
++
++    WARN("Unknown device %s\n", device);
++    params->result = E_FAIL;
++    return STATUS_SUCCESS;
++}
++
+ static DWORD get_channel_mask(unsigned int channels)
+ {
+     switch(channels) {
+@@ -2139,5 +2197,6 @@ const unixlib_entry_t __wine_unix_call_funcs[] =
+     pulse_set_volumes,
+     pulse_set_event_handle,
+     pulse_test_connect,
++    pulse_get_device_info,
+     pulse_is_started,
+ };
+diff --git a/dlls/winepulse.drv/unixlib.h b/dlls/winepulse.drv/unixlib.h
+index 5445a0f..7383110 100644
+--- a/dlls/winepulse.drv/unixlib.h
++++ b/dlls/winepulse.drv/unixlib.h
+@@ -181,6 +181,23 @@ struct test_connect_params
+     struct pulse_config *config;
+ };
+ 
++enum phys_device_bus_type {
++    phys_device_bus_invalid = -1,
++    phys_device_bus_pci,
++    phys_device_bus_usb
++};
++
++struct get_device_info_params
++{
++    char device[256];
++    EDataFlow dataflow;
++    enum phys_device_bus_type bus_type;
++    USHORT vendor_id, product_id;
++    EndpointFormFactor form;
++    UINT index;
++    HRESULT result;
++};
++
+ struct is_started_params
+ {
+     struct pulse_stream *stream;
+@@ -211,5 +228,6 @@ enum unix_funcs
+     set_volumes,
+     set_event_handle,
+     test_connect,
++    get_device_info,
+     is_started,
+ };
 -- 
 2.30.2
 

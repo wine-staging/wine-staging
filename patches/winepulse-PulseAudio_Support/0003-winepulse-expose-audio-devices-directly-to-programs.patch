@@ -1,4 +1,4 @@
-From 4e795dd8fda937cc61bf393880eafd28e8dea98f Mon Sep 17 00:00:00 2001
+From 503c347c96daf6d1f7be91038898a8b192fe5f6b Mon Sep 17 00:00:00 2001
 From: Mark Harmstone <mark@harmstone.com>
 Date: Mon, 3 Nov 2014 02:06:40 +0000
 Subject: [PATCH] winepulse: expose audio devices directly to programs
@@ -15,189 +15,468 @@ Changes by Sebastian Lackner <sebastian@fds-team.de>:
 * Fixed compiler warnings with -Werror
 * Some style fixes and better error handling
 * Move initialization code to pulse_test_connect()
+
+Changes by Gabriel Ivăncescu <gabrielopcode@gmail.com>:
+* Rebased with unixlib separation.
+* Pass KEY_WOW64_64KEY so they use the same keys.
+* Store the display name in the registry, and generate the GUID when enumerating.
+* Move the special default devices lookup to get_pulse_name_by_guid.
 ---
- dlls/winepulse.drv/mmdevdrv.c | 252 ++++++++++++++++++++++++++++++----
- 1 file changed, 224 insertions(+), 28 deletions(-)
+ dlls/winepulse.drv/mmdevdrv.c | 183 ++++++++++++++++++++++++++++------
+ dlls/winepulse.drv/pulse.c    | 175 ++++++++++++++++++++++++++++++--
+ dlls/winepulse.drv/unixlib.h  |   1 +
+ 3 files changed, 318 insertions(+), 41 deletions(-)
 
 diff --git a/dlls/winepulse.drv/mmdevdrv.c b/dlls/winepulse.drv/mmdevdrv.c
-index 6d4ffecaca8..4d91aa60151 100644
+index 35a66e1..c8856ff 100644
 --- a/dlls/winepulse.drv/mmdevdrv.c
 +++ b/dlls/winepulse.drv/mmdevdrv.c
-@@ -79,12 +79,25 @@ static pthread_mutex_t pulse_lock;
- static pthread_cond_t pulse_cond = PTHREAD_COND_INITIALIZER;
- static struct list g_sessions = LIST_INIT(g_sessions);
- 
-+typedef struct _PhysDevice {
-+    struct list entry;
-+    GUID guid;
-+    WCHAR name[0];
-+} PhysDevice;
-+
- static UINT g_phys_speakers_mask = 0;
-+static struct list g_phys_speakers = LIST_INIT(g_phys_speakers);
-+static struct list g_phys_sources = LIST_INIT(g_phys_sources);
- 
- /* Mixer format + period times */
- static WAVEFORMATEXTENSIBLE pulse_fmt[2];
- static REFERENCE_TIME pulse_min_period[2], pulse_def_period[2];
- 
-+static const WCHAR drv_key_devicesW[] = {'S','o','f','t','w','a','r','e','\\',
-+    'W','i','n','e','\\','D','r','i','v','e','r','s','\\',
-+    'w','i','n','e','p','u','l','s','e','.','d','r','v','\\','d','e','v','i','c','e','s',0};
-+static const WCHAR guidW[] = {'g','u','i','d',0};
-+
- static GUID pulse_render_guid =
- { 0xfd47d9cc, 0x4218, 0x4135, { 0x9c, 0xe2, 0x0c, 0x19, 0x5c, 0x87, 0x40, 0x5b } };
- static GUID pulse_capture_guid =
-@@ -106,6 +119,13 @@ BOOL WINAPI DllMain(HINSTANCE dll, DWORD reason, void *reserved)
-         if (pthread_mutex_init(&pulse_lock, &attr) != 0)
-             pthread_mutex_init(&pulse_lock, NULL);
-     } else if (reason == DLL_PROCESS_DETACH) {
-+        PhysDevice *dev, *dev_next;
-+
-+        LIST_FOR_EACH_ENTRY_SAFE(dev, dev_next, &g_phys_speakers, PhysDevice, entry)
-+            HeapFree(GetProcessHeap(), 0, dev);
-+        LIST_FOR_EACH_ENTRY_SAFE(dev, dev_next, &g_phys_sources, PhysDevice, entry)
-+            HeapFree(GetProcessHeap(), 0, dev);
-+
-         if (pulse_thread)
-            SetThreadPriority(pulse_thread, 0);
-         if (pulse_ctx) {
-@@ -167,6 +187,7 @@ struct ACImpl {
+@@ -134,6 +134,7 @@ struct ACImpl {
+     IUnknown *marshal;
      IMMDevice *parent;
      struct list entry;
-     float vol[PA_CHANNELS_MAX];
 +    char device[256];
+     float *vol;
  
      LONG ref;
-     EDataFlow dataflow;
-@@ -196,8 +217,6 @@ struct ACImpl {
-     struct list packet_filled_head;
+@@ -147,8 +148,6 @@ struct ACImpl {
+     AudioSessionWrapper *session_wrapper;
  };
  
--static const WCHAR defaultW[] = {'P','u','l','s','e','a','u','d','i','o',0};
+-static const WCHAR defaultW[] = L"PulseAudio";
 -
  static const IAudioClient3Vtbl AudioClient3_Vtbl;
  static const IAudioRenderClientVtbl AudioRenderClient_Vtbl;
  static const IAudioCaptureClientVtbl AudioCaptureClient_Vtbl;
-@@ -605,12 +624,92 @@ fail:
-     return E_FAIL;
+@@ -267,39 +266,96 @@ static void set_stream_volumes(ACImpl *This)
+     pulse_call(set_volumes, &params);
+ }
+ 
+-HRESULT WINAPI AUDDRV_GetEndpointIDs(EDataFlow flow, const WCHAR ***ids, GUID **keys,
++HRESULT WINAPI AUDDRV_GetEndpointIDs(EDataFlow flow, WCHAR ***ids, GUID **keys,
+         UINT *num, UINT *def_index)
+ {
+-    WCHAR *id;
++    WCHAR flow_char = (flow == eRender) ? '0' : '1';
++    DWORD i, k = 0, count = 0, maxlen, size, type;
++    WCHAR *id, *key_name = NULL;
++    HKEY dev_key, key = NULL;
++    LSTATUS status;
++    GUID guid;
+ 
+     TRACE("%d %p %p %p\n", flow, ids, num, def_index);
+ 
+-    *num = 1;
++    *num = 0;
+     *def_index = 0;
+-
+-    *ids = HeapAlloc(GetProcessHeap(), 0, sizeof(**ids));
++    *ids = NULL;
+     *keys = NULL;
+-    if (!*ids)
+-        return E_OUTOFMEMORY;
+ 
+-    (*ids)[0] = id = HeapAlloc(GetProcessHeap(), 0, sizeof(defaultW));
+-    *keys = HeapAlloc(GetProcessHeap(), 0, sizeof(**keys));
+-    if (!*keys || !id) {
+-        HeapFree(GetProcessHeap(), 0, id);
+-        HeapFree(GetProcessHeap(), 0, *keys);
+-        HeapFree(GetProcessHeap(), 0, *ids);
+-        *ids = NULL;
+-        *keys = NULL;
+-        return E_OUTOFMEMORY;
++    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Wine\\Drivers\\winepulse.drv\\devices",
++            0, KEY_READ | KEY_WOW64_64KEY, &key) == ERROR_SUCCESS) {
++        status = RegQueryInfoKeyW(key, NULL, NULL, NULL, &count, &maxlen, NULL, NULL, NULL, NULL, NULL, NULL);
++        if (status != ERROR_SUCCESS || maxlen < 3)
++            count = 0;
+     }
+-    memcpy(id, defaultW, sizeof(defaultW));
+ 
+-    if (flow == eRender)
+-        (*keys)[0] = pulse_render_guid;
+-    else
+-        (*keys)[0] = pulse_capture_guid;
++    if (count && !(key_name = malloc((maxlen + 1) * sizeof(WCHAR))))
++        goto err;
++
++    *ids = HeapAlloc(GetProcessHeap(), 0, (count + 1) * sizeof(**ids));
++    *keys = HeapAlloc(GetProcessHeap(), 0, (count + 1) * sizeof(**keys));
++    if (!*ids || !*keys)
++        goto err;
++
++    if (!(id = HeapAlloc(GetProcessHeap(), 0, sizeof(L"PulseAudio"))))
++        goto err;
++    wcscpy(id, L"PulseAudio");
++    (*ids)[k] = id;
++    (*keys)[k++] = (flow == eRender) ? pulse_render_guid : pulse_capture_guid;
++
++    for (i = 0; i < count; i++) {
++        DWORD key_name_size = maxlen + 1;
++
++        if (RegEnumKeyExW(key, i, key_name, &key_name_size, NULL, NULL, NULL, NULL) != ERROR_SUCCESS ||
++            key_name_size < 3 || key_name[0] != flow_char ||
++            RegOpenKeyExW(key, key_name, 0, KEY_READ | KEY_WRITE | KEY_WOW64_64KEY, &dev_key) != ERROR_SUCCESS)
++            continue;
++
++        status = RegQueryValueExW(dev_key, L"name", 0, &type, NULL, &size);
++        if (status == ERROR_SUCCESS && type == REG_SZ && size >= sizeof(WCHAR)) {
++            if (!(id = HeapAlloc(GetProcessHeap(), 0, size))) {
++                RegCloseKey(dev_key);
++                goto err;
++            }
++            status = RegQueryValueExW(dev_key, L"name", 0, &type, (BYTE*)id, &size);
++            if (status == ERROR_SUCCESS && type == REG_SZ && size >= sizeof(WCHAR)) {
++                id[size / sizeof(WCHAR) - 1] = 0;
++
++                size = sizeof(guid);
++                status = RegQueryValueExW(dev_key, L"guid", 0, &type, (BYTE*)&guid, &size);
++
++                if (status != ERROR_SUCCESS || type != REG_BINARY || size != sizeof(guid)) {
++                    CoCreateGuid(&guid);
++                    status = RegSetValueExW(dev_key, L"guid", 0, REG_BINARY, (BYTE*)&guid, sizeof(guid));
++                    if (status != ERROR_SUCCESS)
++                        ERR("Failed to store device GUID for %s to registry\n", debugstr_w(key_name + 2));
++                }
++                (*ids)[k] = id;
++                (*keys)[k++] = guid;
++            } else {
++                HeapFree(GetProcessHeap(), 0, id);
++            }
++        }
++        RegCloseKey(dev_key);
++    }
++    *num = k;
++    *ids = HeapReAlloc(GetProcessHeap(), 0, *ids, k * sizeof(**ids));
++    *keys = HeapReAlloc(GetProcessHeap(), 0, *keys, k * sizeof(**keys));
+ 
++    if (key) RegCloseKey(key);
++    free(key_name);
+     return S_OK;
++
++err:
++    if (key) RegCloseKey(key);
++    while (k--) HeapFree(GetProcessHeap(), 0, (*ids)[k]);
++    HeapFree(GetProcessHeap(), 0, *keys);
++    HeapFree(GetProcessHeap(), 0, *ids);
++    free(key_name);
++    *ids = NULL;
++    *keys = NULL;
++    return E_OUTOFMEMORY;
+ }
+ 
+ int WINAPI AUDDRV_GetPriority(void)
+@@ -314,26 +370,88 @@ int WINAPI AUDDRV_GetPriority(void)
+     return SUCCEEDED(params.result) ? Priority_Preferred : Priority_Unavailable;
+ }
+ 
++static BOOL get_pulse_name_by_guid(const GUID *guid, char *name, DWORD name_size, EDataFlow *flow)
++{
++    DWORD key_name_size;
++    WCHAR key_name[258];
++    DWORD index = 0;
++    HKEY key;
++
++    name[0] = 0;
++    if (IsEqualGUID(guid, &pulse_render_guid)) {
++        *flow = eRender;
++        return TRUE;
++    } else if (IsEqualGUID(guid, &pulse_capture_guid)) {
++        *flow = eCapture;
++        return TRUE;
++    }
++
++    if (RegOpenKeyExW(HKEY_LOCAL_MACHINE, L"Software\\Wine\\Drivers\\winepulse.drv\\devices",
++            0, KEY_READ | KEY_WOW64_64KEY, &key) != ERROR_SUCCESS) {
++        ERR("No devices found in registry?\n");
++        return FALSE;
++    }
++
++    for (;;) {
++        DWORD size, type;
++        LSTATUS status;
++        GUID reg_guid;
++        HKEY dev_key;
++
++        key_name_size = ARRAY_SIZE(key_name);
++        if (RegEnumKeyExW(key, index++, key_name, &key_name_size, NULL,
++                NULL, NULL, NULL) != ERROR_SUCCESS)
++            break;
++
++        if (RegOpenKeyExW(key, key_name, 0, KEY_READ | KEY_WOW64_64KEY, &dev_key) != ERROR_SUCCESS) {
++            ERR("Couldn't open key: %s\n", wine_dbgstr_w(key_name));
++            continue;
++        }
++
++        size = sizeof(reg_guid);
++        status = RegQueryValueExW(dev_key, L"guid", 0, &type, (BYTE *)&reg_guid, &size);
++        RegCloseKey(dev_key);
++
++        if (status == ERROR_SUCCESS && type == REG_BINARY && size == sizeof(reg_guid) && IsEqualGUID(&reg_guid, guid)) {
++            RegCloseKey(key);
++
++            TRACE("Found matching device key: %s\n", wine_dbgstr_w(key_name));
++
++            if (key_name[0] == '0')
++                *flow = eRender;
++            else if (key_name[0] == '1')
++                *flow = eCapture;
++            else {
++                ERR("Unknown device type: %c\n", key_name[0]);
++                return FALSE;
++            }
++
++            return WideCharToMultiByte(CP_UNIXCP, 0, key_name + 2, -1, name, name_size, NULL, NULL);
++        }
++    }
++
++    RegCloseKey(key);
++    WARN("No matching device in registry for GUID %s\n", debugstr_guid(guid));
++    return FALSE;
++}
++
+ HRESULT WINAPI AUDDRV_GetAudioEndpoint(GUID *guid, IMMDevice *dev, IAudioClient **out)
+ {
+-    ACImpl *This;
++    ACImpl *This = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*This));
+     EDataFlow dataflow;
+     HRESULT hr;
+ 
+     TRACE("%s %p %p\n", debugstr_guid(guid), dev, out);
+-    if (IsEqualGUID(guid, &pulse_render_guid))
+-        dataflow = eRender;
+-    else if (IsEqualGUID(guid, &pulse_capture_guid))
+-        dataflow = eCapture;
+-    else
+-        return E_UNEXPECTED;
+ 
+     *out = NULL;
+-
+-    This = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(*This));
+     if (!This)
+         return E_OUTOFMEMORY;
+ 
++    if (!get_pulse_name_by_guid(guid, This->device, sizeof(This->device), &dataflow)) {
++        HeapFree(GetProcessHeap(), 0, This);
++        return AUDCLNT_E_DEVICE_INVALIDATED;
++    }
++
+     This->IAudioClient3_iface.lpVtbl = &AudioClient3_Vtbl;
+     This->IAudioRenderClient_iface.lpVtbl = &AudioRenderClient_Vtbl;
+     This->IAudioCaptureClient_iface.lpVtbl = &AudioCaptureClient_Vtbl;
+@@ -609,6 +727,7 @@ static HRESULT WINAPI AudioClient_Initialize(IAudioClient3 *iface,
+     }
+ 
+     params.name = name = get_application_name();
++    params.device   = This->device[0] ? This->device : NULL;
+     params.dataflow = This->dataflow;
+     params.mode     = mode;
+     params.flags    = flags;
+diff --git a/dlls/winepulse.drv/pulse.c b/dlls/winepulse.drv/pulse.c
+index c8c3104..76e4935 100644
+--- a/dlls/winepulse.drv/pulse.c
++++ b/dlls/winepulse.drv/pulse.c
+@@ -82,6 +82,11 @@ typedef struct _ACPacket
+     UINT32 discont;
+ } ACPacket;
+ 
++typedef struct _PhysDevice {
++    struct list entry;
++    char device[0];
++} PhysDevice;
++
+ static pa_context *pulse_ctx;
+ static pa_mainloop *pulse_ml;
+ 
+@@ -90,6 +95,9 @@ static WAVEFORMATEXTENSIBLE pulse_fmt[2];
+ static REFERENCE_TIME pulse_min_period[2], pulse_def_period[2];
+ 
+ static UINT g_phys_speakers_mask = 0;
++static struct list g_phys_speakers = LIST_INIT(g_phys_speakers);
++static struct list g_phys_sources = LIST_INIT(g_phys_sources);
++static HKEY devices_key;
+ 
+ static const REFERENCE_TIME MinimumPeriod = 30000;
+ static const REFERENCE_TIME DefaultPeriod = 100000;
+@@ -153,6 +161,61 @@ static int muldiv(int a, int b, int c)
+     return ret;
+ }
+ 
++/* wrapper for NtCreateKey that creates the key recursively if necessary */
++static HKEY reg_create_key(HKEY root, const WCHAR *name, ULONG name_len)
++{
++    UNICODE_STRING nameW = { name_len, name_len, (WCHAR *)name };
++    OBJECT_ATTRIBUTES attr;
++    NTSTATUS status;
++    HANDLE ret = 0;
++
++    attr.Length = sizeof(attr);
++    attr.RootDirectory = root;
++    attr.ObjectName = &nameW;
++    attr.Attributes = 0;
++    attr.SecurityDescriptor = NULL;
++    attr.SecurityQualityOfService = NULL;
++
++    status = NtCreateKey(&ret, KEY_QUERY_VALUE | KEY_WRITE | KEY_WOW64_64KEY, &attr, 0, NULL, 0, NULL);
++    if (status == STATUS_OBJECT_NAME_NOT_FOUND) {
++        DWORD pos = 0, i = 0, len = name_len / sizeof(WCHAR);
++
++        /* don't try to create registry root */
++        if (!root) i += 10;
++
++        while (i < len && name[i] != '\\') i++;
++        if (i == len) return 0;
++        for (;;) {
++            nameW.Buffer = (WCHAR *)name + pos;
++            nameW.Length = (i - pos) * sizeof(WCHAR);
++            status = NtCreateKey(&ret, KEY_QUERY_VALUE | KEY_WRITE | KEY_WOW64_64KEY, &attr, 0, NULL, 0, NULL);
++
++            if (attr.RootDirectory != root) NtClose(attr.RootDirectory);
++            if (!NT_SUCCESS(status)) return 0;
++            if (i == len) break;
++            attr.RootDirectory = ret;
++            while (i < len && name[i] == '\\') i++;
++            pos = i;
++            while (i < len && name[i] != '\\') i++;
++        }
++    }
++    return ret;
++}
++
++static HKEY open_devices_key(void)
++{
++    static const WCHAR drv_key_devicesW[] = {
++        '\\','R','e','g','i','s','t','r','y','\\','M','a','c','h','i','n','e','\\',
++        'S','o','f','t','w','a','r','e','\\','W','i','n','e','\\','D','r','i','v','e','r','s','\\',
++        'w','i','n','e','p','u','l','s','e','.','d','r','v','\\','d','e','v','i','c','e','s'
++    };
++    HANDLE ret;
++
++    if (!(ret = reg_create_key(NULL, drv_key_devicesW, sizeof(drv_key_devicesW))))
++        ERR("Failed to open devices registry key\n");
++    return ret;
++}
++
+ /* Following pulseaudio design here, mainloop has the lock taken whenever
+  * it is handling something for pulse, and the lock is required whenever
+  * doing any pa_* call that can affect the state in any way
+@@ -191,6 +254,13 @@ static NTSTATUS pulse_process_attach(void *args)
+ 
+ static NTSTATUS pulse_process_detach(void *args)
+ {
++    PhysDevice *dev, *dev_next;
++
++    LIST_FOR_EACH_ENTRY_SAFE(dev, dev_next, &g_phys_speakers, PhysDevice, entry)
++        free(dev);
++    LIST_FOR_EACH_ENTRY_SAFE(dev, dev_next, &g_phys_sources, PhysDevice, entry)
++        free(dev);
++
+     if (pulse_ctx)
+     {
+         pa_context_disconnect(pulse_ctx);
+@@ -358,12 +428,73 @@ static DWORD pulse_channel_map_to_channel_mask(const pa_channel_map *map)
+     return mask;
  }
  
 -/* For default PulseAudio render device, OR together all of the
 - * PKEY_AudioEndpoint_PhysicalSpeakers values of the sinks. */
-+static BOOL get_device_guid(EDataFlow flow, const char *device, GUID *guid)
++static void store_device_info(EDataFlow flow, const char *device, const char *name)
 +{
-+    HKEY key, dev_key;
-+    DWORD type, size = sizeof(*guid);
-+    WCHAR key_name[258];
++    static const WCHAR nameW[] = { 'n','a','m','e' };
++    UNICODE_STRING name_str = { sizeof(nameW), sizeof(nameW), (WCHAR*)nameW };
++    UINT name_len = strlen(name);
++    WCHAR key_name[258], *wname;
++    DWORD len, key_len;
++    HKEY key;
++
++    if (!devices_key || !(wname = malloc((name_len + 1) * sizeof(WCHAR))))
++        return;
 +
 +    key_name[0] = (flow == eCapture) ? '1' : '0';
 +    key_name[1] = ',';
-+    if (!MultiByteToWideChar(CP_UTF8, 0, device, -1, key_name + 2,
-+            (sizeof(key_name) / sizeof(*key_name)) - 2))
-+        return FALSE;
 +
-+    if (RegCreateKeyExW(HKEY_CURRENT_USER, drv_key_devicesW, 0, NULL, 0,
-+            KEY_WRITE|KEY_READ, NULL, &key, NULL) != ERROR_SUCCESS){
-+        ERR("Failed to open registry key %s\n", debugstr_w(drv_key_devicesW));
-+        return FALSE;
++    key_len = ntdll_umbstowcs(device, strlen(device), key_name + 2, ARRAY_SIZE(key_name) - 2);
++    if (!key_len || key_len >= ARRAY_SIZE(key_name) - 2)
++        goto done;
++    key_len += 2;
++
++    if (!(len = ntdll_umbstowcs(name, name_len, wname, name_len)))
++        goto done;
++    wname[len] = 0;
++
++    if (!(key = reg_create_key(devices_key, key_name, key_len * sizeof(WCHAR)))) {
++        ERR("Failed to open registry key for device %s\n", device);
++        goto done;
 +    }
 +
-+    if (RegCreateKeyExW(key, key_name, 0, NULL, 0, KEY_WRITE|KEY_READ,
-+            NULL, &dev_key, NULL) != ERROR_SUCCESS){
-+        ERR("Failed to open registry key for device %s\n", debugstr_w(key_name));
-+        RegCloseKey(key);
-+        return FALSE;
-+    }
++    if (NtSetValueKey(key, &name_str, 0, REG_SZ, wname, (len + 1) * sizeof(WCHAR)))
++        ERR("Failed to store name for %s to registry\n", device);
++    NtClose(key);
 +
-+    if (RegQueryValueExW(dev_key, guidW, 0, &type, (BYTE *)guid,
-+            &size) == ERROR_SUCCESS){
-+        if (type == REG_BINARY && size == sizeof(*guid)){
-+            RegCloseKey(dev_key);
-+            RegCloseKey(key);
-+            return TRUE;
-+        }
-+
-+        ERR("Invalid type for device %s GUID: %u; ignoring and overwriting\n",
-+                wine_dbgstr_w(key_name), type);
-+    }
-+
-+    /* generate new GUID for this device */
-+    CoCreateGuid(guid);
-+
-+    if (RegSetValueExW(dev_key, guidW, 0, REG_BINARY, (BYTE *)guid,
-+            sizeof(GUID)) != ERROR_SUCCESS)
-+        ERR("Failed to store device GUID for %s to registry\n", device);
-+
-+    RegCloseKey(dev_key);
-+    RegCloseKey(key);
-+    return TRUE;
++done:
++    free(wname);
 +}
 +
-+static void pulse_add_device(struct list *list, GUID *guid, const char *name)
++static void pulse_add_device(struct list *list, const char *device)
 +{
-+    int len = MultiByteToWideChar(CP_UNIXCP, 0, name, -1, NULL, 0);
-+    if (len) {
-+        PhysDevice *dev = HeapAlloc(GetProcessHeap(), 0, offsetof(PhysDevice, name[len]));
-+        if (dev) {
-+            MultiByteToWideChar(CP_UNIXCP, 0, name, -1, dev->name, len);
-+            dev->guid = *guid;
-+            list_add_tail(list, &dev->entry);
-+        }
-+    }
++    DWORD len = strlen(device);
++    PhysDevice *dev = malloc(offsetof(PhysDevice, device[len + 1]));
++
++    if (!dev)
++        return;
++    memcpy(dev->device, device, len + 1);
++
++    list_add_tail(list, &dev->entry);
 +}
 +
  static void pulse_phys_speakers_cb(pa_context *c, const pa_sink_info *i, int eol, void *userdata)
  {
 -    if (i)
-+    GUID guid;
-+
-+    if (i) {
++    if (i && i->name && i->name[0]) {
 +        /* For default PulseAudio render device, OR together all of the
 +         * PKEY_AudioEndpoint_PhysicalSpeakers values of the sinks. */
          g_phys_speakers_mask |= pulse_channel_map_to_channel_mask(&i->channel_map);
 +
-+        if (!get_device_guid(eRender, i->name, &guid))
-+            CoCreateGuid(&guid);
-+        pulse_add_device(&g_phys_speakers, &guid, i->description);
++        store_device_info(eRender, i->name, i->description);
++        pulse_add_device(&g_phys_speakers, i->name);
 +    }
 +}
 +
 +static void pulse_phys_sources_cb(pa_context *c, const pa_source_info *i, int eol, void *userdata)
 +{
-+    GUID guid;
-+
-+    if (i) {
-+        if (!get_device_guid(eCapture, i->name, &guid))
-+            CoCreateGuid(&guid);
-+        pulse_add_device(&g_phys_sources, &guid, i->description);
++    if (i && i->name && i->name[0]) {
++        store_device_info(eCapture, i->name, i->description);
++        pulse_add_device(&g_phys_sources, i->name);
 +    }
  }
  
- /* some poorly-behaved applications call audio functions during DllMain, so we
-@@ -626,6 +725,10 @@ static HRESULT pulse_test_connect(void)
-     pa_mainloop *ml;
+ /* For most hardware on Windows, users must choose a configuration with an even
+@@ -541,6 +672,11 @@ static NTSTATUS pulse_test_connect(void *args)
      pa_context *ctx;
  
-+    /* Make sure we never run this function twice accidentially */
+     pulse_lock();
++
++    /* Make sure we never run twice accidentally */
 +    if (!list_empty(&g_phys_speakers))
-+        return S_OK;
++        goto success;
 +
      ml = pa_mainloop_new();
  
      pa_mainloop_set_poll_func(ml, pulse_poll_func, NULL);
-@@ -676,6 +779,9 @@ static HRESULT pulse_test_connect(void)
+@@ -581,7 +717,12 @@ static NTSTATUS pulse_test_connect(void *args)
+     pulse_probe_settings(ml, ctx, 1, &pulse_fmt[0]);
      pulse_probe_settings(ml, ctx, 0, &pulse_fmt[1]);
  
++    devices_key = open_devices_key();
      g_phys_speakers_mask = 0;
-+    pulse_add_device(&g_phys_speakers, &pulse_render_guid, "Pulseaudio");
-+    pulse_add_device(&g_phys_sources, &pulse_capture_guid, "Pulseaudio");
++
++    pulse_add_device(&g_phys_speakers, "");
++    pulse_add_device(&g_phys_sources, "");
 +
      o = pa_context_get_sink_info_list(ctx, &pulse_phys_speakers_cb, NULL);
      if (o) {
          while (pa_mainloop_iterate(ml, 1, &ret) >= 0 &&
-@@ -684,6 +790,14 @@ static HRESULT pulse_test_connect(void)
+@@ -590,6 +731,15 @@ static NTSTATUS pulse_test_connect(void *args)
          pa_operation_unref(o);
      }
  
@@ -208,203 +487,76 @@ index 6d4ffecaca8..4d91aa60151 100644
 +        {}
 +        pa_operation_unref(o);
 +    }
++    NtClose(devices_key);
 +
      pa_context_unref(ctx);
      pa_mainloop_free(ml);
+ 
+@@ -601,6 +751,7 @@ static NTSTATUS pulse_test_connect(void *args)
+     config->modes[1].def_period = pulse_def_period[1];
+     config->modes[1].min_period = pulse_min_period[1];
+ 
++success:
+     pulse_unlock();
+ 
+     params->result = S_OK;
+@@ -769,12 +920,13 @@ static HRESULT pulse_spec_from_waveformat(struct pulse_stream *stream, const WAV
      return S_OK;
-@@ -1111,6 +1225,8 @@ static HRESULT pulse_stream_connect(ACImpl *This, UINT32 period_bytes) {
+ }
+ 
+-static HRESULT pulse_stream_connect(struct pulse_stream *stream, UINT32 period_bytes)
++static HRESULT pulse_stream_connect(struct pulse_stream *stream, const char *device, UINT32 period_bytes)
+ {
+     int ret;
      char buffer[64];
      static LONG number;
      pa_buffer_attr attr;
 +    int moving = 0;
-+
-     if (This->stream) {
-         pa_stream_disconnect(This->stream);
-         while (pa_stream_get_state(This->stream) == PA_STREAM_READY)
-@@ -1136,12 +1252,18 @@ static HRESULT pulse_stream_connect(ACImpl *This, UINT32 period_bytes) {
-     attr.maxlength = This->bufsize_frames * pa_frame_size(&This->ss);
-     attr.prebuf = pa_frame_size(&This->ss);
+ 
+     ret = InterlockedIncrement(&number);
+     sprintf(buffer, "audio stream #%i", ret);
+@@ -795,12 +947,17 @@ static HRESULT pulse_stream_connect(struct pulse_stream *stream, UINT32 period_b
+     attr.maxlength = stream->bufsize_frames * pa_frame_size(&stream->ss);
+     attr.prebuf = pa_frame_size(&stream->ss);
      dump_attr(&attr);
 +
 +    /* If device name is given use exactly the specified device */
-+    if (This->device[0]){
++    if (device)
 +        moving = PA_STREAM_DONT_MOVE;
-+    }
 +
-     if (This->dataflow == eRender)
-         ret = pa_stream_connect_playback(This->stream, NULL, &attr,
+     if (stream->dataflow == eRender)
+-        ret = pa_stream_connect_playback(stream->stream, NULL, &attr,
 -        PA_STREAM_START_CORKED|PA_STREAM_START_UNMUTED|PA_STREAM_ADJUST_LATENCY, NULL, NULL);
++        ret = pa_stream_connect_playback(stream->stream, device, &attr,
 +        PA_STREAM_START_CORKED|PA_STREAM_START_UNMUTED|PA_STREAM_ADJUST_LATENCY|moving, NULL, NULL);
      else
-         ret = pa_stream_connect_record(This->stream, NULL, &attr,
+-        ret = pa_stream_connect_record(stream->stream, NULL, &attr,
 -        PA_STREAM_START_CORKED|PA_STREAM_START_UNMUTED|PA_STREAM_ADJUST_LATENCY);
++        ret = pa_stream_connect_record(stream->stream, device, &attr,
 +        PA_STREAM_START_CORKED|PA_STREAM_START_UNMUTED|PA_STREAM_ADJUST_LATENCY|moving);
      if (ret < 0) {
          WARN("Returns %i\n", ret);
          return AUDCLNT_E_ENDPOINT_CREATE_FAILED;
-@@ -1158,39 +1280,53 @@ static HRESULT pulse_stream_connect(ACImpl *This, UINT32 period_bytes) {
-     return S_OK;
- }
+@@ -862,7 +1019,7 @@ static NTSTATUS pulse_create_stream(void *args)
  
--HRESULT WINAPI AUDDRV_GetEndpointIDs(EDataFlow flow, const WCHAR ***ids, GUID **keys,
-+HRESULT WINAPI AUDDRV_GetEndpointIDs(EDataFlow flow, WCHAR ***ids, GUID **keys,
-         UINT *num, UINT *def_index)
+     stream->share = params->mode;
+     stream->flags = params->flags;
+-    hr = pulse_stream_connect(stream, stream->period_bytes);
++    hr = pulse_stream_connect(stream, params->device, stream->period_bytes);
+     if (SUCCEEDED(hr)) {
+         UINT32 unalign;
+         const pa_buffer_attr *attr = pa_stream_get_buffer_attr(stream->stream);
+diff --git a/dlls/winepulse.drv/unixlib.h b/dlls/winepulse.drv/unixlib.h
+index d28a73c..5445a0f 100644
+--- a/dlls/winepulse.drv/unixlib.h
++++ b/dlls/winepulse.drv/unixlib.h
+@@ -40,6 +40,7 @@ struct main_loop_params
+ struct create_stream_params
  {
-+    struct list *list = (flow == eRender) ? &g_phys_speakers : &g_phys_sources;
-+    PhysDevice *dev;
-+    DWORD count;
-     WCHAR *id;
- 
-     TRACE("%d %p %p %p\n", flow, ids, num, def_index);
- 
--    *num = 1;
-+    *num = count = list_count(list);
-     *def_index = 0;
- 
--    *ids = HeapAlloc(GetProcessHeap(), 0, sizeof(**ids));
--    *keys = NULL;
--    if (!*ids)
--        return E_OUTOFMEMORY;
--
--    (*ids)[0] = id = HeapAlloc(GetProcessHeap(), 0, sizeof(defaultW));
--    *keys = HeapAlloc(GetProcessHeap(), 0, sizeof(**keys));
--    if (!*keys || !id) {
--        HeapFree(GetProcessHeap(), 0, id);
--        HeapFree(GetProcessHeap(), 0, *keys);
--        HeapFree(GetProcessHeap(), 0, *ids);
-+    if (!count) {
-         *ids = NULL;
-         *keys = NULL;
--        return E_OUTOFMEMORY;
-+        return E_FAIL;
-     }
--    memcpy(id, defaultW, sizeof(defaultW));
- 
--    if (flow == eRender)
--        (*keys)[0] = pulse_render_guid;
--    else
--        (*keys)[0] = pulse_capture_guid;
-+    *ids = HeapAlloc(GetProcessHeap(), 0, count * sizeof(**ids));
-+    *keys = HeapAlloc(GetProcessHeap(), 0, count * sizeof(**keys));
-+    if (!*ids || !*keys) {
-+        count = 0;
-+        goto err;
-+    }
-+
-+    count = 0;
-+    LIST_FOR_EACH_ENTRY(dev, list, PhysDevice, entry) {
-+        id = HeapAlloc(GetProcessHeap(), 0, (strlenW(dev->name) + 1) * sizeof(WCHAR));
-+        if (!id)
-+            goto err;
-+        (*ids)[count] = id;
-+        (*keys)[count] = dev->guid;
-+        strcpyW(id, dev->name);
-+        count++;
-+    }
- 
-     return S_OK;
-+
-+err:
-+    while (count)
-+        HeapFree(GetProcessHeap(), 0, (*ids)[--count]);
-+    HeapFree(GetProcessHeap(), 0, *keys);
-+    HeapFree(GetProcessHeap(), 0, *ids);
-+    *ids = NULL;
-+    *keys = NULL;
-+    return E_OUTOFMEMORY;
- }
- 
- int WINAPI AUDDRV_GetPriority(void)
-@@ -1202,20 +1338,79 @@ int WINAPI AUDDRV_GetPriority(void)
-     return SUCCEEDED(hr) ? Priority_Preferred : Priority_Unavailable;
- }
- 
-+static BOOL get_pulse_name_by_guid(const GUID *guid, char *name, DWORD name_size, EDataFlow *flow)
-+{
-+    HKEY key;
-+    DWORD index = 0;
-+    WCHAR key_name[258];
-+    DWORD key_name_size;
-+
-+    if (RegOpenKeyExW(HKEY_CURRENT_USER, drv_key_devicesW, 0, KEY_READ,
-+            &key) != ERROR_SUCCESS){
-+        ERR("No devices found in registry?\n");
-+        return FALSE;
-+    }
-+
-+    while(1){
-+        HKEY dev_key;
-+        DWORD size, type;
-+        GUID reg_guid;
-+
-+        key_name_size = sizeof(key_name)/sizeof(WCHAR);
-+        if(RegEnumKeyExW(key, index++, key_name, &key_name_size, NULL,
-+                NULL, NULL, NULL) != ERROR_SUCCESS)
-+            break;
-+
-+        if (RegOpenKeyExW(key, key_name, 0, KEY_READ, &dev_key) != ERROR_SUCCESS){
-+            ERR("Couldn't open key: %s\n", wine_dbgstr_w(key_name));
-+            continue;
-+        }
-+
-+        size = sizeof(reg_guid);
-+        if (RegQueryValueExW(dev_key, guidW, 0, &type, (BYTE *)&reg_guid, &size) == ERROR_SUCCESS){
-+            if (type == REG_BINARY && size == sizeof(reg_guid) && IsEqualGUID(&reg_guid, guid)){
-+                RegCloseKey(dev_key);
-+                RegCloseKey(key);
-+
-+                TRACE("Found matching device key: %s\n", wine_dbgstr_w(key_name));
-+
-+                if (key_name[0] == '0')
-+                    *flow = eRender;
-+                else if (key_name[0] == '1')
-+                    *flow = eCapture;
-+                else{
-+                    ERR("Unknown device type: %c\n", key_name[0]);
-+                    return FALSE;
-+                }
-+
-+                return WideCharToMultiByte(CP_UNIXCP, 0, key_name + 2, -1, name, name_size, NULL, NULL);
-+            }
-+        }
-+
-+        RegCloseKey(dev_key);
-+    }
-+
-+    RegCloseKey(key);
-+    WARN("No matching device in registry for GUID %s\n", debugstr_guid(guid));
-+    return FALSE;
-+}
-+
- HRESULT WINAPI AUDDRV_GetAudioEndpoint(GUID *guid, IMMDevice *dev, IAudioClient **out)
- {
-+    char pulse_name[256] = {0};
-     ACImpl *This;
-     int i;
+     const char *name;
++    const char *device;
      EDataFlow dataflow;
-     HRESULT hr;
- 
-     TRACE("%s %p %p\n", debugstr_guid(guid), dev, out);
-+
-     if (IsEqualGUID(guid, &pulse_render_guid))
-         dataflow = eRender;
-     else if (IsEqualGUID(guid, &pulse_capture_guid))
-         dataflow = eCapture;
--    else
--        return E_UNEXPECTED;
-+    else if(!get_pulse_name_by_guid(guid, pulse_name, sizeof(pulse_name), &dataflow))
-+        return AUDCLNT_E_DEVICE_INVALIDATED;
- 
-     *out = NULL;
- 
-@@ -1233,6 +1428,7 @@ HRESULT WINAPI AUDDRV_GetAudioEndpoint(GUID *guid, IMMDevice *dev, IAudioClient
-     This->parent = dev;
-     for (i = 0; i < PA_CHANNELS_MAX; ++i)
-         This->vol[i] = 1.f;
-+    strcpy(This->device, pulse_name);
- 
-     hr = CoCreateFreeThreadedMarshaler((IUnknown*)&This->IAudioClient3_iface, &This->marshal);
-     if (hr) {
+     AUDCLNT_SHAREMODE mode;
+     DWORD flags;
 -- 
 2.28.0
-

@@ -1,4 +1,4 @@
-From 64fdf14331c7a50c94c1c7cbd2807fed870b7202 Mon Sep 17 00:00:00 2001
+From 5eea4a95306f510d6056cdb79faaed73a84e53dd Mon Sep 17 00:00:00 2001
 From: Mark Harmstone <mark@harmstone.com>
 Date: Wed, 10 Dec 2014 18:08:41 +0000
 Subject: [PATCH] winepulse: return PKEY_AudioEndpoint_PhysicalSpeakers device
@@ -6,56 +6,90 @@ Subject: [PATCH] winepulse: return PKEY_AudioEndpoint_PhysicalSpeakers device
 
 Changes by Sebastian Lackner <sebastian@fds-team.de>:
   * Rework logic to get all channel masks in pulse_test_connect.
+
+Changes by Gabriel Ivăncescu <gabrielopcode@gmail.com>:
+  * Rebased with unixlib separation.
 ---
- dlls/winepulse.drv/mmdevdrv.c | 34 +++++++++++++++++++---------------
- 1 file changed, 19 insertions(+), 15 deletions(-)
+ dlls/winepulse.drv/mmdevdrv.c | 13 ++++++-------
+ dlls/winepulse.drv/pulse.c    | 24 +++++++++++++++---------
+ dlls/winepulse.drv/unixlib.h  |  2 +-
+ 3 files changed, 22 insertions(+), 17 deletions(-)
 
 diff --git a/dlls/winepulse.drv/mmdevdrv.c b/dlls/winepulse.drv/mmdevdrv.c
-index a1379fd97a2..5673a6a678d 100644
+index 3559baf..a29450e 100644
 --- a/dlls/winepulse.drv/mmdevdrv.c
 +++ b/dlls/winepulse.drv/mmdevdrv.c
-@@ -85,11 +85,11 @@ typedef struct _PhysDevice {
-     struct list entry;
-     GUID guid;
+@@ -2668,13 +2668,6 @@ HRESULT WINAPI AUDDRV_GetPropValue(GUID *guid, const PROPERTYKEY *prop, PROPVARI
+ 
+     TRACE("%s, (%s,%u), %p\n", wine_dbgstr_guid(guid), wine_dbgstr_guid(&prop->fmtid), prop->pid, out);
+ 
+-    if (IsEqualGUID(guid, &pulse_render_guid) && IsEqualPropertyKey(*prop, PKEY_AudioEndpoint_PhysicalSpeakers)) {
+-        out->vt = VT_UI4;
+-        out->ulVal = pulse_config.speakers_mask;
+-
+-        return out->ulVal ? S_OK : E_FAIL;
+-    }
+-
+     if (!get_pulse_name_by_guid(guid, params.device, sizeof(params.device), &params.dataflow))
+         return E_FAIL;
+ 
+@@ -2691,5 +2684,11 @@ HRESULT WINAPI AUDDRV_GetPropValue(GUID *guid, const PROPERTYKEY *prop, PROPVARI
+         return S_OK;
+     }
+ 
++    if (IsEqualPropertyKey(*prop, PKEY_AudioEndpoint_PhysicalSpeakers)) {
++        out->vt = VT_UI4;
++        out->ulVal = params.channel_mask;
++        return out->ulVal ? S_OK : E_FAIL;
++    }
++
+     return E_NOTIMPL;
+ }
+diff --git a/dlls/winepulse.drv/pulse.c b/dlls/winepulse.drv/pulse.c
+index 951a7bf..79c676f 100644
+--- a/dlls/winepulse.drv/pulse.c
++++ b/dlls/winepulse.drv/pulse.c
+@@ -87,6 +87,7 @@ typedef struct _PhysDevice {
+     enum phys_device_bus_type bus_type;
+     USHORT vendor_id, product_id;
      EndpointFormFactor form;
 +    DWORD channel_mask;
-     WCHAR device[128];
-     WCHAR name[0];
+     UINT index;
+     char device[0];
  } PhysDevice;
+@@ -98,7 +99,6 @@ static pa_mainloop *pulse_ml;
+ static WAVEFORMATEXTENSIBLE pulse_fmt[2];
+ static REFERENCE_TIME pulse_min_period[2], pulse_def_period[2];
  
 -static UINT g_phys_speakers_mask = 0;
  static struct list g_phys_speakers = LIST_INIT(g_phys_speakers);
  static struct list g_phys_sources = LIST_INIT(g_phys_sources);
- 
-@@ -834,7 +834,8 @@ static BOOL get_device_path(pa_proplist *p, int index, GUID *guid, WCHAR path[12
-     return TRUE;
+ static HKEY devices_key;
+@@ -495,7 +495,7 @@ static void fill_device_info(PhysDevice *dev, pa_proplist *p)
  }
  
--static void pulse_add_device(struct list *list, GUID *guid, EndpointFormFactor form, WCHAR device[128], const char *name)
-+static void pulse_add_device(struct list *list, GUID *guid, EndpointFormFactor form, DWORD channel_mask,
-+                             WCHAR device[128], const char *name)
+ static void pulse_add_device(struct list *list, pa_proplist *proplist, int index, EndpointFormFactor form,
+-        const char *device)
++        DWORD channel_mask, const char *device)
  {
-     static const WCHAR emptyW[] = {0};
-     int len = MultiByteToWideChar(CP_UNIXCP, 0, name, -1, NULL, 0);
-@@ -843,6 +844,7 @@ static void pulse_add_device(struct list *list, GUID *guid, EndpointFormFactor f
-         if (dev) {
-             dev->guid = *guid;
-             dev->form = form;
-+            dev->channel_mask = channel_mask;
-             strcpyW(dev->device, device ? device : emptyW);
-             MultiByteToWideChar(CP_UNIXCP, 0, name, -1, dev->name, len);
-             list_add_tail(list, &dev->entry);
-@@ -852,19 +854,25 @@ static void pulse_add_device(struct list *list, GUID *guid, EndpointFormFactor f
+     DWORD len = strlen(device);
+     PhysDevice *dev = malloc(offsetof(PhysDevice, device[len + 1]));
+@@ -505,6 +505,7 @@ static void pulse_add_device(struct list *list, pa_proplist *proplist, int index
+     memcpy(dev->device, device, len + 1);
+     dev->form = form;
+     dev->index = index;
++    dev->channel_mask = channel_mask;
+     fill_device_info(dev, proplist);
+ 
+     list_add_tail(list, &dev->entry);
+@@ -512,13 +513,19 @@ static void pulse_add_device(struct list *list, pa_proplist *proplist, int index
  
  static void pulse_phys_speakers_cb(pa_context *c, const pa_sink_info *i, int eol, void *userdata)
  {
 +    struct list *speaker;
-+    DWORD channel_mask;
-     WCHAR device[128];
-     GUID guid;
- 
-     if (i) {
-+        channel_mask = pulse_channel_map_to_channel_mask(&i->channel_map);
++
+     if (i && i->name && i->name[0]) {
++        DWORD channel_mask = pulse_channel_map_to_channel_mask(&i->channel_map);
 +
          /* For default PulseAudio render device, OR together all of the
           * PKEY_AudioEndpoint_PhysicalSpeakers values of the sinks. */
@@ -64,61 +98,70 @@ index a1379fd97a2..5673a6a678d 100644
 +        if (speaker)
 +            LIST_ENTRY(speaker, PhysDevice, entry)->channel_mask |= channel_mask;
  
-         if (!get_device_guid(eRender, i->name, &guid))
-             CoCreateGuid(&guid);
-         if (!get_device_path(i->proplist, i->index, &guid, device))
-             device[0] = 0;
--        pulse_add_device(&g_phys_speakers, &guid, Speakers, device, i->description);
-+        pulse_add_device(&g_phys_speakers, &guid, Speakers, channel_mask, device, i->description);
+         store_device_info(eRender, i->name, i->description);
+-        pulse_add_device(&g_phys_speakers, i->proplist, i->index, Speakers, i->name);
++        pulse_add_device(&g_phys_speakers, i->proplist, i->index, Speakers, channel_mask, i->name);
      }
  }
  
-@@ -880,7 +888,7 @@ static void pulse_phys_sources_cb(pa_context *c, const pa_source_info *i, int eo
-             CoCreateGuid(&guid);
-         if (!get_device_path(i->proplist, i->index, &guid, device))
-             device[0] = 0;
--        pulse_add_device(&g_phys_sources, &guid, form, device, i->description);
-+        pulse_add_device(&g_phys_sources, &guid, form, 0, device, i->description);
+@@ -527,7 +534,7 @@ static void pulse_phys_sources_cb(pa_context *c, const pa_source_info *i, int eo
+     if (i && i->name && i->name[0]) {
+         store_device_info(eCapture, i->name, i->description);
+         pulse_add_device(&g_phys_sources, i->proplist, i->index,
+-                (i->monitor_of_sink == PA_INVALID_INDEX) ? Microphone : LineLevel, i->name);
++                (i->monitor_of_sink == PA_INVALID_INDEX) ? Microphone : LineLevel, 0, i->name);
      }
  }
  
-@@ -950,9 +958,8 @@ static HRESULT pulse_test_connect(void)
-     pulse_probe_settings(ml, ctx, 1, &pulse_fmt[0]);
+@@ -752,10 +759,9 @@ static NTSTATUS pulse_test_connect(void *args)
      pulse_probe_settings(ml, ctx, 0, &pulse_fmt[1]);
  
+     devices_key = open_devices_key();
 -    g_phys_speakers_mask = 0;
--    pulse_add_device(&g_phys_speakers, &pulse_render_guid, Speakers, NULL, "Pulseaudio");
--    pulse_add_device(&g_phys_sources, &pulse_capture_guid, Microphone, NULL, "Pulseaudio");
-+    pulse_add_device(&g_phys_speakers, &pulse_render_guid, Speakers, 0, NULL, "Pulseaudio");
-+    pulse_add_device(&g_phys_sources, &pulse_capture_guid, Microphone, 0, NULL, "Pulseaudio");
+ 
+-    pulse_add_device(&g_phys_speakers, NULL, 0, Speakers, "");
+-    pulse_add_device(&g_phys_sources, NULL, 0, Microphone, "");
++    pulse_add_device(&g_phys_speakers, NULL, 0, Speakers, 0, "");
++    pulse_add_device(&g_phys_sources, NULL, 0, Microphone, 0, "");
  
      o = pa_context_get_sink_info_list(ctx, &pulse_phys_speakers_cb, NULL);
      if (o) {
-@@ -4081,6 +4088,10 @@ static HRESULT pulse_device_get_prop_value(PhysDevice *dev, const PROPERTYKEY *p
-         out->vt = VT_UI4;
-         out->ulVal = dev->form;
-         return S_OK;
-+    } else if (IsEqualPropertyKey(*prop, PKEY_AudioEndpoint_PhysicalSpeakers)) {
-+        out->vt = VT_UI4;
-+        out->ulVal = dev->channel_mask;
-+        return out->ulVal ? S_OK : E_FAIL;
-     }
+@@ -777,7 +783,6 @@ static NTSTATUS pulse_test_connect(void *args)
+     pa_context_unref(ctx);
+     pa_mainloop_free(ml);
  
-     return E_NOTIMPL;
-@@ -4092,13 +4103,6 @@ HRESULT WINAPI AUDDRV_GetPropValue(GUID *guid, const PROPERTYKEY *prop, PROPVARI
+-    config->speakers_mask = g_phys_speakers_mask;
+     config->modes[0].format = pulse_fmt[0];
+     config->modes[0].def_period = pulse_def_period[0];
+     config->modes[0].min_period = pulse_min_period[0];
+@@ -813,6 +818,7 @@ static NTSTATUS pulse_get_device_info(void *args)
+             params->product_id   = dev->product_id;
+             params->index        = dev->index;
+             params->form         = dev->form;
++            params->channel_mask = dev->channel_mask;
+             params->result       = S_OK;
+             return STATUS_SUCCESS;
+         }
+diff --git a/dlls/winepulse.drv/unixlib.h b/dlls/winepulse.drv/unixlib.h
+index 7383110..9cd73a8 100644
+--- a/dlls/winepulse.drv/unixlib.h
++++ b/dlls/winepulse.drv/unixlib.h
+@@ -29,7 +29,6 @@ struct pulse_config
+         REFERENCE_TIME def_period;
+         REFERENCE_TIME min_period;
+     } modes[2];
+-    unsigned int speakers_mask;
+ };
  
-     TRACE("%s, (%s,%u), %p\n", wine_dbgstr_guid(guid), wine_dbgstr_guid(&prop->fmtid), prop->pid, out);
- 
--    if (IsEqualGUID(guid, &pulse_render_guid) && IsEqualPropertyKey(*prop, PKEY_AudioEndpoint_PhysicalSpeakers)) {
--        out->vt = VT_UI4;
--        out->ulVal = g_phys_speakers_mask;
--
--        return out->ulVal ? S_OK : E_FAIL;
--    }
--
-     LIST_FOR_EACH_ENTRY(dev, &g_phys_speakers, PhysDevice, entry) {
-         if (IsEqualGUID(guid, &dev->guid))
-             return pulse_device_get_prop_value(dev, prop, out);
+ struct main_loop_params
+@@ -194,6 +193,7 @@ struct get_device_info_params
+     enum phys_device_bus_type bus_type;
+     USHORT vendor_id, product_id;
+     EndpointFormFactor form;
++    DWORD channel_mask;
+     UINT index;
+     HRESULT result;
+ };
 -- 
 2.30.2
 
