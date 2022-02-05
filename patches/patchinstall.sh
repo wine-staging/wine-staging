@@ -239,6 +239,7 @@ patch_enable_all ()
 	enable_wined3d_WINED3DFMT_B8G8R8X8_UNORM="$1"
 	enable_wined3d_bindless_texture="$1"
 	enable_wined3d_mesa_texture_download="$1"
+	enable_wined3d_rotate_WINED3D_SWAP_EFFECT_DISCARD="$1"
 	enable_wined3d_unset_flip_gdi="$1"
 	enable_wined3d_wined3d_guess_gl_vendor="$1"
 	enable_wined3d_zero_inf_shaders="$1"
@@ -748,6 +749,9 @@ patch_enable ()
 			;;
 		wined3d-mesa_texture_download)
 			enable_wined3d_mesa_texture_download="$2"
+			;;
+		wined3d-rotate-WINED3D_SWAP_EFFECT_DISCARD)
+			enable_wined3d_rotate_WINED3D_SWAP_EFFECT_DISCARD="$2"
 			;;
 		wined3d-unset-flip-gdi)
 			enable_wined3d_unset_flip_gdi="$2"
@@ -3669,6 +3673,18 @@ fi
 # |
 if test "$enable_wined3d_mesa_texture_download" -eq 1; then
 	patch_apply wined3d-mesa_texture_download/0001-wined3d-Use-glReadPixels-for-RT-texture-download.patch
+fi
+
+# Patchset wined3d-rotate-WINED3D_SWAP_EFFECT_DISCARD
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#47331] Stop Steam browser flickering.
+# |
+# | Modified files:
+# |   *	dlls/wined3d/swapchain.c
+# |
+if test "$enable_wined3d_rotate_WINED3D_SWAP_EFFECT_DISCARD" -eq 1; then
+	patch_apply wined3d-rotate-WINED3D_SWAP_EFFECT_DISCARD/0001-wined3d-Do-not-rotate-WINED3D_SWAP_EFFECT_DISCARD-sw.patch
 fi
 
 # Patchset wined3d-unset-flip-gdi
