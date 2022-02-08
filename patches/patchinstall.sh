@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "4364ff8d5c0387edd6fae142affe8e844b291518"
+	echo "54b8c8c7eaafd19780cb4d91b763fe2f20327f50"
 }
 
 # Show version information
@@ -99,7 +99,6 @@ patch_enable_all ()
 	enable_d3dx9_36_CloneEffect="$1"
 	enable_d3dx9_36_D3DXDisassembleShader="$1"
 	enable_d3dx9_36_D3DXOptimizeVertices="$1"
-	enable_d3dx9_36_D3DXSHProjectCubeMap="$1"
 	enable_d3dx9_36_D3DXStubs="$1"
 	enable_d3dx9_36_DDS="$1"
 	enable_d3dx9_36_Filter_Warnings="$1"
@@ -329,9 +328,6 @@ patch_enable ()
 			;;
 		d3dx9_36-D3DXOptimizeVertices)
 			enable_d3dx9_36_D3DXOptimizeVertices="$2"
-			;;
-		d3dx9_36-D3DXSHProjectCubeMap)
-			enable_d3dx9_36_D3DXSHProjectCubeMap="$2"
 			;;
 		d3dx9_36-D3DXStubs)
 			enable_d3dx9_36_D3DXStubs="$2"
@@ -1618,23 +1614,6 @@ fi
 # |
 if test "$enable_d3dx9_36_D3DXOptimizeVertices" -eq 1; then
 	patch_apply d3dx9_36-D3DXOptimizeVertices/0002-d3dx9_36-Add-semi-stub-for-D3DXOptimizeVertices.patch
-fi
-
-# Patchset d3dx9_36-D3DXSHProjectCubeMap
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#46284] Add D3DXSHProjectCubeMap stub
-# |
-# | Modified files:
-# |   *	dlls/d3dx9_24/d3dx9_24.spec, dlls/d3dx9_25/d3dx9_25.spec, dlls/d3dx9_26/d3dx9_26.spec, dlls/d3dx9_27/d3dx9_27.spec,
-# | 	dlls/d3dx9_28/d3dx9_28.spec, dlls/d3dx9_29/d3dx9_29.spec, dlls/d3dx9_30/d3dx9_30.spec, dlls/d3dx9_31/d3dx9_31.spec,
-# | 	dlls/d3dx9_32/d3dx9_32.spec, dlls/d3dx9_33/d3dx9_33.spec, dlls/d3dx9_34/d3dx9_34.spec, dlls/d3dx9_35/d3dx9_35.spec,
-# | 	dlls/d3dx9_36/math.c, dlls/d3dx9_37/d3dx9_37.spec, dlls/d3dx9_38/d3dx9_38.spec, dlls/d3dx9_39/d3dx9_39.spec,
-# | 	dlls/d3dx9_40/d3dx9_40.spec, dlls/d3dx9_41/d3dx9_41.spec, dlls/d3dx9_42/d3dx9_42.spec, dlls/d3dx9_43/d3dx9_43.spec,
-# | 	include/d3dx9math.h
-# |
-if test "$enable_d3dx9_36_D3DXSHProjectCubeMap" -eq 1; then
-	patch_apply d3dx9_36-D3DXSHProjectCubeMap/0001-d3dx9_-Add-D3DXSHProjectCubeMap-stub.patch
 fi
 
 # Patchset d3dx9_36-D3DXStubs
