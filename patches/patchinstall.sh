@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "576cdea0d75498ed948d0ba66a3451ea426f7935"
+	echo "d9f3ea328785d4146a095ce2efbdbb7c1f69f1cf"
 }
 
 # Show version information
@@ -1972,7 +1972,7 @@ fi
 # | 	server/main.c, server/mapping.c, server/mutex.c, server/named_pipe.c, server/object.h, server/process.c,
 # | 	server/process.h, server/protocol.def, server/queue.c, server/registry.c, server/request.c, server/semaphore.c,
 # | 	server/serial.c, server/signal.c, server/sock.c, server/symlink.c, server/thread.c, server/thread.h, server/timer.c,
-# | 	server/token.c, server/winstation.c
+# | 	server/token.c, server/window.c, server/winstation.c
 # |
 if test "$enable_eventfd_synchronization" -eq 1; then
 	patch_apply eventfd_synchronization/0001-configure-Check-for-sys-eventfd.h-ppoll-and-shm_open.patch
