@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "d318f43559dbb0093e22bab1aa0eb9dc01170cc2"
+	echo "cfb1d2058fb47ff3f72501e0aaf35b97ea128036"
 }
 
 # Show version information
@@ -96,7 +96,6 @@ patch_enable_all ()
 	enable_d3drm_IDirect3D3_support="$1"
 	enable_d3dx11_43_D3DX11CreateTextureFromMemory="$1"
 	enable_d3dx9_36_BumpLuminance="$1"
-	enable_d3dx9_36_CloneEffect="$1"
 	enable_d3dx9_36_D3DXDisassembleShader="$1"
 	enable_d3dx9_36_D3DXOptimizeVertices="$1"
 	enable_d3dx9_36_D3DXStubs="$1"
@@ -319,9 +318,6 @@ patch_enable ()
 			;;
 		d3dx9_36-BumpLuminance)
 			enable_d3dx9_36_BumpLuminance="$2"
-			;;
-		d3dx9_36-CloneEffect)
-			enable_d3dx9_36_CloneEffect="$2"
 			;;
 		d3dx9_36-D3DXDisassembleShader)
 			enable_d3dx9_36_D3DXDisassembleShader="$2"
@@ -1571,18 +1567,6 @@ fi
 # |
 if test "$enable_d3dx9_36_BumpLuminance" -eq 1; then
 	patch_apply d3dx9_36-BumpLuminance/0002-d3dx9_36-Add-format-description-for-X8L8V8U8-for-for.patch
-fi
-
-# Patchset d3dx9_36-CloneEffect
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#44635] Improve stub for ID3DXEffectImpl_CloneEffect
-# |
-# | Modified files:
-# |   *	dlls/d3dx9_36/effect.c, dlls/d3dx9_36/tests/effect.c
-# |
-if test "$enable_d3dx9_36_CloneEffect" -eq 1; then
-	patch_apply d3dx9_36-CloneEffect/0001-d3dx9_36-Improve-stub-for-ID3DXEffectImpl_CloneEffec.patch
 fi
 
 # Patchset d3dx9_36-D3DXDisassembleShader
