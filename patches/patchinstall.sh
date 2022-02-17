@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "781277de62822c2bac23dc892a99665cdb140a5e"
+	echo "61db4aa66df85574b7c2e21325b5527ed795dae8"
 }
 
 # Show version information
@@ -169,7 +169,6 @@ patch_enable_all ()
 	enable_packager_DllMain="$1"
 	enable_programs_findstr="$1"
 	enable_programs_systeminfo="$1"
-	enable_riched20_Class_Tests="$1"
 	enable_riched20_IText_Interface="$1"
 	enable_sapi_ISpObjectToken_CreateInstance="$1"
 	enable_sapi_iteration_tokens="$1"
@@ -537,9 +536,6 @@ patch_enable ()
 			;;
 		programs-systeminfo)
 			enable_programs_systeminfo="$2"
-			;;
-		riched20-Class_Tests)
-			enable_riched20_Class_Tests="$2"
 			;;
 		riched20-IText_Interface)
 			enable_riched20_IText_Interface="$2"
@@ -2754,15 +2750,6 @@ fi
 # |
 if test "$enable_programs_systeminfo" -eq 1; then
 	patch_apply programs-systeminfo/0001-systeminfo-add-basic-functionality.patch
-fi
-
-# Patchset riched20-Class_Tests
-# |
-# | Modified files:
-# |   *	dlls/riched20/tests/editor.c
-# |
-if test "$enable_riched20_Class_Tests" -eq 1; then
-	patch_apply riched20-Class_Tests/0001-riched20-tests-Add-a-test-to-see-what-richedit-class.patch
 fi
 
 # Patchset riched20-IText_Interface
