@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "bf42dca35f05bce9996e91f59cc47b5a9e6996b2"
+	echo "53cb28e6d9daa7cbcc190cd02aeaba37c297adc4"
 }
 
 # Show version information
@@ -135,7 +135,6 @@ patch_enable_all ()
 	enable_msi_msi_vcl_get_cost="$1"
 	enable_msxml3_FreeThreadedXMLHTTP60="$1"
 	enable_ntdll_APC_Performance="$1"
-	enable_ntdll_ApiSetMap="$1"
 	enable_ntdll_Builtin_Prot="$1"
 	enable_ntdll_CriticalSection="$1"
 	enable_ntdll_DOS_Attributes="$1"
@@ -434,9 +433,6 @@ patch_enable ()
 			;;
 		ntdll-APC_Performance)
 			enable_ntdll_APC_Performance="$2"
-			;;
-		ntdll-ApiSetMap)
-			enable_ntdll_ApiSetMap="$2"
 			;;
 		ntdll-Builtin_Prot)
 			enable_ntdll_Builtin_Prot="$2"
@@ -2325,18 +2321,6 @@ fi
 # |
 if test "$enable_ntdll_APC_Performance" -eq 1; then
 	patch_apply ntdll-APC_Performance/0001-ntdll-Reuse-old-async-fileio-structures-if-possible.patch
-fi
-
-# Patchset ntdll-ApiSetMap
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#44658] Add dummy apiset to PEB struct
-# |
-# | Modified files:
-# |   *	dlls/ntdll/loader.c, include/Makefile.in, include/apiset.h, include/winternl.h
-# |
-if test "$enable_ntdll_ApiSetMap" -eq 1; then
-	patch_apply ntdll-ApiSetMap/0001-ntdll-Add-dummy-apiset-to-PEB.patch
 fi
 
 # Patchset ntdll-ForceBottomUpAlloc
