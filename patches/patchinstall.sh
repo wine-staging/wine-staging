@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "1b9d48a7b01e2b715af46bc1f8d5fe6f1529782c"
+	echo "18230d23c599f1f5f9dd419dccc11c49117cc3b8"
 }
 
 # Show version information
@@ -1875,6 +1875,7 @@ if test "$enable_ntdll_Junction_Points" -eq 1; then
 	patch_apply ntdll-Junction_Points/0037-ntdll-Strip-the-wine-prefix-from-reparse-point-paths.patch
 	patch_apply ntdll-Junction_Points/0038-ntdll-Add-a-marker-to-reparse-point-paths-to-indicat.patch
 	patch_apply ntdll-Junction_Points/0039-server-Rewrite-absolute-reparse-point-targets-if-the.patch
+	patch_apply ntdll-Junction_Points/0040-Fix-warnings.patch
 fi
 
 # Patchset server-Key_State
