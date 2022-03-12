@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "18230d23c599f1f5f9dd419dccc11c49117cc3b8"
+	echo "330dc601978922aa1d5864d29d94882d6b1990d1"
 }
 
 # Show version information
@@ -3165,7 +3165,7 @@ fi
 # |   *	[#43124] FlashWindowEx: WM_NCACTIVATE behavior is incorrect
 # |
 # | Modified files:
-# |   *	dlls/user32/tests/win.c, dlls/user32/win.c
+# |   *	dlls/user32/tests/win.c, dlls/win32u/window.c
 # |
 if test "$enable_user32_FlashWindowEx" -eq 1; then
 	patch_apply user32-FlashWindowEx/0001-user32-Improve-FlashWindowEx-message-and-return-valu.patch
@@ -3360,7 +3360,7 @@ fi
 # |   *	[#46274] user32: Prevent a recursive loop with the activation messages.
 # |
 # | Modified files:
-# |   *	dlls/user32/focus.c, dlls/user32/tests/msg.c, dlls/user32/win.h
+# |   *	dlls/user32/focus.c, dlls/user32/tests/msg.c, dlls/win32u/input.c, dlls/win32u/ntuser_private.h
 # |
 if test "$enable_user32_recursive_activation" -eq 1; then
 	patch_apply user32-recursive-activation/0001-user32-focus-Prevent-a-recursive-loop-with-the-activ.patch
@@ -3794,7 +3794,7 @@ fi
 # |   *	[#2155] Forward activate window requests to WM using _NET_ACTIVE_WINDOW
 # |
 # | Modified files:
-# |   *	dlls/user32/driver.c, dlls/user32/focus.c, dlls/win32u/driver.c, dlls/winex11.drv/event.c, dlls/winex11.drv/init.c,
+# |   *	dlls/user32/driver.c, dlls/win32u/driver.c, dlls/win32u/input.c, dlls/winex11.drv/event.c, dlls/winex11.drv/init.c,
 # | 	dlls/winex11.drv/window.c, dlls/winex11.drv/x11drv.h, dlls/winex11.drv/x11drv_main.c, include/wine/gdi_driver.h
 # |
 if test "$enable_winex11__NET_ACTIVE_WINDOW" -eq 1; then
