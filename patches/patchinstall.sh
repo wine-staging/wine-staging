@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "670a1e81b465f67cb7e49fdb84c1fc96853fc9d7"
+	echo "62df608d3ed84aac7ce517fd07ea13e48b49b08c"
 }
 
 # Show version information
@@ -1413,7 +1413,7 @@ fi
 # Patchset Pipelight
 # |
 # | Modified files:
-# |   *	dlls/user32/message.c, dlls/user32/tests/msg.c, dlls/winex11.drv/init.c, dlls/winex11.drv/opengl.c,
+# |   *	dlls/user32/tests/msg.c, dlls/win32u/message.c, dlls/winex11.drv/init.c, dlls/winex11.drv/opengl.c,
 # | 	dlls/winex11.drv/x11drv.h
 # |
 if test "$enable_Pipelight" -eq 1; then
