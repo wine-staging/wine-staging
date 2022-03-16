@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "8a52d3e93f5690fd0833c228d54a996a784afad7"
+	echo "670a1e81b465f67cb7e49fdb84c1fc96853fc9d7"
 }
 
 # Show version information
@@ -3291,7 +3291,7 @@ fi
 # |   *	[#40262] Correct order of windows messages.
 # |
 # | Modified files:
-# |   *	dlls/user32/tests/msg.c, dlls/user32/winpos.c
+# |   *	dlls/user32/tests/msg.c, dlls/user32/winpos.c, dlls/win32u/window.c
 # |
 if test "$enable_user32_message_order" -eq 1; then
 	patch_apply user32-message-order/0001-user32-Fix-messages-sent-on-a-window-without-WS_CHIL.patch
