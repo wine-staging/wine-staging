@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "62df608d3ed84aac7ce517fd07ea13e48b49b08c"
+	echo "083dea7fce4372840ac18176496a7d05dadd5ad8"
 }
 
 # Show version information
@@ -3291,7 +3291,7 @@ fi
 # |   *	[#40262] Correct order of windows messages.
 # |
 # | Modified files:
-# |   *	dlls/user32/tests/msg.c, dlls/user32/winpos.c, dlls/win32u/window.c
+# |   *	dlls/user32/tests/msg.c, dlls/win32u/window.c
 # |
 if test "$enable_user32_message_order" -eq 1; then
 	patch_apply user32-message-order/0001-user32-Fix-messages-sent-on-a-window-without-WS_CHIL.patch
@@ -3591,8 +3591,9 @@ fi
 # |   *	[#44514] - wined3d: Use bindless textures for GLSL shaders.
 # |
 # | Modified files:
-# |   *	dlls/wined3d/adapter_gl.c, dlls/wined3d/context_gl.c, dlls/wined3d/device.c, dlls/wined3d/glsl_shader.c,
-# | 	dlls/wined3d/texture.c, dlls/wined3d/view.c, dlls/wined3d/wined3d_gl.h, dlls/wined3d/wined3d_private.h
+# |   *	dlls/wined3d/adapter_gl.c, dlls/wined3d/arb_program_shader.c, dlls/wined3d/context_gl.c, dlls/wined3d/device.c,
+# | 	dlls/wined3d/glsl_shader.c, dlls/wined3d/shader.c, dlls/wined3d/texture.c, dlls/wined3d/view.c,
+# | 	dlls/wined3d/wined3d_gl.h, dlls/wined3d/wined3d_private.h
 # |
 if test "$enable_wined3d_bindless_texture" -eq 1; then
 	patch_apply wined3d-bindless-texture/0001-wined3d-Use-bindless-textures-for-GLSL-shaders.patch
