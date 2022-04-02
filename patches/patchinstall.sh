@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "3c9d2cbaea2039d8ce5d8180ed231b0be6cfa072"
+	echo "0de8d01b09b1cc7ca34f7ae3890b4a416ff801fe"
 }
 
 # Show version information
@@ -3318,7 +3318,7 @@ fi
 # |   *	[#42675] Overwatch: Phantom mouse input / view pulled up to ceiling
 # |
 # | Modified files:
-# |   *	dlls/user32/input.c, dlls/user32/message.c, dlls/wineandroid.drv/keyboard.c, dlls/wineandroid.drv/window.c,
+# |   *	dlls/win32u/input.c, dlls/win32u/message.c, dlls/wineandroid.drv/keyboard.c, dlls/wineandroid.drv/window.c,
 # | 	dlls/winemac.drv/ime.c, dlls/winemac.drv/keyboard.c, dlls/winemac.drv/mouse.c, dlls/winex11.drv/desktop.c,
 # | 	dlls/winex11.drv/event.c, dlls/winex11.drv/keyboard.c, dlls/winex11.drv/mouse.c, dlls/winex11.drv/window.c,
 # | 	dlls/winex11.drv/x11drv.h, dlls/winex11.drv/x11drv_main.c, server/protocol.def, server/queue.c
