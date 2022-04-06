@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "8091f3a0b8463d41049ed4ade98c79f82c86ebbc"
+	echo "5a815669e8e7a3f0a37648510494f8b36c29c1f6"
 }
 
 # Show version information
@@ -3239,7 +3239,8 @@ fi
 # |   *	[#9512] Make sure popups don't block access to objects underneath in DVDPro
 # |
 # | Modified files:
-# |   *	dlls/user32/message.c, dlls/user32/tests/input.c, dlls/winex11.drv/bitblt.c, server/protocol.def, server/window.c
+# |   *	dlls/user32/message.c, dlls/user32/tests/input.c, dlls/win32u/message.c, dlls/winex11.drv/bitblt.c, server/protocol.def,
+# | 	server/window.c
 # |
 if test "$enable_user32_Mouse_Message_Hwnd" -eq 1; then
 	patch_apply user32-Mouse_Message_Hwnd/0001-user32-Try-harder-to-find-a-target-for-mouse-message.patch
