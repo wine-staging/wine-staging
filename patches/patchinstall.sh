@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "5a815669e8e7a3f0a37648510494f8b36c29c1f6"
+	echo "5b4009e8c27c16bdb9a5638c316a72aaee219158"
 }
 
 # Show version information
@@ -247,7 +247,6 @@ patch_enable_all ()
 	enable_winemenubuilder_integration="$1"
 	enable_wineps_drv_PostScript_Fixes="$1"
 	enable_winepulse_PulseAudio_Support="$1"
-	enable_winex11_CandidateWindowPos="$1"
 	enable_winex11_MWM_Decorations="$1"
 	enable_winex11_UpdateLayeredWindow="$1"
 	enable_winex11_Vulkan_support="$1"
@@ -769,9 +768,6 @@ patch_enable ()
 			;;
 		winepulse-PulseAudio_Support)
 			enable_winepulse_PulseAudio_Support="$2"
-			;;
-		winex11-CandidateWindowPos)
-			enable_winex11_CandidateWindowPos="$2"
 			;;
 		winex11-MWM_Decorations)
 			enable_winex11_MWM_Decorations="$2"
@@ -3740,19 +3736,6 @@ if test "$enable_winepulse_PulseAudio_Support" -eq 1; then
 	patch_apply winepulse-PulseAudio_Support/0001-winepulse.drv-Use-a-separate-mainloop-and-ctx-for-pu.patch
 fi
 
-# Patchset winex11-CandidateWindowPos
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#30938] Update a XIM candidate position when cursor location changes
-# |
-# | Modified files:
-# |   *	dlls/user32/caret.c, dlls/user32/driver.c, dlls/win32u/driver.c, dlls/winex11.drv/init.c, dlls/winex11.drv/x11drv.h,
-# | 	dlls/winex11.drv/xim.c, include/wine/gdi_driver.h
-# |
-if test "$enable_winex11_CandidateWindowPos" -eq 1; then
-	patch_apply winex11-CandidateWindowPos/0001-winex11.drv-Update-a-candidate-window-s-position-wit.patch
-fi
-
 # Patchset winex11-MWM_Decorations
 # |
 # | This patchset fixes the following Wine bugs:
@@ -3796,8 +3779,8 @@ fi
 # |   *	[#2155] Forward activate window requests to WM using _NET_ACTIVE_WINDOW
 # |
 # | Modified files:
-# |   *	dlls/user32/driver.c, dlls/win32u/driver.c, dlls/win32u/input.c, dlls/winex11.drv/event.c, dlls/winex11.drv/init.c,
-# | 	dlls/winex11.drv/window.c, dlls/winex11.drv/x11drv.h, dlls/winex11.drv/x11drv_main.c, include/wine/gdi_driver.h
+# |   *	dlls/win32u/driver.c, dlls/win32u/input.c, dlls/winex11.drv/event.c, dlls/winex11.drv/init.c, dlls/winex11.drv/window.c,
+# | 	dlls/winex11.drv/x11drv.h, dlls/winex11.drv/x11drv_main.c, include/wine/gdi_driver.h
 # |
 if test "$enable_winex11__NET_ACTIVE_WINDOW" -eq 1; then
 	patch_apply winex11-_NET_ACTIVE_WINDOW/0001-winex11.drv-Add-support-for-_NET_ACTIVE_WINDOW.patch
