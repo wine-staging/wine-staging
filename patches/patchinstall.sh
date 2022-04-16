@@ -3235,8 +3235,7 @@ fi
 # |   *	[#9512] Make sure popups don't block access to objects underneath in DVDPro
 # |
 # | Modified files:
-# |   *	dlls/user32/message.c, dlls/user32/tests/input.c, dlls/win32u/message.c, dlls/winex11.drv/bitblt.c, server/protocol.def,
-# | 	server/window.c
+# |   *	dlls/user32/tests/input.c, dlls/win32u/message.c, dlls/winex11.drv/bitblt.c, server/protocol.def, server/window.c
 # |
 if test "$enable_user32_Mouse_Message_Hwnd" -eq 1; then
 	patch_apply user32-Mouse_Message_Hwnd/0001-user32-Try-harder-to-find-a-target-for-mouse-message.patch
