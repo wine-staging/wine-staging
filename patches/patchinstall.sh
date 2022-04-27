@@ -86,7 +86,6 @@ patch_enable_all ()
 	enable_Pipelight="$1"
 	enable_Staging="$1"
 	enable_advapi32_LsaLookupPrivilegeName="$1"
-	enable_api_ms_win_Stub_DLLs="$1"
 	enable_cmd_launch_association="$1"
 	enable_comctl32_rebar_capture="$1"
 	enable_comctl32_version_6="$1"
@@ -285,9 +284,6 @@ patch_enable ()
 			;;
 		advapi32-LsaLookupPrivilegeName)
 			enable_advapi32_LsaLookupPrivilegeName="$2"
-			;;
-		api-ms-win-Stub_DLLs)
-			enable_api_ms_win_Stub_DLLs="$2"
 			;;
 		cmd-launch-association)
 			enable_cmd_launch_association="$2"
@@ -1428,21 +1424,6 @@ fi
 # |
 if test "$enable_advapi32_LsaLookupPrivilegeName" -eq 1; then
 	patch_apply advapi32-LsaLookupPrivilegeName/0001-advapi32-Fix-error-code-when-calling-LsaOpenPolicy-f.patch
-fi
-
-# Patchset api-ms-win-Stub_DLLs
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/ext-ms-win-appmodel-usercontext-l1-1-0/Makefile.in, dlls/ext-ms-win-appmodel-usercontext-l1-1-0/ext-
-# | 	ms-win-appmodel-usercontext-l1-1-0.spec, dlls/ext-ms-win-appmodel-usercontext-l1-1-0/main.c, dlls/ext-ms-win-xaml-
-# | 	pal-l1-1-0/Makefile.in, dlls/ext-ms-win-xaml-pal-l1-1-0/ext-ms-win-xaml-pal-l1-1-0.spec, dlls/ext-ms-win-xaml-
-# | 	pal-l1-1-0/main.c, dlls/iertutil/Makefile.in, dlls/iertutil/iertutil.spec, dlls/iertutil/main.c
-# |
-if test "$enable_api_ms_win_Stub_DLLs" -eq 1; then
-	patch_apply api-ms-win-Stub_DLLs/0006-iertutil-Add-dll-and-add-stub-for-ordinal-811.patch
-	patch_apply api-ms-win-Stub_DLLs/0009-ext-ms-win-xaml-pal-l1-1-0-Add-dll-and-add-stub-for-.patch
-	patch_apply api-ms-win-Stub_DLLs/0010-ext-ms-win-appmodel-usercontext-l1-1-0-Add-dll-and-a.patch
-	patch_apply api-ms-win-Stub_DLLs/0012-ext-ms-win-xaml-pal-l1-1-0-Add-stub-for-GetThemeServ.patch
 fi
 
 # Patchset cmd-launch-association
