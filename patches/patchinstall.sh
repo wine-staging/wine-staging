@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "2e9a72759cc8508d1ddb7be5d813fdd7bc64e6a5"
+	echo "64b96eec7d0aea470f897a3ed0ac9e1b3a680cc5"
 }
 
 # Show version information
@@ -154,7 +154,6 @@ patch_enable_all ()
 	enable_ntdll_Syscall_Emulation="$1"
 	enable_ntdll_WRITECOPY="$1"
 	enable_ntdll_ext4_case_folder="$1"
-	enable_ntoskrnl_Stubs="$1"
 	enable_nvapi_Stub_DLL="$1"
 	enable_nvcuda_CUDA_Support="$1"
 	enable_nvcuvid_CUDA_Video_Support="$1"
@@ -488,9 +487,6 @@ patch_enable ()
 			;;
 		ntdll-ext4-case-folder)
 			enable_ntdll_ext4_case_folder="$2"
-			;;
-		ntoskrnl-Stubs)
-			enable_ntoskrnl_Stubs="$2"
 			;;
 		nvapi-Stub_DLL)
 			enable_nvapi_Stub_DLL="$2"
@@ -1309,13 +1305,6 @@ if test "$enable_fltmgr_sys_FltBuildDefaultSecurityDescriptor" -eq 1; then
 	enable_winedevice_Default_Drivers=1
 fi
 
-if test "$enable_winedevice_Default_Drivers" -eq 1; then
-	if test "$enable_ntoskrnl_Stubs" -gt 1; then
-		abort "Patchset ntoskrnl-Stubs disabled, but winedevice-Default_Drivers depends on that."
-	fi
-	enable_ntoskrnl_Stubs=1
-fi
-
 if test "$enable_eventfd_synchronization" -eq 1; then
 	if test "$enable_ntdll_Junction_Points" -gt 1; then
 		abort "Patchset ntdll-Junction_Points disabled, but eventfd_synchronization depends on that."
@@ -1967,20 +1956,7 @@ if test "$enable_explorer_Video_Registry_Key" -eq 1; then
 	patch_apply explorer-Video_Registry_Key/0001-explorer-Create-CurrentControlSet-Control-Video-regi.patch
 fi
 
-# Patchset ntoskrnl-Stubs
-# |
-# | Modified files:
-# |   *	dlls/ntoskrnl.exe/ntoskrnl.c, dlls/ntoskrnl.exe/ntoskrnl.exe.spec
-# |
-if test "$enable_ntoskrnl_Stubs" -eq 1; then
-	patch_apply ntoskrnl-Stubs/0009-ntoskrnl.exe-Implement-MmMapLockedPages-and-MmUnmapL.patch
-	patch_apply ntoskrnl-Stubs/0011-ntoskrnl.exe-Add-IoGetDeviceAttachmentBaseRef-stub.patch
-fi
-
 # Patchset winedevice-Default_Drivers
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntoskrnl-Stubs
 # |
 # | Modified files:
 # |   *	configure.ac, dlls/dxgkrnl.sys/Makefile.in, dlls/dxgkrnl.sys/dxgkrnl.sys.spec, dlls/dxgkrnl.sys/main.c,
@@ -1998,7 +1974,7 @@ fi
 # Patchset fltmgr.sys-FltBuildDefaultSecurityDescriptor
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntoskrnl-Stubs, winedevice-Default_Drivers
+# |   *	winedevice-Default_Drivers
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#49089] fltmgr.sys: Implement FltBuildDefaultSecurityDescriptor
