@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "64b96eec7d0aea470f897a3ed0ac9e1b3a680cc5"
+	echo "f91f4348356285ede39915f0d10ffae11c4871e5"
 }
 
 # Show version information
@@ -122,7 +122,6 @@ patch_enable_all ()
 	enable_kernel32_Debugger="$1"
 	enable_kernel32_Job_Tests="$1"
 	enable_kernel32_Processor_Group="$1"
-	enable_kernelbase_ResolveLocaleName="$1"
 	enable_krnl386_exe16_GDT_LDT_Emulation="$1"
 	enable_krnl386_exe16_Invalid_Console_Handles="$1"
 	enable_libs_Unicode_Collation="$1"
@@ -392,9 +391,6 @@ patch_enable ()
 			;;
 		kernel32-Processor_Group)
 			enable_kernel32_Processor_Group="$2"
-			;;
-		kernelbase-ResolveLocaleName)
-			enable_kernelbase_ResolveLocaleName="$2"
 			;;
 		krnl386.exe16-GDT_LDT_Emulation)
 			enable_krnl386_exe16_GDT_LDT_Emulation="$2"
@@ -2099,19 +2095,6 @@ fi
 # |
 if test "$enable_kernel32_Processor_Group" -eq 1; then
 	patch_apply kernel32-Processor_Group/0002-kernel32-Add-stub-for-SetThreadIdealProcessorEx.patch
-fi
-
-# Patchset kernelbase-ResolveLocaleName
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#52407] kernelbase: Improve stub for ResolveLocaleName
-# |   *	[#52867] System.Globalization.CultureInfo.GetCultureInfo fails for 'en' value
-# |
-# | Modified files:
-# |   *	dlls/kernel32/tests/locale.c, dlls/kernelbase/locale.c
-# |
-if test "$enable_kernelbase_ResolveLocaleName" -eq 1; then
-	patch_apply kernelbase-ResolveLocaleName/0001-kernelbase-Implement-ResolveLocaleName.patch
 fi
 
 # Patchset krnl386.exe16-GDT_LDT_Emulation
