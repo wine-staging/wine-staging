@@ -207,6 +207,7 @@ patch_enable_all ()
 	enable_user32_QueryDisplayConfig="$1"
 	enable_user32_Refresh_MDI_Menus="$1"
 	enable_user32_ScrollWindowEx="$1"
+	enable_user32_alttab_focus="$1"
 	enable_user32_message_order="$1"
 	enable_user32_msgbox_Support_WM_COPY_mesg="$1"
 	enable_user32_rawinput_mouse="$1"
@@ -646,6 +647,9 @@ patch_enable ()
 			;;
 		user32-ScrollWindowEx)
 			enable_user32_ScrollWindowEx="$2"
+			;;
+		user32-alttab-focus)
+			enable_user32_alttab_focus="$2"
 			;;
 		user32-message-order)
 			enable_user32_message_order="$2"
@@ -1197,6 +1201,13 @@ if test "$enable_user32_rawinput_mouse_experimental" -eq 1; then
 		abort "Patchset user32-rawinput-mouse disabled, but user32-rawinput-mouse-experimental depends on that."
 	fi
 	enable_user32_rawinput_mouse=1
+fi
+
+if test "$enable_user32_alttab_focus" -eq 1; then
+	if test "$enable_winex11__NET_ACTIVE_WINDOW" -gt 1; then
+		abort "Patchset winex11-_NET_ACTIVE_WINDOW disabled, but user32-alttab-focus depends on that."
+	fi
+	enable_winex11__NET_ACTIVE_WINDOW=1
 fi
 
 if test "$enable_stdole32_tlb_SLTG_Typelib" -eq 1; then
@@ -3209,6 +3220,35 @@ if test "$enable_user32_ScrollWindowEx" -eq 1; then
 	patch_apply user32-ScrollWindowEx/0001-user32-Fix-return-value-of-ScrollWindowEx-for-invisi.patch
 fi
 
+# Patchset winex11-_NET_ACTIVE_WINDOW
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#2155] Forward activate window requests to WM using _NET_ACTIVE_WINDOW
+# |
+# | Modified files:
+# |   *	dlls/win32u/driver.c, dlls/win32u/input.c, dlls/winex11.drv/event.c, dlls/winex11.drv/init.c, dlls/winex11.drv/window.c,
+# | 	dlls/winex11.drv/x11drv.h, dlls/winex11.drv/x11drv_main.c, include/wine/gdi_driver.h
+# |
+if test "$enable_winex11__NET_ACTIVE_WINDOW" -eq 1; then
+	patch_apply winex11-_NET_ACTIVE_WINDOW/0001-winex11.drv-Add-support-for-_NET_ACTIVE_WINDOW.patch
+	patch_apply winex11-_NET_ACTIVE_WINDOW/0002-user32-Before-asking-a-WM-to-activate-a-window-make-.patch
+fi
+
+# Patchset user32-alttab-focus
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	winex11-_NET_ACTIVE_WINDOW
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#48121] Improve Alt+tab for unity games.
+# |
+# | Modified files:
+# |   *	dlls/win32u/input.c
+# |
+if test "$enable_user32_alttab_focus" -eq 1; then
+	patch_apply user32-alttab-focus/0001-Send-WM_NCPOINTERUP-on-focus-regain.patch
+fi
+
 # Patchset user32-message-order
 # |
 # | This patchset fixes the following Wine bugs:
@@ -3711,20 +3751,6 @@ fi
 # |
 if test "$enable_winex11_Vulkan_support" -eq 1; then
 	patch_apply winex11-Vulkan_support/0001-winex11-Specify-a-default-vulkan-driver-if-one-not-f.patch
-fi
-
-# Patchset winex11-_NET_ACTIVE_WINDOW
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#2155] Forward activate window requests to WM using _NET_ACTIVE_WINDOW
-# |
-# | Modified files:
-# |   *	dlls/win32u/driver.c, dlls/win32u/input.c, dlls/winex11.drv/event.c, dlls/winex11.drv/init.c, dlls/winex11.drv/window.c,
-# | 	dlls/winex11.drv/x11drv.h, dlls/winex11.drv/x11drv_main.c, include/wine/gdi_driver.h
-# |
-if test "$enable_winex11__NET_ACTIVE_WINDOW" -eq 1; then
-	patch_apply winex11-_NET_ACTIVE_WINDOW/0001-winex11.drv-Add-support-for-_NET_ACTIVE_WINDOW.patch
-	patch_apply winex11-_NET_ACTIVE_WINDOW/0002-user32-Before-asking-a-WM-to-activate-a-window-make-.patch
 fi
 
 # Patchset winex11-WM_WINDOWPOSCHANGING
