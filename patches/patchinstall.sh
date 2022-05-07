@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "7de36f8e98b2cbbdcc360bdba96a5fe83e815d1a"
+	echo "3ded60bd1654dc689d24a23305f4a93acce3a6f2"
 }
 
 # Show version information
@@ -254,7 +254,6 @@ patch_enable_all ()
 	enable_winex11_XEMBED="$1"
 	enable_winex11__NET_ACTIVE_WINDOW="$1"
 	enable_winex11_ime_check_thread_data="$1"
-	enable_winex11_key_translation="$1"
 	enable_winex11_wglShareLists="$1"
 	enable_winex11_drv_Query_server_position="$1"
 	enable_wininet_Cleanup="$1"
@@ -788,9 +787,6 @@ patch_enable ()
 			;;
 		winex11-ime-check-thread-data)
 			enable_winex11_ime_check_thread_data="$2"
-			;;
-		winex11-key_translation)
-			enable_winex11_key_translation="$2"
 			;;
 		winex11-wglShareLists)
 			enable_winex11_wglShareLists="$2"
@@ -3800,21 +3796,6 @@ fi
 # |
 if test "$enable_winex11_ime_check_thread_data" -eq 1; then
 	patch_apply winex11-ime-check-thread-data/0001-winex11.drv-handle-missing-thread-data-in-X11DRV_get_ic.patch
-fi
-
-# Patchset winex11-key_translation
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#30984] Improve key translation.
-# |   *	[#45605] Letter keys doesn't work in DirectX aplications
-# |
-# | Modified files:
-# |   *	dlls/winex11.drv/keyboard.c
-# |
-if test "$enable_winex11_key_translation" -eq 1; then
-	patch_apply winex11-key_translation/0001-winex11-Match-keyboard-in-Unicode.patch
-	patch_apply winex11-key_translation/0002-winex11-Fix-more-key-translation.patch
-	patch_apply winex11-key_translation/0003-winex11.drv-Fix-main-Russian-keyboard-layout.patch
 fi
 
 # Patchset winex11-wglShareLists
