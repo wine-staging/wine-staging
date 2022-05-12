@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "3ded60bd1654dc689d24a23305f4a93acce3a6f2"
+	echo "b35faeb5035a8ed1480577a34603170fc0e2f901"
 }
 
 # Show version information
@@ -92,7 +92,6 @@ patch_enable_all ()
 	enable_comdlg32_lpstrFileTitle="$1"
 	enable_crypt32_CMS_Certificates="$1"
 	enable_cryptext_CryptExtOpenCER="$1"
-	enable_d3drm_IDirect3D3_support="$1"
 	enable_d3dx11_43_D3DX11CreateTextureFromMemory="$1"
 	enable_d3dx9_36_BumpLuminance="$1"
 	enable_d3dx9_36_D3DXDisassembleShader="$1"
@@ -301,9 +300,6 @@ patch_enable ()
 			;;
 		cryptext-CryptExtOpenCER)
 			enable_cryptext_CryptExtOpenCER="$2"
-			;;
-		d3drm-IDirect3D3-support)
-			enable_d3drm_IDirect3D3_support="$2"
 			;;
 		d3dx11_43-D3DX11CreateTextureFromMemory)
 			enable_d3dx11_43_D3DX11CreateTextureFromMemory="$2"
@@ -1490,18 +1486,6 @@ fi
 # |
 if test "$enable_cryptext_CryptExtOpenCER" -eq 1; then
 	patch_apply cryptext-CryptExtOpenCER/0001-cryptext-Implement-CryptExtOpenCER.patch
-fi
-
-# Patchset d3drm-IDirect3D3-support
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#39346] Support IDirect3D3 when creating device.
-# |
-# | Modified files:
-# |   *	dlls/d3drm/device.c
-# |
-if test "$enable_d3drm_IDirect3D3_support" -eq 1; then
-	patch_apply d3drm-IDirect3D3-support/0001-d3drm-Support-IDirect3D3-when-creating-device.patch
 fi
 
 # Patchset d3dx11_43-D3DX11CreateTextureFromMemory
