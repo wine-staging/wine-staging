@@ -108,6 +108,7 @@ patch_enable_all ()
 	enable_dinput_joy_mappings="$1"
 	enable_dsound_EAX="$1"
 	enable_dsound_Fast_Mixer="$1"
+	enable_dwmapi_DwmGetCompositionTimingInfo="$1"
 	enable_dwrite_FontFallback="$1"
 	enable_eventfd_synchronization="$1"
 	enable_explorer_Video_Registry_Key="$1"
@@ -347,6 +348,9 @@ patch_enable ()
 			;;
 		dsound-Fast_Mixer)
 			enable_dsound_Fast_Mixer="$2"
+			;;
+		dwmapi-DwmGetCompositionTimingInfo)
+			enable_dwmapi_DwmGetCompositionTimingInfo="$2"
 			;;
 		dwrite-FontFallback)
 			enable_dwrite_FontFallback="$2"
@@ -1717,6 +1721,18 @@ if test "$enable_dsound_EAX" -eq 1; then
 	patch_apply dsound-EAX/0021-dsound-Add-stub-support-for-DSPROPSETID_EAX20_Buffer.patch
 	patch_apply dsound-EAX/0022-dsound-Enable-EAX-by-default.patch
 	patch_apply dsound-EAX/0023-dsound-Fake-success-for-EAX-Set-Buffer-ListenerPrope.patch
+fi
+
+# Patchset dwmapi-DwmGetCompositionTimingInfo
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#53038] - dwmapi: Supply some defaults values for DwmGetCompositionTimingInfo.
+# |
+# | Modified files:
+# |   *	dlls/dwmapi/dwmapi_main.c
+# |
+if test "$enable_dwmapi_DwmGetCompositionTimingInfo" -eq 1; then
+	patch_apply dwmapi-DwmGetCompositionTimingInfo/0001-dwmapi-DwmGetCompositionTimingInfo-supply-defaults.patch
 fi
 
 # Patchset dwrite-FontFallback
