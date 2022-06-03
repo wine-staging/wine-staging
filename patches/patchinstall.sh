@@ -1727,12 +1727,14 @@ fi
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#53038] - dwmapi: Supply some defaults values for DwmGetCompositionTimingInfo.
+# |   *	[#53035] - dwmapi: DwmFlush return S_OK.
 # |
 # | Modified files:
-# |   *	dlls/dwmapi/dwmapi_main.c
+# |   *	dlls/dwmapi/Makefile.in, dlls/dwmapi/dwmapi_main.c, dlls/dwmapi/tests/Makefile.in, dlls/dwmapi/tests/dwmapi.c
 # |
 if test "$enable_dwmapi_DwmGetCompositionTimingInfo" -eq 1; then
-	patch_apply dwmapi-DwmGetCompositionTimingInfo/0001-dwmapi-DwmGetCompositionTimingInfo-supply-defaults.patch
+	patch_apply dwmapi-DwmGetCompositionTimingInfo/0001-dwmapi-Fill-rateRefresh-rateCompose-and-qpcRefreshPe.patch
+	patch_apply dwmapi-DwmGetCompositionTimingInfo/0002-dwmapi-Return-S_OK-from-DwmFlush.patch
 fi
 
 # Patchset dwrite-FontFallback

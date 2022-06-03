@@ -1,0 +1,134 @@
+From bdd925e61fa6ba20272960bfea8e0638d20060f1 Mon Sep 17 00:00:00 2001
+From: Jactry Zeng <jzeng@codeweavers.com>
+Date: Fri, 3 Jun 2022 02:50:29 -0500
+Subject: [PATCH 1/2] dwmapi: Fill rateRefresh/rateCompose and qpcRefreshPeriod
+ of DWM_TIMING_INFO from DwmGetCompositionTimingInfo().
+
+Wine-Bug: https://bugs.winehq.org/show_bug.cgi?id=53035
+Wine-Bug: https://bugs.winehq.org/show_bug.cgi?id=53038
+Signed-off-by: Jactry Zeng <jzeng@codeweavers.com>
+---
+ dlls/dwmapi/Makefile.in       |  1 +
+ dlls/dwmapi/dwmapi_main.c     | 27 ++++++++++++++++++++++++++-
+ dlls/dwmapi/tests/Makefile.in |  2 +-
+ dlls/dwmapi/tests/dwmapi.c    | 22 ++++++++++++++++++++++
+ 4 files changed, 50 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/dwmapi/Makefile.in b/dlls/dwmapi/Makefile.in
+index e63dbc2ea00..37411a57608 100644
+--- a/dlls/dwmapi/Makefile.in
++++ b/dlls/dwmapi/Makefile.in
+@@ -1,4 +1,5 @@
+ MODULE    = dwmapi.dll
++IMPORTS   = user32
+ IMPORTLIB = dwmapi
+ 
+ EXTRADLLFLAGS = -Wb,--prefer-native
+diff --git a/dlls/dwmapi/dwmapi_main.c b/dlls/dwmapi/dwmapi_main.c
+index 6bb086a87d1..1fb522e389a 100644
+--- a/dlls/dwmapi/dwmapi_main.c
++++ b/dlls/dwmapi/dwmapi_main.c
+@@ -211,12 +211,28 @@ HRESULT WINAPI DwmRegisterThumbnail(HWND dest, HWND src, PHTHUMBNAIL thumbnail_i
+     return E_NOTIMPL;
+ }
+ 
++static int get_display_frequency(void)
++{
++    DEVMODEA mode;
++
++    memset(&mode, 0, sizeof(mode));
++    mode.dmSize = sizeof(mode);
++    if (EnumDisplaySettingsA(NULL, ENUM_CURRENT_SETTINGS, &mode))
++        return mode.dmDisplayFrequency;
++    else
++    {
++        WARN("Failed to query display frequency, returning a fallback value.\n");
++        return 60;
++    }
++}
++
+ /**********************************************************************
+  *           DwmGetCompositionTimingInfo         (DWMAPI.@)
+  */
+ HRESULT WINAPI DwmGetCompositionTimingInfo(HWND hwnd, DWM_TIMING_INFO *info)
+ {
+-    static int i;
++    LARGE_INTEGER performance_frequency;
++    static int i, display_frequency;
+ 
+     if (!info)
+         return E_INVALIDARG;
+@@ -229,6 +245,15 @@ HRESULT WINAPI DwmGetCompositionTimingInfo(HWND hwnd, DWM_TIMING_INFO *info)
+     memset(info, 0, info->cbSize);
+     info->cbSize = sizeof(DWM_TIMING_INFO);
+ 
++    display_frequency = get_display_frequency();
++    info->rateRefresh.uiNumerator = display_frequency;
++    info->rateRefresh.uiDenominator = 1;
++    info->rateCompose.uiNumerator = display_frequency;
++    info->rateCompose.uiDenominator = 1;
++
++    QueryPerformanceFrequency(&performance_frequency);
++    info->qpcRefreshPeriod = performance_frequency.QuadPart / display_frequency;
++
+     return S_OK;
+ }
+ 
+diff --git a/dlls/dwmapi/tests/Makefile.in b/dlls/dwmapi/tests/Makefile.in
+index 6c6130401d6..e819e3ca09a 100644
+--- a/dlls/dwmapi/tests/Makefile.in
++++ b/dlls/dwmapi/tests/Makefile.in
+@@ -1,5 +1,5 @@
+ TESTDLL = dwmapi.dll
+-IMPORTS = dwmapi
++IMPORTS = dwmapi user32
+ 
+ C_SRCS = \
+ 	dwmapi.c
+diff --git a/dlls/dwmapi/tests/dwmapi.c b/dlls/dwmapi/tests/dwmapi.c
+index 696aa9c9d86..29dbcbe74bd 100644
+--- a/dlls/dwmapi/tests/dwmapi.c
++++ b/dlls/dwmapi/tests/dwmapi.c
+@@ -35,7 +35,11 @@ static void test_DwmIsCompositionEnabled(void)
+ 
+ static void test_DwmGetCompositionTimingInfo(void)
+ {
++    LARGE_INTEGER performance_frequency;
++    int result, display_frequency;
+     DWM_TIMING_INFO timing_info;
++    QPC_TIME refresh_period;
++    DEVMODEA mode;
+     BOOL enabled;
+     HRESULT hr;
+ 
+@@ -56,9 +60,27 @@ static void test_DwmGetCompositionTimingInfo(void)
+     hr = DwmGetCompositionTimingInfo(NULL, &timing_info);
+     ok(hr == MILERR_MISMATCHED_SIZE, "Got hr %#lx.\n", hr);
+ 
++    memset(&mode, 0, sizeof(mode));
++    mode.dmSize = sizeof(mode);
++    result = EnumDisplaySettingsA(NULL, ENUM_CURRENT_SETTINGS, &mode);
++    ok(!!result, "Failed to get display mode %#lx.\n", GetLastError());
++    display_frequency = mode.dmDisplayFrequency;
++    ok(!!QueryPerformanceFrequency(&performance_frequency), "Failed to get performance counter frequency.\n");
++    refresh_period = performance_frequency.QuadPart / display_frequency;
++
+     timing_info.cbSize = sizeof(timing_info);
+     hr = DwmGetCompositionTimingInfo(NULL, &timing_info);
+     ok(hr == S_OK, "Got hr %#lx.\n", hr);
++    ok(timing_info.cbSize == sizeof(timing_info), "Got wrong struct size %d.\n", timing_info.cbSize);
++    ok(timing_info.rateRefresh.uiDenominator == 1 && timing_info.rateRefresh.uiNumerator == display_frequency,
++            "Got wrong monitor refresh rate %d/%d.\n", timing_info.rateRefresh.uiDenominator,
++            timing_info.rateRefresh.uiNumerator);
++    ok(timing_info.rateCompose.uiDenominator == 1 && timing_info.rateCompose.uiNumerator == display_frequency,
++            "Got wrong composition rate %d/%d.\n", timing_info.rateCompose.uiDenominator,
++            timing_info.rateCompose.uiNumerator);
++    ok(timing_info.qpcRefreshPeriod == refresh_period
++            || broken(timing_info.qpcRefreshPeriod == display_frequency), /* win10 v1507 */
++            "Got wrong monitor refresh period %s.\n", wine_dbgstr_longlong(timing_info.qpcRefreshPeriod));
+ }
+ 
+ START_TEST(dwmapi)
+-- 
+2.35.1
+
