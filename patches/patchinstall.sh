@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "631f4d5e42b7c2f705eb4b40eeea0ce1866bf513"
+	echo "d95780ba39816e3eb1139366236f3835564beadd"
 }
 
 # Show version information
@@ -3934,7 +3934,6 @@ fi
 if test "$enable_xactengine3_7_callbacks" -eq 1; then
 	patch_apply xactengine3_7-callbacks/0001-Add-support-for-private-contexts.patch
 	patch_apply xactengine3_7-callbacks/0002-xactengine3_7-notifications.patch
-	patch_apply xactengine3_7-callbacks/0003-Send-NOTIFY_CUESTOP-when-Stop-is-called.patch
 	patch_apply xactengine3_7-callbacks/0004-xactengine3_7-Don-t-use-switch-with-constant-integer.patch
 fi
 
