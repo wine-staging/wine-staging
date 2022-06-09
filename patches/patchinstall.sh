@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "d95780ba39816e3eb1139366236f3835564beadd"
+	echo "561a5b8f84db68e608df022a8dbd71803f506946"
 }
 
 # Show version information
@@ -3188,7 +3188,7 @@ fi
 # |   *	[#37706] Fix return value of ScrollWindowEx for invisible windows
 # |
 # | Modified files:
-# |   *	dlls/user32/painting.c
+# |   *	dlls/win32u/dce.c
 # |
 if test "$enable_user32_ScrollWindowEx" -eq 1; then
 	patch_apply user32-ScrollWindowEx/0001-user32-Fix-return-value-of-ScrollWindowEx-for-invisi.patch
