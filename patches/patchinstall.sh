@@ -243,6 +243,7 @@ patch_enable_all ()
 	enable_winemenubuilder_integration="$1"
 	enable_wineps_drv_PostScript_Fixes="$1"
 	enable_winepulse_PulseAudio_Support="$1"
+	enable_winepulse_aux_channels="$1"
 	enable_winex11_CandidateWindowPos="$1"
 	enable_winex11_MWM_Decorations="$1"
 	enable_winex11_UpdateLayeredWindow="$1"
@@ -752,6 +753,9 @@ patch_enable ()
 			;;
 		winepulse-PulseAudio_Support)
 			enable_winepulse_PulseAudio_Support="$2"
+			;;
+		winepulse-aux_channels)
+			enable_winepulse_aux_channels="$2"
 			;;
 		winex11-CandidateWindowPos)
 			enable_winex11_CandidateWindowPos="$2"
@@ -3657,6 +3661,18 @@ fi
 # |
 if test "$enable_winepulse_PulseAudio_Support" -eq 1; then
 	patch_apply winepulse-PulseAudio_Support/0001-winepulse.drv-Use-a-separate-mainloop-and-ctx-for-pu.patch
+fi
+
+# Patchset winepulse-aux_channels
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#52572] Support PulseAudio channels aux0 and aux1.
+# |
+# | Modified files:
+# |   *	dlls/winepulse.drv/pulse.c
+# |
+if test "$enable_winepulse_aux_channels" -eq 1; then
+	patch_apply winepulse-aux_channels/0001-winepulse-Add-aux0-and-aux1-channels.patch
 fi
 
 # Patchset winex11-CandidateWindowPos
