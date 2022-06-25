@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "1a3217393e2e6226da0f4024d4d384def207a189"
+	echo "af8ed02b572081206be6c505261f5f2e98a8053c"
 }
 
 # Show version information
@@ -3267,7 +3267,7 @@ fi
 # |   *	[#45882] - Raw Input should use untransformed mouse values (affects Overwatch, several Source games).
 # |
 # | Modified files:
-# |   *	dlls/user32/rawinput.c, dlls/winex11.drv/mouse.c, server/queue.c
+# |   *	dlls/user32/rawinput.c, dlls/win32u/rawinput.c, dlls/winex11.drv/mouse.c, server/queue.c
 # |
 if test "$enable_user32_rawinput_mouse_experimental" -eq 1; then
 	patch_apply user32-rawinput-mouse-experimental/0001-server-Clear-the-MOUSEEVENTF_-ABSOLUTE-VIRTUALDESK-f.patch
