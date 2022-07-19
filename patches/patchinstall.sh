@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "dfff9217746e5076aba35513c6d4bc3d271d109c"
+	echo "1113f42aa748d9e0a27c4663b9d8de1237f95e73"
 }
 
 # Show version information
@@ -262,9 +262,7 @@ patch_enable_all ()
 	enable_ws2_32_SIO_IDEAL_SEND_BACKLOG_QUERY="$1"
 	enable_wscript_support_d_u_switches="$1"
 	enable_xactengine_initial="$1"
-	enable_xactengine3_7_Notification="$1"
 	enable_xactengine3_7_PrepareWave="$1"
-	enable_xactengine3_7_callbacks="$1"
 }
 
 # Enable or disable a specific patchset
@@ -811,14 +809,8 @@ patch_enable ()
 		xactengine-initial)
 			enable_xactengine_initial="$2"
 			;;
-		xactengine3_7-Notification)
-			enable_xactengine3_7_Notification="$2"
-			;;
 		xactengine3_7-PrepareWave)
 			enable_xactengine3_7_PrepareWave="$2"
-			;;
-		xactengine3_7-callbacks)
-			enable_xactengine3_7_callbacks="$2"
 			;;
 		*)
 			return 1
@@ -1166,13 +1158,6 @@ patch_apply()
 	patch_apply_file "$patchdir/$1"
 }
 
-
-if test "$enable_xactengine3_7_callbacks" -eq 1; then
-	if test "$enable_xactengine3_7_Notification" -gt 1; then
-		abort "Patchset xactengine3_7-Notification disabled, but xactengine3_7-callbacks depends on that."
-	fi
-	enable_xactengine3_7_Notification=1
-fi
 
 if test "$enable_winex11_WM_WINDOWPOSCHANGING" -eq 1; then
 	if test "$enable_winex11__NET_ACTIVE_WINDOW" -gt 1; then
@@ -3892,19 +3877,6 @@ if test "$enable_xactengine_initial" -eq 1; then
 	patch_apply xactengine-initial/0003-xactengine3_7-tests-Add-Global-settings-test.patch
 fi
 
-# Patchset xactengine3_7-Notification
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#50546] xactengine3_7: Send Notification after the Wavebank is created.
-# |
-# | Modified files:
-# |   *	dlls/xactengine3_7/xact_dll.c
-# |
-if test "$enable_xactengine3_7_Notification" -eq 1; then
-	patch_apply xactengine3_7-Notification/0001-xactengine3.7-Delay-Notication-for-WAVEBANKPREPARED.patch
-	patch_apply xactengine3_7-Notification/0002-xactengine3_7-Record-context-for-each-notications.patch
-fi
-
 # Patchset xactengine3_7-PrepareWave
 # |
 # | This patchset fixes the following Wine bugs:
@@ -3916,23 +3888,6 @@ fi
 if test "$enable_xactengine3_7_PrepareWave" -eq 1; then
 	patch_apply xactengine3_7-PrepareWave/0002-xactengine3_7-Implement-IXACT3Engine-PrepareStreamin.patch
 	patch_apply xactengine3_7-PrepareWave/0003-xactengine3_7-Implement-IXACT3Engine-PrepareInMemory.patch
-fi
-
-# Patchset xactengine3_7-callbacks
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	xactengine3_7-Notification
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#49678] - xactengine: Implement callback notifications.
-# |
-# | Modified files:
-# |   *	dlls/xactengine3_7/xact_dll.c, libs/faudio/include/FACT.h, libs/faudio/src/FACT.c, libs/faudio/src/FACT_internal.h
-# |
-if test "$enable_xactengine3_7_callbacks" -eq 1; then
-	patch_apply xactengine3_7-callbacks/0001-Add-support-for-private-contexts.patch
-	patch_apply xactengine3_7-callbacks/0002-xactengine3_7-notifications.patch
-	patch_apply xactengine3_7-callbacks/0004-xactengine3_7-Don-t-use-switch-with-constant-integer.patch
 fi
 
 if test "$enable_autoconf" -eq 1; then
