@@ -146,7 +146,6 @@ patch_enable_all ()
 	enable_ntdll_NtQuerySection="$1"
 	enable_ntdll_NtSetLdtEntries="$1"
 	enable_ntdll_ProcessQuotaLimits="$1"
-	enable_ntdll_RtlFirstFreeAce="$1"
 	enable_ntdll_RtlQueryPackageIdentity="$1"
 	enable_ntdll_Serial_Port_Detection="$1"
 	enable_ntdll_Syscall_Emulation="$1"
@@ -460,9 +459,6 @@ patch_enable ()
 			;;
 		ntdll-ProcessQuotaLimits)
 			enable_ntdll_ProcessQuotaLimits="$2"
-			;;
-		ntdll-RtlFirstFreeAce)
-			enable_ntdll_RtlFirstFreeAce="$2"
 			;;
 		ntdll-RtlQueryPackageIdentity)
 			enable_ntdll_RtlQueryPackageIdentity="$2"
@@ -2357,19 +2353,6 @@ fi
 # |
 if test "$enable_ntdll_ProcessQuotaLimits" -eq 1; then
 	patch_apply ntdll-ProcessQuotaLimits/0001-ntdll-Add-fake-data-implementation-for-ProcessQuotaL.patch
-fi
-
-# Patchset ntdll-RtlFirstFreeAce
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#50624] Waves Central 12.0.5 fails to start.
-# |
-# | Modified files:
-# |   *	dlls/ntdll/sec.c
-# |
-if test "$enable_ntdll_RtlFirstFreeAce" -eq 1; then
-	patch_apply ntdll-RtlFirstFreeAce/0001-ntdll-Check-return-parameter-before-use.patch
-	patch_apply ntdll-RtlFirstFreeAce/0002-ntdll-RtlFirstFreeAce-only-return-FALSE-on-error.patch
 fi
 
 # Patchset ntdll-RtlQueryPackageIdentity
