@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "1113f42aa748d9e0a27c4663b9d8de1237f95e73"
+	echo "e0d8bd3f5a7b4c8722d3632a9954f1647851f3d3"
 }
 
 # Show version information
@@ -261,6 +261,7 @@ patch_enable_all ()
 	enable_ws2_32_SIO_IDEAL_SEND_BACKLOG_QUERY="$1"
 	enable_wscript_support_d_u_switches="$1"
 	enable_xactengine_initial="$1"
+	enable_xactengine3_7_Notification="$1"
 	enable_xactengine3_7_PrepareWave="$1"
 }
 
@@ -804,6 +805,9 @@ patch_enable ()
 			;;
 		xactengine-initial)
 			enable_xactengine_initial="$2"
+			;;
+		xactengine3_7-Notification)
+			enable_xactengine3_7_Notification="$2"
 			;;
 		xactengine3_7-PrepareWave)
 			enable_xactengine3_7_PrepareWave="$2"
@@ -3858,6 +3862,18 @@ fi
 if test "$enable_xactengine_initial" -eq 1; then
 	patch_apply xactengine-initial/0001-x3daudio1_7-Create-import-library.patch
 	patch_apply xactengine-initial/0003-xactengine3_7-tests-Add-Global-settings-test.patch
+fi
+
+# Patchset xactengine3_7-Notification
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#50546] xactengine3_7: Send Notification after the Wavebank is created.
+# |
+# | Modified files:
+# |   *	dlls/xactengine3_7/xact_dll.c
+# |
+if test "$enable_xactengine3_7_Notification" -eq 1; then
+	patch_apply xactengine3_7-Notification/0002-xactengine3_7-Record-context-for-each-notications.patch
 fi
 
 # Patchset xactengine3_7-PrepareWave
