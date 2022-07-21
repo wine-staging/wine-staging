@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "e0d8bd3f5a7b4c8722d3632a9954f1647851f3d3"
+	echo "236476417ac6777951d1cfc26c0393bff2a64c23"
 }
 
 # Show version information
@@ -2687,7 +2687,8 @@ fi
 # |   *	[#33576] Support for stored file ACLs
 # |
 # | Modified files:
-# |   *	dlls/advapi32/tests/security.c, server/change.c, server/file.c, server/file.h, server/object.c, server/object.h
+# |   *	dlls/advapi32/tests/security.c, dlls/xactengine3_7/xact_dll.c, server/change.c, server/file.c, server/file.h,
+# | 	server/object.c, server/object.h
 # |
 if test "$enable_server_Stored_ACLs" -eq 1; then
 	patch_apply server-Stored_ACLs/0001-server-Unify-the-storage-of-security-attributes-for-.patch
