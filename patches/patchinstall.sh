@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "97f10736db6fc9c58ed181b3f23534513d6f9e13"
+	echo "7b77b4e3b4ea732ed592ac15f000875f5d1f1daa"
 }
 
 # Show version information
@@ -108,7 +108,6 @@ patch_enable_all ()
 	enable_dinput_joy_mappings="$1"
 	enable_dsound_EAX="$1"
 	enable_dsound_Fast_Mixer="$1"
-	enable_dwrite_FontFallback="$1"
 	enable_eventfd_synchronization="$1"
 	enable_explorer_Video_Registry_Key="$1"
 	enable_fltmgr_sys_FltBuildDefaultSecurityDescriptor="$1"
@@ -347,9 +346,6 @@ patch_enable ()
 			;;
 		dsound-Fast_Mixer)
 			enable_dsound_Fast_Mixer="$2"
-			;;
-		dwrite-FontFallback)
-			enable_dwrite_FontFallback="$2"
 			;;
 		eventfd_synchronization)
 			enable_eventfd_synchronization="$2"
@@ -1717,22 +1713,6 @@ if test "$enable_dsound_EAX" -eq 1; then
 	patch_apply dsound-EAX/0021-dsound-Add-stub-support-for-DSPROPSETID_EAX20_Buffer.patch
 	patch_apply dsound-EAX/0022-dsound-Enable-EAX-by-default.patch
 	patch_apply dsound-EAX/0023-dsound-Fake-success-for-EAX-Set-Buffer-ListenerPrope.patch
-fi
-
-# Patchset dwrite-FontFallback
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#44052] - Support for font fallback.
-# |
-# | Modified files:
-# |   *	dlls/dwrite/analyzer.c, dlls/dwrite/layout.c, dlls/dwrite/tests/layout.c
-# |
-if test "$enable_dwrite_FontFallback" -eq 1; then
-	patch_apply dwrite-FontFallback/0001-dwrite-Test-IDWriteTextFormat-with-nonexistent-font.patch
-	patch_apply dwrite-FontFallback/0002-dwrite-Test-GetMetrics-with-custom-fontcollection.patch
-	patch_apply dwrite-FontFallback/0004-dwrite-Use-font-fallback-when-mapping-characters.patch
-	patch_apply dwrite-FontFallback/0005-dwrite-Use-MapCharacters-for-non-visual-characters.patch
-	patch_apply dwrite-FontFallback/0006-dwrite-Use-MapCharacters-for-dummy-line-metrics.patch
 fi
 
 # Patchset ntdll-DOS_Attributes
