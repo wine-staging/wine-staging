@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "7b77b4e3b4ea732ed592ac15f000875f5d1f1daa"
+	echo "889fe64d9f2e1a0d9a3660bbb94e0a9b74155827"
 }
 
 # Show version information
@@ -3898,7 +3898,6 @@ if test "$enable_xactengine3_7_callbacks" -eq 1; then
 	patch_apply xactengine3_7-callbacks/0003-xactengine3_7-Map-IXACT3Cue-interfaces.patch
 	patch_apply xactengine3_7-callbacks/0004-xactengine3_7-Map-IXACT3Wave-interfaces.patch
 	patch_apply xactengine3_7-callbacks/0005-xactengine3_7-Implement-callback-for-supported-messa.patch
-	patch_apply xactengine3_7-callbacks/0006-xactengine3_7-Remove-Entry-after-FAudio-Destroyed-ca.patch
 fi
 
 if test "$enable_autoconf" -eq 1; then
