@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "1381ced8ecbfaa57aa378ab32e94d5aa51873160"
+	echo "d909f2759066afd128aa1a299d3367c7ab76da8f"
 }
 
 # Show version information
@@ -2912,7 +2912,7 @@ fi
 # Patchset stdole32.idl-Typelib
 # |
 # | Modified files:
-# |   *	dlls/stdole32.tlb/std_ole_v1.idl, include/stdole32.idl
+# |   *	dlls/stdole32.tlb/std_ole_v1.idl, include/Makefile.in, include/stdole32.idl
 # |
 if test "$enable_stdole32_idl_Typelib" -eq 1; then
 	patch_apply stdole32.idl-Typelib/0001-include-Make-stdole32.idl-a-public-component.patch
