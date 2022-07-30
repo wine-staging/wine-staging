@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "d909f2759066afd128aa1a299d3367c7ab76da8f"
+	echo "c86955d3806879fc97b127730e9fb90e232710a7"
 }
 
 # Show version information
@@ -255,6 +255,7 @@ patch_enable_all ()
 	enable_winex11_drv_Query_server_position="$1"
 	enable_wininet_Cleanup="$1"
 	enable_winmm_mciSendCommandA="$1"
+	enable_winspool_drv_ClosePrinter="$1"
 	enable_wintab32_improvements="$1"
 	enable_wintrust_WTHelperGetProvCertFromChain="$1"
 	enable_ws2_32_SIO_IDEAL_SEND_BACKLOG_QUERY="$1"
@@ -787,6 +788,9 @@ patch_enable ()
 			;;
 		winmm-mciSendCommandA)
 			enable_winmm_mciSendCommandA="$2"
+			;;
+		winspool.drv-ClosePrinter)
+			enable_winspool_drv_ClosePrinter="$2"
 			;;
 		wintab32-improvements)
 			enable_wintab32_improvements="$2"
@@ -3783,6 +3787,18 @@ fi
 # |
 if test "$enable_winmm_mciSendCommandA" -eq 1; then
 	patch_apply winmm-mciSendCommandA/0001-winmm-Do-not-crash-in-Win-9X-mode-when-an-invalid-de.patch
+fi
+
+# Patchset winspool.drv-ClosePrinter
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#53425] - Add more tracing to ClosePrinter
+# |
+# | Modified files:
+# |   *	dlls/winspool.drv/info.c
+# |
+if test "$enable_winspool_drv_ClosePrinter" -eq 1; then
+	patch_apply winspool.drv-ClosePrinter/0001-winspool.drv-Add-more-tracing-to-ClosePrinter.patch
 fi
 
 # Patchset wintab32-improvements
