@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "8e27f6c2ef327d6d643e29a271245e76aa6f4792"
+	echo "b5becc2ee8b70753b9fc538cfdd92c2b4be5911c"
 }
 
 # Show version information
@@ -150,6 +150,7 @@ patch_enable_all ()
 	enable_ntdll_Syscall_Emulation="$1"
 	enable_ntdll_WRITECOPY="$1"
 	enable_ntdll_ext4_case_folder="$1"
+	enable_ntdll_wine_frames="$1"
 	enable_nvapi_Stub_DLL="$1"
 	enable_nvcuda_CUDA_Support="$1"
 	enable_nvcuvid_CUDA_Video_Support="$1"
@@ -471,6 +472,9 @@ patch_enable ()
 			;;
 		ntdll-ext4-case-folder)
 			enable_ntdll_ext4_case_folder="$2"
+			;;
+		ntdll-wine-frames)
+			enable_ntdll_wine_frames="$2"
 			;;
 		nvapi-Stub_DLL)
 			enable_nvapi_Stub_DLL="$2"
@@ -2382,6 +2386,18 @@ fi
 # |
 if test "$enable_ntdll_ext4_case_folder" -eq 1; then
 	patch_apply ntdll-ext4-case-folder/0002-ntdll-server-Mark-drive_c-as-case-insensitive-when-c.patch
+fi
+
+# Patchset ntdll-wine-frames
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#52396] ntdll: Don't use Wine frames during exception processing on x64.
+# |
+# | Modified files:
+# |   *	dlls/ntdll/signal_x86_64.c
+# |
+if test "$enable_ntdll_wine_frames" -eq 1; then
+	patch_apply ntdll-wine-frames/0001-ntdll-Don-t-use-Wine-frames-during-exception-process.patch
 fi
 
 # Patchset nvcuda-CUDA_Support
