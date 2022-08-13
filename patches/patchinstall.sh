@@ -106,6 +106,7 @@ patch_enable_all ()
 	enable_ddraw_Silence_FIXMEs="$1"
 	enable_ddraw_version_check="$1"
 	enable_dinput_joy_mappings="$1"
+	enable_dsdmo_fx_support="$1"
 	enable_dsound_EAX="$1"
 	enable_dsound_Fast_Mixer="$1"
 	enable_eventfd_synchronization="$1"
@@ -340,6 +341,9 @@ patch_enable ()
 			;;
 		dinput-joy-mappings)
 			enable_dinput_joy_mappings="$2"
+			;;
+		dsdmo-fx-support)
+			enable_dsdmo_fx_support="$2"
 			;;
 		dsound-EAX)
 			enable_dsound_EAX="$2"
@@ -1656,6 +1660,19 @@ if test "$enable_dinput_joy_mappings" -eq 1; then
 	patch_apply dinput-joy-mappings/0002-dinput-Support-username-in-Config-dialog.patch
 	patch_apply dinput-joy-mappings/0003-dinput-Dont-allow-Fixed-actions-to-be-changed.patch
 	patch_apply dinput-joy-mappings/0004-dinput-Allow-mapping-of-controls-based-of-Genre-type.patch
+fi
+
+# Patchset dsdmo-fx-support
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#52396] dsdmo: Add More FX interfaces.
+# |
+# | Modified files:
+# |   *	dlls/dsdmo/dsdmo.idl, dlls/dsdmo/main.c
+# |
+if test "$enable_dsdmo_fx_support" -eq 1; then
+	patch_apply dsdmo-fx-support/0001-dsdmo-Add-Echo-FX-Support.patch
+	patch_apply dsdmo-fx-support/0002-dsdmo-Add-Compressor-FX-Support.patch
 fi
 
 # Patchset dsound-Fast_Mixer
