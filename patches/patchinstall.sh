@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "a1af412482d36c4046061faa676ff7bc774f40eb"
+	echo "b4a5556da983c7ebc8a25b228100c08947024c59"
 }
 
 # Show version information
@@ -229,7 +229,6 @@ patch_enable_all ()
 	enable_wined3d_SWVP_shaders="$1"
 	enable_wined3d_Silence_FIXMEs="$1"
 	enable_wined3d_WINED3DFMT_B8G8R8X8_UNORM="$1"
-	enable_wined3d_adapter_create_output="$1"
 	enable_wined3d_bindless_texture="$1"
 	enable_wined3d_mesa_texture_download="$1"
 	enable_wined3d_rotate_WINED3D_SWAP_EFFECT_DISCARD="$1"
@@ -711,9 +710,6 @@ patch_enable ()
 			;;
 		wined3d-WINED3DFMT_B8G8R8X8_UNORM)
 			enable_wined3d_WINED3DFMT_B8G8R8X8_UNORM="$2"
-			;;
-		wined3d-adapter_create_output)
-			enable_wined3d_adapter_create_output="$2"
 			;;
 		wined3d-bindless-texture)
 			enable_wined3d_bindless_texture="$2"
@@ -3497,18 +3493,6 @@ fi
 # |
 if test "$enable_wined3d_WINED3DFMT_B8G8R8X8_UNORM" -eq 1; then
 	patch_apply wined3d-WINED3DFMT_B8G8R8X8_UNORM/0001-wined3d-Implement-WINED3DFMT_B8G8R8X8_UNORM-to-WINED.patch
-fi
-
-# Patchset wined3d-adapter_create_output
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#53497] wined3d: Use wined3d_array_reserve() in wined3d_adapter_create_output()
-# |
-# | Modified files:
-# |   *	dlls/wined3d/directx.c, dlls/wined3d/wined3d_private.h
-# |
-if test "$enable_wined3d_adapter_create_output" -eq 1; then
-	patch_apply wined3d-adapter_create_output/0001-wined3d-Use-wined3d_array_reserve-in-wined3d_adapter.patch
 fi
 
 # Patchset wined3d-bindless-texture
