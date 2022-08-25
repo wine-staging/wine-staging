@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "4608e1e1257a377cd554a0e885368e3feb7d286f"
+	echo "4e55dfb7c5e26d45794406a4ce8e50a6bc725b74"
 }
 
 # Show version information
@@ -104,7 +104,6 @@ patch_enable_all ()
 	enable_ddraw_Device_Caps="$1"
 	enable_ddraw_IDirect3DTexture2_Load="$1"
 	enable_ddraw_Silence_FIXMEs="$1"
-	enable_ddraw_version_check="$1"
 	enable_dinput_joy_mappings="$1"
 	enable_dsound_EAX="$1"
 	enable_dsound_Fast_Mixer="$1"
@@ -334,9 +333,6 @@ patch_enable ()
 			;;
 		ddraw-Silence_FIXMEs)
 			enable_ddraw_Silence_FIXMEs="$2"
-			;;
-		ddraw-version-check)
-			enable_ddraw_version_check="$2"
 			;;
 		dinput-joy-mappings)
 			enable_dinput_joy_mappings="$2"
@@ -1330,13 +1326,6 @@ if test "$enable_dsound_EAX" -eq 1; then
 	enable_dsound_Fast_Mixer=1
 fi
 
-if test "$enable_ddraw_version_check" -eq 1; then
-	if test "$enable_ddraw_Device_Caps" -gt 1; then
-		abort "Patchset ddraw-Device_Caps disabled, but ddraw-version-check depends on that."
-	fi
-	enable_ddraw_Device_Caps=1
-fi
-
 
 # Patchset Compiler_Warnings
 # |
@@ -1597,10 +1586,9 @@ fi
 # |   *	[#27002] Properly initialize caps->dwZBufferBitDepths in ddraw7_GetCaps
 # |
 # | Modified files:
-# |   *	dlls/ddraw/ddraw.c, dlls/ddraw/tests/ddraw7.c
+# |   *	dlls/ddraw/ddraw.c
 # |
 if test "$enable_ddraw_Device_Caps" -eq 1; then
-	patch_apply ddraw-Device_Caps/0001-ddraw-Don-t-set-HWTRANSFORMANDLIGHT-flag-on-d3d7-RGB.patch
 	patch_apply ddraw-Device_Caps/0002-ddraw-Set-dwZBufferBitDepth-in-ddraw7_GetCaps.patch
 fi
 
@@ -1624,21 +1612,6 @@ fi
 # |
 if test "$enable_ddraw_Silence_FIXMEs" -eq 1; then
 	patch_apply ddraw-Silence_FIXMEs/0001-ddraw-Silence-noisy-FIXME-about-unimplemented-D3DPRO.patch
-fi
-
-# Patchset ddraw-version-check
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	ddraw-Device_Caps
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#19153] Resident Evil 1 fails to start (needs IDirect3D3::EnumDevices() to return a device named "RGB Emulation")
-# |
-# | Modified files:
-# |   *	dlls/ddraw/ddraw.c
-# |
-if test "$enable_ddraw_version_check" -eq 1; then
-	patch_apply ddraw-version-check/0001-ddraw-Return-correct-devices-based-off-requested-Dir.patch
 fi
 
 # Patchset dinput-joy-mappings
