@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "a4930f003f45ab82c4c05746cbd29cbd4af09735"
+	echo "7546b4a63d437c2f7f8673cae9341d358f84f1a5"
 }
 
 # Show version information
@@ -134,7 +134,6 @@ patch_enable_all ()
 	enable_ntdll_CriticalSection="$1"
 	enable_ntdll_DOS_Attributes="$1"
 	enable_ntdll_Exception="$1"
-	enable_ntdll_FileFsFullSizeInformation="$1"
 	enable_ntdll_ForceBottomUpAlloc="$1"
 	enable_ntdll_HashLinks="$1"
 	enable_ntdll_Hide_Wine_Exports="$1"
@@ -423,9 +422,6 @@ patch_enable ()
 			;;
 		ntdll-Exception)
 			enable_ntdll_Exception="$2"
-			;;
-		ntdll-FileFsFullSizeInformation)
-			enable_ntdll_FileFsFullSizeInformation="$2"
 			;;
 		ntdll-ForceBottomUpAlloc)
 			enable_ntdll_ForceBottomUpAlloc="$2"
@@ -1315,8 +1311,12 @@ if test "$enable_ntdll_Junction_Points" -eq 1; then
 	if test "$enable_ntdll_NtQueryEaFile" -gt 1; then
 		abort "Patchset ntdll-NtQueryEaFile disabled, but ntdll-Junction_Points depends on that."
 	fi
+	if test "$enable_ntdll_Serial_Port_Detection" -gt 1; then
+		abort "Patchset ntdll-Serial_Port_Detection disabled, but ntdll-Junction_Points depends on that."
+	fi
 	enable_ntdll_DOS_Attributes=1
 	enable_ntdll_NtQueryEaFile=1
+	enable_ntdll_Serial_Port_Detection=1
 fi
 
 if test "$enable_dsound_EAX" -eq 1; then
@@ -1709,10 +1709,22 @@ if test "$enable_ntdll_NtQueryEaFile" -eq 1; then
 	patch_apply ntdll-NtQueryEaFile/0001-ntdll-Improve-stub-of-NtQueryEaFile.patch
 fi
 
+# Patchset ntdll-Serial_Port_Detection
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#39793] Do a device check before returning a default serial port name
+# |
+# | Modified files:
+# |   *	dlls/mountmgr.sys/device.c, dlls/mountmgr.sys/unixlib.c, dlls/mountmgr.sys/unixlib.h
+# |
+if test "$enable_ntdll_Serial_Port_Detection" -eq 1; then
+	patch_apply ntdll-Serial_Port_Detection/0001-ntdll-Do-a-device-check-before-returning-a-default-s.patch
+fi
+
 # Patchset ntdll-Junction_Points
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-DOS_Attributes, ntdll-NtQueryEaFile
+# |   *	ntdll-DOS_Attributes, ntdll-NtQueryEaFile, ntdll-Serial_Port_Detection
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#12401] NET Framework 2.0, 3.0, 4.0 installers and other apps that make use of GAC API for managed assembly
@@ -1803,8 +1815,8 @@ fi
 # Patchset eventfd_synchronization
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-DOS_Attributes, ntdll-NtQueryEaFile, ntdll-Junction_Points, server-PeekMessage, server-Realtime_Priority, server-
-# | 	Signal_Thread
+# |   *	ntdll-DOS_Attributes, ntdll-NtQueryEaFile, ntdll-Serial_Port_Detection, ntdll-Junction_Points, server-PeekMessage,
+# | 	server-Realtime_Priority, server-Signal_Thread
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#36692] Many multi-threaded applications have poor performance due to heavy use of synchronization primitives
@@ -2241,15 +2253,6 @@ if test "$enable_ntdll_Exception" -eq 1; then
 	patch_apply ntdll-Exception/0002-ntdll-OutputDebugString-should-throw-the-exception-a.patch
 fi
 
-# Patchset ntdll-FileFsFullSizeInformation
-# |
-# | Modified files:
-# |   *	dlls/ntdll/tests/file.c, dlls/ntdll/unix/file.c
-# |
-if test "$enable_ntdll_FileFsFullSizeInformation" -eq 1; then
-	patch_apply ntdll-FileFsFullSizeInformation/0001-ntdll-Add-support-for-FileFsFullSizeInformation-clas.patch
-fi
-
 # Patchset ntdll-HashLinks
 # |
 # | Modified files:
@@ -2323,18 +2326,6 @@ fi
 # |
 if test "$enable_ntdll_RtlQueryPackageIdentity" -eq 1; then
 	patch_apply ntdll-RtlQueryPackageIdentity/0003-ntdll-tests-Add-basic-tests-for-RtlQueryPackageIdent.patch
-fi
-
-# Patchset ntdll-Serial_Port_Detection
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#39793] Do a device check before returning a default serial port name
-# |
-# | Modified files:
-# |   *	dlls/mountmgr.sys/device.c, dlls/mountmgr.sys/unixlib.c, dlls/mountmgr.sys/unixlib.h
-# |
-if test "$enable_ntdll_Serial_Port_Detection" -eq 1; then
-	patch_apply ntdll-Serial_Port_Detection/0001-ntdll-Do-a-device-check-before-returning-a-default-s.patch
 fi
 
 # Patchset ntdll-Syscall_Emulation
@@ -2632,7 +2623,7 @@ fi
 # Patchset server-File_Permissions
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-DOS_Attributes, ntdll-NtQueryEaFile, ntdll-Junction_Points
+# |   *	ntdll-DOS_Attributes, ntdll-NtQueryEaFile, ntdll-Serial_Port_Detection, ntdll-Junction_Points
 # |
 # | Modified files:
 # |   *	dlls/advapi32/tests/security.c, dlls/ntdll/tests/file.c, server/fd.c
@@ -2650,7 +2641,7 @@ fi
 # Patchset server-Stored_ACLs
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-DOS_Attributes, ntdll-NtQueryEaFile, ntdll-Junction_Points, server-File_Permissions
+# |   *	ntdll-DOS_Attributes, ntdll-NtQueryEaFile, ntdll-Serial_Port_Detection, ntdll-Junction_Points, server-File_Permissions
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#33576] Support for stored file ACLs
