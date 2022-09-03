@@ -3268,8 +3268,8 @@ fi
 # |   *	[#46534] Implement INetworkInformationStatics interface
 # |
 # | Modified files:
-# |   *	configure.ac, dlls/windows.networking.connectivity/Makefile.in, dlls/windows.networking.connectivity/network.rgs,
-# | 	dlls/windows.networking.connectivity/rsrc.rc, dlls/windows.networking.connectivity/windows.networking.connectivity.spec,
+# |   *	configure.ac, dlls/windows.networking.connectivity/Makefile.in,
+# | 	dlls/windows.networking.connectivity/windows.networking.connectivity.spec,
 # | 	dlls/windows.networking.connectivity/windows.networking.connectivity_main.c, include/Makefile.in,
 # | 	include/windows.networking.connectivity.idl, include/windows.networking.idl
 # |
@@ -3279,7 +3279,6 @@ if test "$enable_windows_networking_connectivity_new_dll" -eq 1; then
 	patch_apply windows.networking.connectivity-new-dll/0003-windows.networking.connectivity-Add-stub-dll.patch
 	patch_apply windows.networking.connectivity-new-dll/0004-windows.networking.connectivity-Implement-IActivatio.patch
 	patch_apply windows.networking.connectivity-new-dll/0005-windows.networking.connectivity-Implement-INetworkIn.patch
-	patch_apply windows.networking.connectivity-new-dll/0006-windows.networking.connectivity-Registry-DLL.patch
 	patch_apply windows.networking.connectivity-new-dll/0007-windows.networking.connectivity-Implement-INetworkIn.patch
 	patch_apply windows.networking.connectivity-new-dll/0008-windows.networking.connectivity-IConnectionProfile-G.patch
 fi
