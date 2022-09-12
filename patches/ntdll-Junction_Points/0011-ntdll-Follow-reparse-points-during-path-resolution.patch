@@ -1,0 +1,240 @@
+From ff29165847ca6ea105053843f46cac727c7083c8 Mon Sep 17 00:00:00 2001
+From: "Erich E. Hoover" <erich.e.hoover@gmail.com>
+Date: Sat, 3 Sep 2022 11:23:31 -0600
+Subject: [PATCH] ntdll: Follow reparse points during path resolution.
+
+Signed-off-by: Erich E. Hoover <erich.e.hoover@gmail.com>
+---
+ dlls/ntdll/tests/file.c |  11 +++-
+ dlls/ntdll/unix/file.c  | 122 +++++++++++++++++++++++++++++++++++++---
+ 2 files changed, 124 insertions(+), 9 deletions(-)
+
+diff --git a/dlls/ntdll/tests/file.c b/dlls/ntdll/tests/file.c
+index b1290f9ef7b..799a8cebe50 100644
+--- a/dlls/ntdll/tests/file.c
++++ b/dlls/ntdll/tests/file.c
+@@ -5381,7 +5381,7 @@ static INT build_reparse_buffer(const WCHAR *filename, ULONG tag, ULONG flags,
+ 
+ static void test_reparse_points(void)
+ {
+-    WCHAR path[MAX_PATH], reparse_path[MAX_PATH], target_path[MAX_PATH], volnameW[MAX_PATH], new_path[MAX_PATH];
++    WCHAR path[MAX_PATH], reparse_path[MAX_PATH], target_path[MAX_PATH], volnameW[MAX_PATH], new_path[MAX_PATH], thru_path[MAX_PATH];
+     static const WCHAR new_reparseW[] = {'\\','n','e','w','_','r','e','p','a','r','s','e',0};
+     static const WCHAR reparseW[] = {'\\','r','e','p','a','r','s','e',0};
+     static const WCHAR targetW[] = {'\\','t','a','r','g','e','t',0};
+@@ -5768,11 +5768,20 @@ static void test_reparse_points(void)
+     bret = CopyFileW(reparse_path, new_path, TRUE);
+     ok(!bret, "Reparse points cannot be copied.\n");
+ 
++    /* Create a file on the other side of a reparse point */
++    lstrcpyW(thru_path, reparse_path);
++    lstrcatW(thru_path, new_reparseW);
++    handle = CreateFileW(thru_path, GENERIC_READ | GENERIC_WRITE, 0, 0, CREATE_NEW, 0, 0);
++    ok( handle != INVALID_HANDLE_VALUE, "Failed to create file on other side of reparse point: %lx.\n", GetLastError() );
++    CloseHandle(handle);
++
+ cleanup:
+     /* Cleanup */
+     pRtlFreeUnicodeString(&nameW);
+     HeapFree(GetProcessHeap(), 0, long_path);
+     HeapFree(GetProcessHeap(), 0, buffer);
++    bret = DeleteFileW(thru_path);
++    ok(bret, "Failed to delete file on other side of junction point!\n");
+     bret = RemoveDirectoryW(reparse_path);
+     ok(bret, "Failed to remove temporary reparse point directory!\n");
+     bret = RemoveDirectoryW(target_path);
+diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
+index 907d51f1fc3..d520a73b253 100644
+--- a/dlls/ntdll/unix/file.c
++++ b/dlls/ntdll/unix/file.c
+@@ -3700,14 +3700,13 @@ cleanup:
+ 
+ 
+ /*
+- * Retrieve the unix name corresponding to a file handle and use that to find the destination of the
+- * symlink corresponding to that file handle.
++ * Obtain the reparse point buffer from the unix filename for the reparse point.
+  */
+-NTSTATUS get_reparse_point(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG *size)
++NTSTATUS get_reparse_point_unix(const char *unix_src, REPARSE_DATA_BUFFER *buffer, ULONG *size)
+ {
+     char link_dir[PATH_MAX], original_dir[PATH_MAX], *d;
+     int link_path_len, buffer_len, encoded_len;
+-    char *unix_src, link_path[PATH_MAX];
++    char link_path[PATH_MAX];
+     REPARSE_DATA_BUFFER header;
+     ULONG out_size = *size;
+     char *encoded = NULL;
+@@ -3716,9 +3715,6 @@ NTSTATUS get_reparse_point(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG *si
+     int depth;
+     char *p;
+ 
+-    if ((status = server_get_unix_name( handle, &unix_src )))
+-        goto cleanup;
+-
+     ret = readlink( unix_src, link_path, sizeof(link_path) );
+     if (ret < 0)
+     {
+@@ -3822,6 +3818,75 @@ cleanup:
+ }
+ 
+ 
++/*
++ * Retrieve the unix name corresponding to a file handle and use that to find the destination of the
++ * symlink corresponding to that file handle.
++ */
++NTSTATUS get_reparse_point(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG *size)
++{
++    char *unix_name = NULL;
++    NTSTATUS status;
++
++    if ((status = server_get_unix_name( handle, &unix_name )))
++        return status;
++    status = get_reparse_point_unix( unix_name, buffer, size );
++    free( unix_name );
++    return status;
++}
++
++
++/* find the NT target of a reparse point */
++static NTSTATUS find_reparse_target( const char *unix_name, WCHAR **new_name, int *new_name_len)
++{
++    REPARSE_DATA_BUFFER *buffer = NULL;
++    int offset, target_len;
++    ULONG buffer_len = 0;
++    NTSTATUS status;
++    WCHAR *target;
++
++    status = get_reparse_point_unix( unix_name, NULL, &buffer_len );
++    if (status != STATUS_BUFFER_TOO_SMALL)
++        return status;
++
++    buffer = malloc( buffer_len );
++    if (!buffer)
++        return STATUS_NO_MEMORY;
++    if ((status = get_reparse_point_unix( unix_name, buffer, &buffer_len )) != STATUS_SUCCESS)
++    {
++        free( buffer );
++        return status;
++    }
++
++    switch( buffer->ReparseTag )
++    {
++    case IO_REPARSE_TAG_MOUNT_POINT:
++        offset = buffer->MountPointReparseBuffer.SubstituteNameOffset/sizeof(WCHAR);
++        target = &buffer->MountPointReparseBuffer.PathBuffer[offset];
++        target_len = buffer->MountPointReparseBuffer.SubstituteNameLength;
++        break;
++    case IO_REPARSE_TAG_SYMLINK:
++        offset = buffer->SymbolicLinkReparseBuffer.SubstituteNameOffset/sizeof(WCHAR);
++        target = &buffer->SymbolicLinkReparseBuffer.PathBuffer[offset];
++        target_len = buffer->SymbolicLinkReparseBuffer.SubstituteNameLength;
++        break;
++    default:
++        WARN( "Reparse point with unsupported tag: 0x%08x\n", buffer->ReparseTag );
++        status = STATUS_NOT_IMPLEMENTED;
++        break;
++    }
++
++    if (status == STATUS_SUCCESS)
++    {
++        *new_name_len = target_len/sizeof(WCHAR);
++        *new_name = malloc( target_len );
++        if (*new_name) memcpy( *new_name, target, target_len );
++    }
++
++    free( buffer );
++    return status;
++}
++
++
+ /*
+  * Retrieve the unix name corresponding to a file handle, remove that symlink, and then recreate
+  * a directory at the location of the old filename.
+@@ -3924,11 +3989,13 @@ static NTSTATUS lookup_unix_name( const WCHAR *name, int name_len, char **buffer
+                                   UINT disposition, BOOL is_unix )
+ {
+     static const WCHAR invalid_charsW[] = { INVALID_NT_CHARS, '/', 0 };
++    WCHAR *name_buf = NULL;
+     NTSTATUS status;
+     int ret;
+     struct stat st;
+     char *unix_name = *buffer;
+     const WCHAR *ptr, *end;
++    int old_cwd;
+ 
+     /* check syntax of individual components */
+ 
+@@ -3977,9 +4044,13 @@ static NTSTATUS lookup_unix_name( const WCHAR *name, int name_len, char **buffer
+ 
+     /* now do it component by component */
+ 
++    old_cwd = open( ".", O_RDONLY );
++
+     while (name_len)
+     {
+         const WCHAR *end, *next;
++        WCHAR *target = NULL;
++        int target_len = 0;
+ 
+         end = name;
+         while (end < name + name_len && *end != '\\') end++;
+@@ -3999,8 +4070,39 @@ static NTSTATUS lookup_unix_name( const WCHAR *name, int name_len, char **buffer
+ 
+         status = find_file_in_dir( unix_name, pos, name, end - name, is_unix );
+ 
++        /* follow reparse point and restart from there (if applicable) */
++        if (find_reparse_target( unix_name, &target, &target_len ) == STATUS_SUCCESS)
++        {
++            int new_name_len = target_len + name_len + 1;
++            WCHAR *new_name, *p;
++
++            if (!(p = new_name = malloc( new_name_len*sizeof(WCHAR) )))
++            {
++                free( target );
++                return STATUS_NO_MEMORY;
++            }
++            memcpy( p, target, target_len*sizeof(WCHAR) );
++            p += target_len;
++            (p++)[0] = '\\';
++            memcpy( p, next, name_len*sizeof(WCHAR) );
++            if (target[0] == '\\')
++            {
++                strcpy( unix_name, "/" );
++                pos = 0;
++            }
++            else
++                unix_name = dirname( unix_name );
++            TRACE( "Follow reparse point %s => %s, %s\n", debugstr_wn(name, end-name), unix_name,
++                                                          debugstr_wn(new_name, new_name_len) );
++            next = new_name;
++            name_len = new_name_len;
++            free( target );
++            free( name_buf );
++            name_buf = new_name;
++            status = STATUS_SUCCESS;
++        }
+         /* if this is the last element, not finding it is not necessarily fatal */
+-        if (!name_len)
++        else if (!name_len)
+         {
+             if (status == STATUS_OBJECT_NAME_NOT_FOUND)
+             {
+@@ -4028,10 +4130,14 @@ static NTSTATUS lookup_unix_name( const WCHAR *name, int name_len, char **buffer
+ 
+         if (status != STATUS_SUCCESS) break;
+ 
++        chdir( unix_name );
+         pos += strlen( unix_name + pos );
+         name = next;
+     }
+ 
++    fchdir( old_cwd );
++    free( name_buf );
++
+     return status;
+ }
+ 
+-- 
+2.35.1
+

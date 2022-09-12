@@ -1,0 +1,149 @@
+From edaf25f8037c96fe83885ab47a1195c7f28e2fd6 Mon Sep 17 00:00:00 2001
+From: "Erich E. Hoover" <erich.e.hoover@wine-staging.com>
+Date: Sat, 6 Feb 2021 12:46:30 -0700
+Subject: [PATCH] kernelbase: Add support for moving reparse points with
+ MoveFile*.
+
+Signed-off-by: Erich E. Hoover <erich.e.hoover@gmail.com>
+---
+ dlls/kernelbase/file.c  |  2 +-
+ dlls/ntdll/tests/file.c | 13 ++++++++++++-
+ dlls/ntdll/unix/file.c  | 20 ++++++++++++++++++++
+ server/fd.c             |  6 ++++--
+ 4 files changed, 37 insertions(+), 4 deletions(-)
+
+diff --git a/dlls/kernelbase/file.c b/dlls/kernelbase/file.c
+index 5c9f0ebd485..2cbe8f4ac03 100644
+--- a/dlls/kernelbase/file.c
++++ b/dlls/kernelbase/file.c
+@@ -2471,7 +2471,7 @@ BOOL WINAPI DECLSPEC_HOTPATCH MoveFileWithProgressW( const WCHAR *source, const
+ 
+     status = NtOpenFile( &source_handle, DELETE | SYNCHRONIZE, &attr, &io,
+                          FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
+-                         FILE_SYNCHRONOUS_IO_NONALERT );
++                         FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT );
+     RtlFreeUnicodeString( &nt_name );
+     if (!set_ntstatus( status )) goto error;
+ 
+diff --git a/dlls/ntdll/tests/file.c b/dlls/ntdll/tests/file.c
+index f9e179edc1d..6ccdb3c02dc 100644
+--- a/dlls/ntdll/tests/file.c
++++ b/dlls/ntdll/tests/file.c
+@@ -5381,7 +5381,8 @@ static INT build_reparse_buffer(const WCHAR *filename, ULONG tag, ULONG flags,
+ 
+ static void test_reparse_points(void)
+ {
+-    WCHAR path[MAX_PATH], reparse_path[MAX_PATH], target_path[MAX_PATH], volnameW[MAX_PATH];
++    WCHAR path[MAX_PATH], reparse_path[MAX_PATH], target_path[MAX_PATH], volnameW[MAX_PATH], new_path[MAX_PATH];
++    static const WCHAR new_reparseW[] = {'\\','n','e','w','_','r','e','p','a','r','s','e',0};
+     static const WCHAR reparseW[] = {'\\','r','e','p','a','r','s','e',0};
+     static const WCHAR targetW[] = {'\\','t','a','r','g','e','t',0};
+     static const WCHAR parentW[] = {'\\','.','.','\\',0};
+@@ -5389,6 +5390,7 @@ static void test_reparse_points(void)
+     FILE_BASIC_INFORMATION old_attrib, new_attrib;
+     static const WCHAR fooW[] = {'f','o','o',0};
+     static WCHAR volW[] = {'c',':','\\',0};
++    const WCHAR *rel_target = &targetW[1];
+     WCHAR *dest, *long_path, *abs_target;
+     REPARSE_GUID_DATA_BUFFER guid_buffer;
+     static const WCHAR dotW[] = {'.',0};
+@@ -5751,6 +5753,15 @@ static void test_reparse_points(void)
+                                                      wine_dbgstr_w(dest), wine_dbgstr_w(&targetW[1]));
+     CloseHandle(handle);
+ 
++    /* Check moving a reparse point to another location */
++    lstrcpyW(new_path, path);
++    lstrcatW(new_path, parentW);
++    lstrcatW(new_path, new_reparseW);
++    bret = MoveFileW(reparse_path, new_path);
++    ok(bret, "Failed to move and rename reparse point.\n");
++    bret = MoveFileW(new_path, reparse_path);
++    ok(bret, "Failed to move and rename reparse point.\n");
++
+ cleanup:
+     /* Cleanup */
+     pRtlFreeUnicodeString(&nameW);
+diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
+index 201eeab7013..907d51f1fc3 100644
+--- a/dlls/ntdll/unix/file.c
++++ b/dlls/ntdll/unix/file.c
+@@ -5336,8 +5336,10 @@ NTSTATUS WINAPI NtSetInformationFile( HANDLE handle, IO_STATUS_BLOCK *io,
+         if (len >= sizeof(FILE_RENAME_INFORMATION))
+         {
+             FILE_RENAME_INFORMATION *info = ptr;
++            REPARSE_DATA_BUFFER *buffer = NULL;
+             UNICODE_STRING name_str, redir;
+             OBJECT_ATTRIBUTES attr;
++            ULONG buffer_len = 0;
+             char *unix_name;
+ 
+             name_str.Buffer = info->FileName;
+@@ -5346,6 +5348,19 @@ NTSTATUS WINAPI NtSetInformationFile( HANDLE handle, IO_STATUS_BLOCK *io,
+             InitializeObjectAttributes( &attr, &name_str, OBJ_CASE_INSENSITIVE, info->RootDirectory, NULL );
+             get_redirect( &attr, &redir );
+ 
++            /* obtain all the data from the reparse point (if applicable) */
++            status = get_reparse_point( handle, NULL, &buffer_len );
++            if (status == STATUS_BUFFER_TOO_SMALL)
++            {
++                buffer = malloc( buffer_len );
++                status = get_reparse_point( handle, buffer, &buffer_len );
++                if (status != STATUS_SUCCESS)
++                {
++                    free( buffer );
++                    break;
++                }
++            }
++
+             status = nt_to_unix_file_name( &attr, &unix_name, FILE_OPEN_IF );
+             if (status == STATUS_SUCCESS || status == STATUS_NO_SUCH_FILE)
+             {
+@@ -5362,9 +5377,14 @@ NTSTATUS WINAPI NtSetInformationFile( HANDLE handle, IO_STATUS_BLOCK *io,
+                 }
+                 SERVER_END_REQ;
+ 
++                /* rebuild reparse point in new location (if applicable) */
++                if (buffer && status == STATUS_SUCCESS)
++                    status = create_reparse_point( handle, buffer );
++
+                 free( unix_name );
+             }
+             free( redir.Buffer );
++            free( buffer );
+         }
+         else status = STATUS_INVALID_PARAMETER_3;
+         break;
+diff --git a/server/fd.c b/server/fd.c
+index 1ed975673a6..60ba552f769 100644
+--- a/server/fd.c
++++ b/server/fd.c
+@@ -2704,7 +2704,7 @@ static void set_fd_name( struct fd *fd, struct fd *root, const char *nameptr, da
+         goto failed;
+     }
+ 
+-    if (!stat( name, &st ))
++    if (!lstat( name, &st ))
+     {
+         if (!fstat( fd->unix_fd, &st2 ) && st.st_ino == st2.st_ino && st.st_dev == st2.st_dev)
+         {
+@@ -2720,7 +2720,7 @@ static void set_fd_name( struct fd *fd, struct fd *root, const char *nameptr, da
+         }
+ 
+         /* can't replace directories or special files */
+-        if (!S_ISREG( st.st_mode ))
++        if (!S_ISREG( st.st_mode ) && !S_ISLNK( st.st_mode ))
+         {
+             set_error( STATUS_ACCESS_DENIED );
+             goto failed;
+@@ -2778,6 +2778,8 @@ static void set_fd_name( struct fd *fd, struct fd *root, const char *nameptr, da
+     fd->nt_name = dup_nt_name( root, nt_name, &fd->nt_namelen );
+     free( fd->unix_name );
+     fd->closed->unix_name = fd->unix_name = realpath( name, NULL );
++    if (!fd->unix_name)
++        fd->closed->unix_name = fd->unix_name = dup_fd_name( root, name ); /* dangling symlink */
+     free( name );
+     if (!fd->unix_name)
+         set_error( STATUS_NO_MEMORY );
+-- 
+2.35.1
+

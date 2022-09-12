@@ -1,0 +1,634 @@
+From 6209b270e6f2a7913a95f6c1da18c11e2e2a73a5 Mon Sep 17 00:00:00 2001
+From: "Erich E. Hoover" <erich.e.hoover@gmail.com>
+Date: Thu, 16 Jan 2014 20:56:49 -0700
+Subject: [PATCH] ntdll: Add support for creating reparse points.
+
+Signed-off-by: Erich E. Hoover <erich.e.hoover@gmail.com>
+---
+ configure.ac            |   2 +
+ dlls/ntdll/Makefile.in  |   2 +-
+ dlls/ntdll/tests/file.c | 152 ++++++++++++++++++++
+ dlls/ntdll/unix/file.c  | 300 ++++++++++++++++++++++++++++++++++++++++
+ include/Makefile.in     |   1 +
+ include/ntifs.h         |  42 ++++++
+ 6 files changed, 498 insertions(+), 1 deletion(-)
+ create mode 100644 include/ntifs.h
+
+diff --git a/configure.ac b/configure.ac
+index 3ea4c2afe0a..d0ec1d837c3 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -2030,6 +2030,8 @@ AC_CHECK_FUNCS(\
+ 	prctl \
+ 	proc_pidinfo \
+ 	sched_yield \
++	renameat \
++	renameat2 \
+ 	setproctitle \
+ 	setprogname \
+ 	sigprocmask \
+diff --git a/dlls/ntdll/Makefile.in b/dlls/ntdll/Makefile.in
+index 3b1cdb54f9f..6eb4690f8e0 100644
+--- a/dlls/ntdll/Makefile.in
++++ b/dlls/ntdll/Makefile.in
+@@ -4,7 +4,7 @@ UNIXLIB   = ntdll.so
+ IMPORTLIB = ntdll
+ IMPORTS   = winecrt0
+ UNIX_CFLAGS  = $(UNWIND_CFLAGS)
+-UNIX_LIBS    = $(IOKIT_LIBS) $(COREFOUNDATION_LIBS) $(CORESERVICES_LIBS) $(RT_LIBS) $(PTHREAD_LIBS) $(UNWIND_LIBS) $(I386_LIBS) $(PROCSTAT_LIBS)
++UNIX_LIBS    = $(IOKIT_LIBS) $(COREFOUNDATION_LIBS) $(CORESERVICES_LIBS) $(RT_LIBS) $(PTHREAD_LIBS) $(UNWIND_LIBS) $(I386_LIBS) $(PROCSTAT_LIBS) -lm
+ 
+ EXTRADLLFLAGS = -nodefaultlibs -Wl,--image-base,0x7bc00000
+ x86_64_EXTRADLLFLAGS = -nodefaultlibs -Wl,--image-base,0x170000000
+diff --git a/dlls/ntdll/tests/file.c b/dlls/ntdll/tests/file.c
+index 4b142f241e5..5f6cb223951 100644
+--- a/dlls/ntdll/tests/file.c
++++ b/dlls/ntdll/tests/file.c
+@@ -38,6 +38,7 @@
+ #include "winuser.h"
+ #include "winioctl.h"
+ #include "winnls.h"
++#include "ntifs.h"
+ 
+ #ifndef IO_COMPLETION_ALL_ACCESS
+ #define IO_COMPLETION_ALL_ACCESS 0x001F0003
+@@ -5326,6 +5327,156 @@ static void test_mailslot_name(void)
+     CloseHandle( device );
+ }
+ 
++static INT build_reparse_buffer(const WCHAR *filename, REPARSE_DATA_BUFFER **pbuffer)
++{
++    static INT header_size = offsetof(REPARSE_DATA_BUFFER, GenericReparseBuffer);
++    INT buffer_size, struct_size, data_size, string_len, prefix_len;
++    WCHAR *subst_dest, *print_dest;
++    REPARSE_DATA_BUFFER *buffer;
++
++    struct_size = offsetof(REPARSE_DATA_BUFFER, MountPointReparseBuffer.PathBuffer[0]);
++    prefix_len = strlen("\\??\\");
++    string_len = lstrlenW(&filename[prefix_len]);
++    data_size = (prefix_len + 2 * string_len + 2) * sizeof(WCHAR);
++    buffer_size = struct_size + data_size;
++    buffer = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, buffer_size);
++    buffer->ReparseTag = IO_REPARSE_TAG_MOUNT_POINT;
++    buffer->ReparseDataLength = struct_size - header_size + data_size;
++    buffer->MountPointReparseBuffer.SubstituteNameLength = (prefix_len + string_len) * sizeof(WCHAR);
++    buffer->MountPointReparseBuffer.PrintNameOffset = (prefix_len + string_len + 1) * sizeof(WCHAR);
++    buffer->MountPointReparseBuffer.PrintNameLength = string_len * sizeof(WCHAR);
++    subst_dest = &buffer->MountPointReparseBuffer.PathBuffer[0];
++    print_dest = &buffer->MountPointReparseBuffer.PathBuffer[prefix_len + string_len + 1];
++    lstrcpyW(subst_dest, filename);
++    lstrcpyW(print_dest, &filename[prefix_len]);
++    *pbuffer = buffer;
++    return buffer_size;
++}
++
++static void test_reparse_points(void)
++{
++    WCHAR path[MAX_PATH], reparse_path[MAX_PATH], target_path[MAX_PATH], volnameW[MAX_PATH];
++    static const WCHAR reparseW[] = {'\\','r','e','p','a','r','s','e',0};
++    static const WCHAR targetW[] = {'\\','t','a','r','g','e','t',0};
++    static const WCHAR parentW[] = {'\\','.','.','\\',0};
++    static const WCHAR fooW[] = {'f','o','o',0};
++    static WCHAR volW[] = {'c',':','\\',0};
++    static const WCHAR dotW[] = {'.',0};
++    REPARSE_DATA_BUFFER *buffer = NULL;
++    DWORD dwret, dwLen, dwFlags;
++    UNICODE_STRING nameW;
++    WCHAR *long_path;
++    INT buffer_len;
++    HANDLE handle;
++    BOOL bret;
++
++    /* Create a temporary folder for the junction point tests */
++    GetTempFileNameW(dotW, fooW, 0, path);
++    DeleteFileW(path);
++    if (!CreateDirectoryW(path, NULL))
++    {
++        win_skip("Unable to create a temporary junction point directory.\n");
++        return;
++    }
++
++    /* Check that the volume this folder is located on supports junction points */
++    pRtlDosPathNameToNtPathName_U(path, &nameW, NULL, NULL);
++    volW[0] = nameW.Buffer[4];
++    pRtlFreeUnicodeString( &nameW );
++    if (!GetVolumeNameForVolumeMountPointW(volW, volnameW, MAX_PATH))
++    {
++        win_skip("Failed to obtain volume name for current volume.\n");
++        return;
++    }
++    GetVolumeInformationW(volnameW, 0, 0, 0, &dwLen, &dwFlags, 0, 0);
++    if (!(dwFlags & FILE_SUPPORTS_REPARSE_POINTS))
++    {
++        skip("File system does not support reparse points.\n");
++        RemoveDirectoryW(path);
++        return;
++    }
++
++    /* Create the folder to be replaced by a junction point */
++    lstrcpyW(reparse_path, path);
++    lstrcatW(reparse_path, reparseW);
++    bret = CreateDirectoryW(reparse_path, NULL);
++    ok(bret, "Failed to create junction point directory.\n");
++
++    /* Create a destination folder for the junction point to target */
++    lstrcpyW(target_path, path);
++    for (int i=0; i<1; i++)
++    {
++        lstrcatW(target_path, parentW);
++        lstrcatW(target_path, path);
++    }
++    lstrcatW(target_path, targetW);
++    bret = CreateDirectoryW(target_path, NULL);
++    ok(bret, "Failed to create junction point target directory.\n");
++    pRtlDosPathNameToNtPathName_U(path, &nameW, NULL, NULL);
++
++    /* construct a too long pathname (resulting reparse buffer over 16 kiB limit) */
++    long_path = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 32767);
++    lstrcpyW(long_path, nameW.Buffer);
++    for (int i=0; i<250; i++)
++    {
++        lstrcatW(long_path, parentW);
++        lstrcatW(long_path, path);
++    }
++    lstrcatW(long_path, targetW);
++
++    /* Create the junction point */
++    handle = CreateFileW(reparse_path, GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING,
++                         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, 0);
++    if (handle == INVALID_HANDLE_VALUE)
++    {
++        win_skip("Failed to open junction point directory handle (0x%lx).\n", GetLastError());
++        goto cleanup;
++    }
++    buffer_len = build_reparse_buffer(long_path, &buffer);
++    bret = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, (LPVOID)buffer, buffer_len, NULL, 0, &dwret, 0);
++    ok(!bret && GetLastError()==ERROR_INVALID_REPARSE_DATA, "Unexpected error (0x%lx)\n", GetLastError());
++    HeapFree(GetProcessHeap(), 0, buffer);
++    CloseHandle(handle);
++
++    /* construct a long pathname to demonstrate correct behavior with very large reparse points */
++    pRtlDosPathNameToNtPathName_U(path, &nameW, NULL, NULL);
++    lstrcpyW(long_path, nameW.Buffer);
++    for (int i=0; i<200; i++)
++    {
++        lstrcatW(long_path, parentW);
++        lstrcatW(long_path, path);
++    }
++    lstrcatW(long_path, targetW);
++
++    /* use a sane (not obscenely long) target for the rest of testing */
++    pRtlFreeUnicodeString(&nameW);
++    pRtlDosPathNameToNtPathName_U(target_path, &nameW, NULL, NULL);
++
++    /* Create the junction point */
++    handle = CreateFileW(reparse_path, GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING,
++                         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, 0);
++    if (handle == INVALID_HANDLE_VALUE)
++    {
++        win_skip("Failed to open junction point directory handle (0x%lx).\n", GetLastError());
++        goto cleanup;
++    }
++    buffer_len = build_reparse_buffer(long_path, &buffer);
++    bret = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, (LPVOID)buffer, buffer_len, NULL, 0, &dwret, 0);
++    ok(bret, "Failed to create junction point! (0x%lx)\n", GetLastError());
++    CloseHandle(handle);
++
++cleanup:
++    /* Cleanup */
++    pRtlFreeUnicodeString(&nameW);
++    HeapFree(GetProcessHeap(), 0, long_path);
++    HeapFree(GetProcessHeap(), 0, buffer);
++    bret = RemoveDirectoryW(reparse_path);
++    todo_wine ok(bret, "Failed to remove temporary reparse point directory!\n");
++    bret = RemoveDirectoryW(target_path);
++    ok(bret, "Failed to remove temporary target directory!\n");
++    RemoveDirectoryW(path);
++}
++
+ START_TEST(file)
+ {
+     HMODULE hkernel32 = GetModuleHandleA("kernel32.dll");
+@@ -5398,5 +5549,6 @@ START_TEST(file)
+     test_ioctl();
+     test_query_ea();
+     test_flush_buffers_file();
++    test_reparse_points();
+     test_mailslot_name();
+ }
+diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
+index d103e3195b5..3fb4ded846c 100644
+--- a/dlls/ntdll/unix/file.c
++++ b/dlls/ntdll/unix/file.c
+@@ -35,6 +35,8 @@
+ #include <string.h>
+ #include <stdlib.h>
+ #include <stdio.h>
++#include <math.h>
++#include <libgen.h>
+ #include <limits.h>
+ #include <unistd.h>
+ #ifdef HAVE_MNTENT_H
+@@ -127,6 +129,7 @@
+ #include "wine/list.h"
+ #include "wine/debug.h"
+ #include "unix_private.h"
++#include "ntifs.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(file);
+ WINE_DECLARE_DEBUG_CHANNEL(winediag);
+@@ -138,6 +141,12 @@ WINE_DECLARE_DEBUG_CHANNEL(winediag);
+ #undef EXT2_IOC_GETFLAGS
+ #undef EXT4_CASEFOLD_FL
+ 
++#ifndef RENAME_EXCHANGE
++#define RENAME_EXCHANGE		(1 << 1)
++#endif
++
++#define SYM_MAX (PATH_MAX-1) /* PATH_MAX includes the NUL character */
++
+ #ifdef linux
+ 
+ /* We want the real kernel dirent structure, not the libc one */
+@@ -239,6 +248,95 @@ static const BOOL is_case_sensitive = FALSE;
+ static pthread_mutex_t dir_mutex = PTHREAD_MUTEX_INITIALIZER;
+ static pthread_mutex_t mnt_mutex = PTHREAD_MUTEX_INITIALIZER;
+ 
++#ifndef HAVE_RENAMEAT2
++int renameat2( int olddirfd, const char *oldpath, int newdirfd, const char *newpath,
++               unsigned int flags )
++{
++    if (flags == 0)
++        return renameat( olddirfd, oldpath, newdirfd, newpath );
++#if defined(__NR_renameat2)
++    return syscall( __NR_renameat2, olddirfd, oldpath, newdirfd, newpath, flags );
++#elif defined(RENAME_SWAP)
++    return renameatx_np(olddirfd, oldpath, newdirfd, newpath,
++                        (flags & RENAME_EXCHANGE ? RENAME_SWAP : 0));
++#else
++    errno = ENOSYS;
++    return -1;
++#endif
++}
++#endif /* HAVE_RENAMEAT2 */
++
++static char *itoa( int i )
++{
++    static char buffer[11];
++
++    snprintf(buffer, sizeof(buffer), "%d", i);
++    return buffer;
++}
++
++/* base64url (RFC 4648 §5) encode a binary string
++ * 1) start with base64
++ * 2) replace '+' by '-' and replace '/' by '_'
++ * 3) do not add padding characters
++ * 4) do not add line separators
++ */
++static UINT encode_base64url( const char *bin, unsigned int len, char *base64 )
++{
++    UINT n = 0, x;
++    static const char base64enc[] =
++        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
++
++    while (len > 0)
++    {
++        /* first 6 bits, all from bin[0] */
++        base64[n++] = base64enc[(bin[0] & 0xfc) >> 2];
++        x = (bin[0] & 3) << 4;
++
++        /* next 6 bits, 2 from bin[0] and 4 from bin[1] */
++        if (len == 1)
++        {
++            base64[n++] = base64enc[x];
++            break;
++        }
++        base64[n++] = base64enc[x | ((bin[1] & 0xf0) >> 4)];
++        x = (bin[1] & 0x0f) << 2;
++
++        /* next 6 bits 4 from bin[1] and 2 from bin[2] */
++        if (len == 2)
++        {
++            base64[n++] = base64enc[x];
++            break;
++        }
++        base64[n++] = base64enc[x | ((bin[2] & 0xc0) >> 6)];
++
++        /* last 6 bits, all from bin [2] */
++        base64[n++] = base64enc[bin[2] & 0x3f];
++        bin += 3;
++        len -= 3;
++    }
++    base64[n] = 0;
++    return n;
++}
++
++/* create a directory and all the needed parent directories */
++static int mkdir_p(const char *path, mode_t mode)
++{
++    char path_tmp[PATH_MAX], *p;
++
++    strcpy( path_tmp, path );
++    for (p = path_tmp + 1; *p; p++) {
++        if (*p == '/') {
++            *p = '\0';
++            if (mkdir(path_tmp, mode) != 0 && errno != EEXIST)
++                return -1;
++            *p = '/';
++        }
++    }
++    if (mkdir(path_tmp, mode) != 0 && errno != EEXIST)
++        return -1;
++    return 0;
++}
++
+ /* check if a given Unicode char is OK in a DOS short name */
+ static inline BOOL is_invalid_dos_char( WCHAR ch )
+ {
+@@ -1574,6 +1672,28 @@ static inline ULONG get_file_attributes( const struct stat *st )
+ }
+ 
+ 
++/* determine whether a reparse point is meant to be a directory or a file */
++static int is_reparse_dir( int fd, const char *path, BOOL *is_dir )
++{
++    char link_path[PATH_MAX], *p;
++    int ret;
++
++    if ((ret = readlinkat( fd, path, link_path, sizeof(link_path) )) < 0)
++        return ret;
++    /* confirm that this file is a reparse point */
++    if (strncmp( link_path, ".REPARSE_POINT/", 15) != 0)
++        return -1;
++    /* skip past the reparse point indicator and the filename */
++    p = &link_path[15];
++    if ((p = strchr( p, '/' )) == NULL)
++        return -1;
++    p++;
++    /* read the flag indicating whether this reparse point is a directory */
++    if (is_dir) *is_dir = (*p == '.');
++    return 0;
++}
++
++
+ static BOOL fd_is_mount_point( int fd, const struct stat *st )
+ {
+     struct stat parent;
+@@ -3313,6 +3433,179 @@ done:
+ }
+ 
+ 
++/*
++ * Retrieve the unix name corresponding to a file handle, remove that directory, and then symlink
++ * the requested directory to the location of the old directory.
++ */
++NTSTATUS create_reparse_point(HANDLE handle, REPARSE_DATA_BUFFER *buffer)
++{
++    int buffer_len = buffer->ReparseDataLength+FIELD_OFFSET(typeof(*buffer), GenericReparseBuffer);
++    char target_path[PATH_MAX], link_path[PATH_MAX], link_dir[PATH_MAX], original_dir[PATH_MAX];
++    int encoded_len = (int)ceil(buffer_len*4/3.0) + 1, chunk_len;
++    char tmpdir[PATH_MAX], tmplink[PATH_MAX], *d;
++    BOOL needs_close, tempdir_created = FALSE;
++    char filename_buf[PATH_MAX], *filename;
++    char *unix_src = NULL, *encoded = NULL;
++    int i = 0, j = 0, depth = 0, fd;
++    NTSTATUS status;
++    struct stat st;
++    BOOL is_dir;
++
++    if (buffer_len > 16*1024)
++        return STATUS_IO_REPARSE_DATA_INVALID;
++
++    if ((status = server_get_unix_fd( handle, FILE_SPECIAL_ACCESS, &fd, &needs_close, NULL, NULL )))
++        return status;
++    if (fstat( fd, &st ) == -1)
++    {
++        status = errno_to_status( errno );
++        goto cleanup;
++    }
++    if ((status = server_get_unix_name( handle, &unix_src )))
++        goto cleanup;
++    is_dir = S_ISDIR( st.st_mode );
++    is_reparse_dir( AT_FDCWD, unix_src, &is_dir ); /* keep type (replace existing reparse point) */
++    encoded = malloc( encoded_len );
++    if (!encoded)
++    {
++        status = STATUS_NO_MEMORY;
++        goto cleanup;
++    }
++    encoded_len = encode_base64url( (const char *)buffer, buffer_len, encoded );
++
++    TRACE( "Linking %s to %s\n", unix_src, encoded );
++    strcpy( filename_buf, unix_src );
++    filename = basename( filename_buf );
++
++    /* Create the symlink that represents the initial data in the reparse tag:
++     * *) Begin all reparse tags with the hidden folder .REPARSE_POINT.  This serves two purposes:
++     *    1) it makes it easy to identify reparse points
++     *    2) if the reparse buffer exceeds what can be stored in a single symlink (4095+1 bytes)
++     *       then we need to store additional data, so link to it and store it in a hidden folder
++     * *) Append the filename of the reparse point to the hidden folder, this ensures that if
++     *    multiple reparse points contain the same data that there is no possibility of collision
++     * *) Append a special flag to indicate whether this is a directory (./) or file (/)
++     * *) Append the base64-url encoded reparse point buffer
++     * *) Append the filename of the first continuing symlink (0) in case we need it
++     */
++    strcpy( target_path, ".REPARSE_POINT/" );
++    strcat( target_path, filename );
++    strcat( target_path, "/" );
++    if (is_dir)
++        strcat( target_path, "." );
++    strcat( target_path, "/" );
++    i = 0;
++    for (depth=0; i<encoded_len && strlen(target_path)<SYM_MAX-2; i+=chunk_len, depth++)
++    {
++        chunk_len = min(NAME_MAX, SYM_MAX-2-strlen(target_path));
++        strncat( target_path, &encoded[i], chunk_len );
++        strcat( target_path, "/" );
++    }
++    strcat( target_path, itoa(j) );
++
++    /* Produce the link in a temporary location in the same folder */
++    strcpy( tmpdir, unix_src );
++    d = dirname( tmpdir);
++    if (d != tmpdir) strcpy( tmpdir, d );
++    strcat( tmpdir, "/.winelink.XXXXXX" );
++    if (mkdtemp( tmpdir ) == NULL)
++    {
++        status = errno_to_status( errno );
++        goto cleanup;
++    }
++    tempdir_created = TRUE;
++    strcpy( tmplink, tmpdir );
++    strcat( tmplink, "/tmplink" );
++    if (symlink( target_path, tmplink ))
++    {
++        status = errno_to_status( errno );
++        goto cleanup;
++    }
++
++    /* change to the link folder so that we can build any necessary additional data */
++    getcwd( original_dir, PATH_MAX );
++    strcpy( link_dir, tmpdir );
++    link_dir[strlen(link_dir)-16] = 0;
++    chdir( link_dir );
++
++    /* If there is any further information in the reparse tag then store it in the hidden folder */
++    while(i < encoded_len)
++    {
++        j++;
++        strcpy( link_path, target_path );
++
++        target_path[0] = 0;
++        for (; depth>0; depth--)
++        {
++            strcat( target_path, "../" );
++        }
++        for (depth=0; i<encoded_len && strlen(target_path)<SYM_MAX-2; i+=chunk_len, depth++)
++        {
++            chunk_len = min(NAME_MAX, SYM_MAX-2-strlen(target_path));
++            strncat( target_path, &encoded[i], chunk_len );
++            strcat( target_path, "/" );
++        }
++        strcat( target_path, itoa(j) );
++
++        strcpy( link_dir, link_path );
++        link_dir[strlen(link_dir)-1] = 0;
++        if (mkdir_p( link_dir, 0777))
++        {
++            status = errno_to_status( errno );
++            goto cleanup;
++        }
++        if (symlink( target_path, link_path ))
++        {
++            status = errno_to_status( errno );
++            goto cleanup;
++        }
++        chdir( link_dir );
++    }
++
++    /* revert to the original directory */
++    chdir( original_dir );
++
++    /* Atomically move the initial link into position */
++    if (!renameat2( -1, tmplink, -1, unix_src, RENAME_EXCHANGE ))
++    {
++        /* success: link and folder/file have switched locations */
++        if (S_ISDIR( st.st_mode ))
++            rmdir( tmplink ); /* remove the folder (at link location) */
++        else
++            unlink( tmplink ); /* remove the file (at link location) */
++    }
++    else if (errno == ENOSYS)
++    {
++        FIXME( "Atomic exchange of directory with symbolic link unsupported on this system, "
++               "using unsafe exchange instead.\n" );
++        if (rmdir( unix_src ))
++        {
++            status = errno_to_status( errno );
++            goto cleanup;
++        }
++        if (rename( tmplink, unix_src ))
++        {
++            status = errno_to_status( errno );
++            goto cleanup; /* not moved, orignal file/folder at destination is orphaned */
++        }
++    }
++    else
++    {
++        status = errno_to_status( errno );
++        goto cleanup;
++    }
++    status = STATUS_SUCCESS;
++
++cleanup:
++    if (tempdir_created) rmdir( tmpdir );
++    if (needs_close) close( fd );
++    free( unix_src );
++    free( encoded );
++
++    return status;
++}
++
++
+ /******************************************************************************
+  *           lookup_unix_name
+  *
+@@ -6060,6 +6353,13 @@ NTSTATUS WINAPI NtFsControlFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE ap
+         break;
+     }
+ 
++    case FSCTL_SET_REPARSE_POINT:
++    {
++        REPARSE_DATA_BUFFER *buffer = (REPARSE_DATA_BUFFER *)in_buffer;
++        status = create_reparse_point( handle, buffer );
++        break;
++    }
++
+     case FSCTL_SET_SPARSE:
+         TRACE("FSCTL_SET_SPARSE: Ignoring request\n");
+         io->Information = 0;
+diff --git a/include/Makefile.in b/include/Makefile.in
+index 70134a7bcb7..bdddf5426fe 100644
+--- a/include/Makefile.in
++++ b/include/Makefile.in
+@@ -563,6 +563,7 @@ SOURCES = \
+ 	ntdef.h \
+ 	ntdsapi.h \
+ 	ntgdi.h \
++	ntifs.h \
+ 	ntlsa.h \
+ 	ntquery.h \
+ 	ntsecapi.h \
+diff --git a/include/ntifs.h b/include/ntifs.h
+new file mode 100644
+index 00000000000..21d42e17325
+--- /dev/null
++++ b/include/ntifs.h
+@@ -0,0 +1,42 @@
++/*
++ * Win32 definitions for Windows NT
++ *
++ * Copyright 2012 Erich E. Hoover
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#ifndef __WINE_NTIFS_H
++#define __WINE_NTIFS_H
++
++typedef struct _REPARSE_DATA_BUFFER {
++    ULONG  ReparseTag;
++    USHORT ReparseDataLength;
++    USHORT Reserved;
++    union {
++        struct {
++            USHORT SubstituteNameOffset;
++            USHORT SubstituteNameLength;
++            USHORT PrintNameOffset;
++            USHORT PrintNameLength;
++            WCHAR  PathBuffer[1];
++        } MountPointReparseBuffer;
++        struct {
++            UCHAR DataBuffer[1];
++        } GenericReparseBuffer;
++    };
++} REPARSE_DATA_BUFFER, *PREPARSE_DATA_BUFFER;
++
++#endif /* __WINE_NTIFS_H */
+-- 
+2.35.1
+

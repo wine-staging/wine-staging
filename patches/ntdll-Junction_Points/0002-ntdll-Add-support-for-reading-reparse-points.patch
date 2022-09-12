@@ -1,0 +1,293 @@
+From ded223a1f564442c26860d9e708b963710ecea21 Mon Sep 17 00:00:00 2001
+From: "Erich E. Hoover" <erich.e.hoover@gmail.com>
+Date: Thu, 16 Jan 2014 20:57:57 -0700
+Subject: [PATCH] ntdll: Add support for reading reparse points.
+
+Signed-off-by: Erich E. Hoover <erich.e.hoover@gmail.com>
+---
+ dlls/ntdll/tests/file.c |  21 +++-
+ dlls/ntdll/unix/file.c  | 209 ++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 228 insertions(+), 2 deletions(-)
+
+diff --git a/dlls/ntdll/tests/file.c b/dlls/ntdll/tests/file.c
+index 5f6cb223951..33e49793319 100644
+--- a/dlls/ntdll/tests/file.c
++++ b/dlls/ntdll/tests/file.c
+@@ -5359,14 +5359,14 @@ static void test_reparse_points(void)
+     static const WCHAR reparseW[] = {'\\','r','e','p','a','r','s','e',0};
+     static const WCHAR targetW[] = {'\\','t','a','r','g','e','t',0};
+     static const WCHAR parentW[] = {'\\','.','.','\\',0};
++    INT buffer_len, string_len, path_len, total_len;
+     static const WCHAR fooW[] = {'f','o','o',0};
+     static WCHAR volW[] = {'c',':','\\',0};
+     static const WCHAR dotW[] = {'.',0};
+     REPARSE_DATA_BUFFER *buffer = NULL;
+     DWORD dwret, dwLen, dwFlags;
++    WCHAR *dest, *long_path;
+     UNICODE_STRING nameW;
+-    WCHAR *long_path;
+-    INT buffer_len;
+     HANDLE handle;
+     BOOL bret;
+ 
+@@ -5463,6 +5463,23 @@ static void test_reparse_points(void)
+     buffer_len = build_reparse_buffer(long_path, &buffer);
+     bret = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, (LPVOID)buffer, buffer_len, NULL, 0, &dwret, 0);
+     ok(bret, "Failed to create junction point! (0x%lx)\n", GetLastError());
++
++    /* Read back the junction point */
++    HeapFree(GetProcessHeap(), 0, buffer);
++    buffer_len = sizeof(*buffer) + 2*32767;
++    buffer = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, buffer_len);
++    bret = DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, NULL, 0, (LPVOID)buffer, buffer_len, &dwret, 0);
++    ok(bret, "Failed to read junction point! (last error=0x%lx)\n", GetLastError());
++    string_len = buffer->MountPointReparseBuffer.SubstituteNameLength;
++    dest = &buffer->MountPointReparseBuffer.PathBuffer[buffer->MountPointReparseBuffer.SubstituteNameOffset/sizeof(WCHAR)];
++    ok((memcmp(dest, long_path, string_len) == 0), "Junction point destination does not match ('%s' != '%s')!\n",
++                                                   wine_dbgstr_w(dest), wine_dbgstr_w(long_path));
++    path_len = buffer->MountPointReparseBuffer.PrintNameOffset/sizeof(WCHAR);
++    path_len += buffer->MountPointReparseBuffer.PrintNameLength/sizeof(WCHAR);
++    total_len = FIELD_OFFSET(typeof(*buffer), MountPointReparseBuffer.PathBuffer[path_len+1])
++                - FIELD_OFFSET(typeof(*buffer), GenericReparseBuffer);
++    ok(buffer->ReparseDataLength == total_len, "ReparseDataLength has unexpected value (%d != %d)\n",
++                                               buffer->ReparseDataLength, total_len);
+     CloseHandle(handle);
+ 
+ cleanup:
+diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
+index 3fb4ded846c..3a1489c35d0 100644
+--- a/dlls/ntdll/unix/file.c
++++ b/dlls/ntdll/unix/file.c
+@@ -318,6 +318,84 @@ static UINT encode_base64url( const char *bin, unsigned int len, char *base64 )
+     return n;
+ }
+ 
++static inline char decode_base64url_char( char c )
++{
++    if (c >= 'A' && c <= 'Z') return c - 'A';
++    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
++    if (c >= '0' && c <= '9') return c - '0' + 52;
++    if (c == '-') return 62;
++    if (c == '_') return 63;
++    return 64;
++}
++
++/* decode a base64url (RFC 4648 §5) binary string
++ * 1) start with base64
++ * 2) replace '+' by '-' and replace '/' by '_'
++ * 3) do not add padding characters
++ * 4) do not add line separators
++ */
++static unsigned int decode_base64url( const char *base64, unsigned int len, char *buf )
++{
++    unsigned int i = 0;
++    char c0, c1, c2, c3;
++    const char *p = base64;
++
++    while (len > 4)
++    {
++        if ((c0 = decode_base64url_char( p[0] )) > 63) return 0;
++        if ((c1 = decode_base64url_char( p[1] )) > 63) return 0;
++        if ((c2 = decode_base64url_char( p[2] )) > 63) return 0;
++        if ((c3 = decode_base64url_char( p[3] )) > 63) return 0;
++
++        if (buf)
++        {
++            buf[i + 0] = (c0 << 2) | (c1 >> 4);
++            buf[i + 1] = (c1 << 4) | (c2 >> 2);
++            buf[i + 2] = (c2 << 6) |  c3;
++        }
++        len -= 4;
++        i += 3;
++        p += 4;
++    }
++    if (len == 2)
++    {
++        if ((c0 = decode_base64url_char( p[0] )) > 63) return 0;
++        if ((c1 = decode_base64url_char( p[1] )) > 63) return 0;
++
++        if (buf) buf[i] = (c0 << 2) | (c1 >> 4);
++        i++;
++    }
++    else if (len == 3)
++    {
++        if ((c0 = decode_base64url_char( p[0] )) > 63) return 0;
++        if ((c1 = decode_base64url_char( p[1] )) > 63) return 0;
++        if ((c2 = decode_base64url_char( p[2] )) > 63) return 0;
++
++        if (buf)
++        {
++            buf[i + 0] = (c0 << 2) | (c1 >> 4);
++            buf[i + 1] = (c1 << 4) | (c2 >> 2);
++        }
++        i += 2;
++    }
++    else
++    {
++        if ((c0 = decode_base64url_char( p[0] )) > 63) return 0;
++        if ((c1 = decode_base64url_char( p[1] )) > 63) return 0;
++        if ((c2 = decode_base64url_char( p[2] )) > 63) return 0;
++        if ((c3 = decode_base64url_char( p[3] )) > 63) return 0;
++
++        if (buf)
++        {
++            buf[i + 0] = (c0 << 2) | (c1 >> 4);
++            buf[i + 1] = (c1 << 4) | (c2 >> 2);
++            buf[i + 2] = (c2 << 6) |  c3;
++        }
++        i += 3;
++    }
++    return i;
++}
++
+ /* create a directory and all the needed parent directories */
+ static int mkdir_p(const char *path, mode_t mode)
+ {
+@@ -3606,6 +3684,129 @@ cleanup:
+ }
+ 
+ 
++/*
++ * Retrieve the unix name corresponding to a file handle and use that to find the destination of the
++ * symlink corresponding to that file handle.
++ */
++NTSTATUS get_reparse_point(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG *size)
++{
++    char link_dir[PATH_MAX], original_dir[PATH_MAX], *d;
++    int link_path_len, buffer_len, encoded_len;
++    char *unix_src, link_path[PATH_MAX];
++    REPARSE_DATA_BUFFER header;
++    ULONG out_size = *size;
++    char *encoded = NULL;
++    NTSTATUS status;
++    ssize_t ret;
++    int depth;
++    char *p;
++
++    if ((status = server_get_unix_name( handle, &unix_src )))
++        goto cleanup;
++
++    ret = readlink( unix_src, link_path, sizeof(link_path) );
++    if (ret < 0)
++    {
++        status = errno_to_status( errno );
++        goto cleanup;
++    }
++    link_path_len = ret;
++    link_path[link_path_len] = 0;
++    if (strncmp( link_path, ".REPARSE_POINT/", 15) != 0)
++    {
++        status = STATUS_NOT_IMPLEMENTED;
++        goto cleanup;
++    }
++    encoded_len = link_path_len;
++    encoded = malloc( encoded_len );
++    if (!encoded)
++    {
++        status = STATUS_NO_MEMORY;
++        goto cleanup;
++    }
++
++    /* Copy the encoded data from the inital symlink */
++    encoded[0] = 0;
++    p = &link_path[15];
++    if ((p = strchr( p, '/' )) == NULL)
++    {
++        status = STATUS_IO_REPARSE_DATA_INVALID;
++        goto cleanup;
++    }
++    p++;
++    if (*(p++) == '.')
++        p++;
++    for (depth=0; p < link_path + link_path_len; p += NAME_MAX+1, depth++)
++        strncat( encoded, p, NAME_MAX );
++    encoded[strlen(encoded)-1] = 0; /* chunk id */
++    encoded[strlen(encoded)-1] = 0; /* final slash */
++
++    /* get the length of the full buffer so that we know when to stop collecting data */
++    decode_base64url( encoded, sizeof(header), (char*)&header );
++    buffer_len = header.ReparseDataLength+FIELD_OFFSET(typeof(header), GenericReparseBuffer);
++    *size = buffer_len;
++
++    if (buffer_len > out_size)
++    {
++        status = STATUS_BUFFER_TOO_SMALL;
++        goto cleanup;
++    }
++    encoded_len = (int)ceil(buffer_len*4/3.0) + 1;
++    encoded = realloc( encoded, encoded_len );
++    if (!encoded)
++    {
++        status = STATUS_NO_MEMORY;
++        goto cleanup;
++    }
++
++    /* change to the link folder so that we can build any necessary additional data */
++    getcwd( original_dir, PATH_MAX );
++    strcpy( link_dir, unix_src );
++    d = dirname( link_dir);
++    if (d != link_dir) strcpy( link_dir, d );
++    chdir( link_dir );
++
++    /* Copy the encoded data from the follow on symlinks */
++    while(strlen(encoded) < encoded_len-1)
++    {
++        strcpy( link_dir, link_path );
++        ret = readlink( link_dir, link_path, sizeof(link_path) );
++        if (ret < 0)
++        {
++            status = errno_to_status( errno );
++            goto cleanup;
++        }
++        link_path_len = ret;
++        link_path[link_path_len] = 0;
++
++        p = &link_path[3*depth];
++        for (depth=0; p < link_path + link_path_len; p += NAME_MAX+1, depth++)
++            strncat( encoded, p, NAME_MAX );
++        encoded[strlen(encoded)-1] = 0; /* chunk id */
++        encoded[strlen(encoded)-1] = 0; /* final slash */
++
++        link_dir[strlen(link_dir)-1] = 0;
++        chdir( link_dir );
++    }
++
++    /* revert to the original directory */
++    chdir( original_dir );
++
++    /* Decode the reparse buffer from the base64-encoded symlink data */
++    *size = decode_base64url( encoded, strlen(encoded), (char*)buffer );
++    status = STATUS_SUCCESS;
++    if (buffer_len != *size)
++    {
++        status = STATUS_IO_REPARSE_DATA_INVALID;
++        ERR("Size mismatch decoding reparse point buffer (%d != %d)\n", *size, buffer_len);
++    }
++
++cleanup:
++    free( encoded );
++    return status;
++}
++
++
+ /******************************************************************************
+  *           lookup_unix_name
+  *
+@@ -6353,6 +6554,14 @@ NTSTATUS WINAPI NtFsControlFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE ap
+         break;
+     }
+ 
++    case FSCTL_GET_REPARSE_POINT:
++    {
++        REPARSE_DATA_BUFFER *buffer = (REPARSE_DATA_BUFFER *)out_buffer;
++        ULONG size = out_size;
++        status = get_reparse_point( handle, buffer, &size );
++        io->Information = size;
++        break;
++    }
+     case FSCTL_SET_REPARSE_POINT:
+     {
+         REPARSE_DATA_BUFFER *buffer = (REPARSE_DATA_BUFFER *)in_buffer;
+-- 
+2.35.1
+

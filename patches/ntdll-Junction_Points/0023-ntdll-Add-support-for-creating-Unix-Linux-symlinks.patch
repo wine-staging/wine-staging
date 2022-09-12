@@ -1,0 +1,165 @@
+From 489bbd44a182accd32dd26788ff19d0a439f49fd Mon Sep 17 00:00:00 2001
+From: "Erich E. Hoover" <erich.e.hoover@wine-staging.com>
+Date: Mon, 3 May 2021 09:28:08 -0600
+Subject: [PATCH] ntdll: Add support for creating Unix/Linux symlinks.
+
+Signed-off-by: Erich E. Hoover <erich.e.hoover@gmail.com>
+---
+ dlls/ntdll/tests/file.c | 35 ++++++++++++++++++++++++++++++
+ dlls/ntdll/unix/file.c  | 48 +++++++++++++++++++++++++++--------------
+ include/ntifs.h         |  4 ++++
+ include/winnt.h         |  1 +
+ 4 files changed, 72 insertions(+), 16 deletions(-)
+
+diff --git a/dlls/ntdll/tests/file.c b/dlls/ntdll/tests/file.c
+index a84abd66106..f8f5e7f1ace 100644
+--- a/dlls/ntdll/tests/file.c
++++ b/dlls/ntdll/tests/file.c
+@@ -5398,6 +5398,8 @@ static void test_reparse_points(void)
+     REPARSE_DATA_BUFFER *buffer = NULL;
+     DWORD dwret, dwLen, dwFlags, err;
+     WIN32_FILE_ATTRIBUTE_DATA fad;
++    char unix_target[] = "target";
++    UCHAR *unix_dest;
+     WCHAR buf[] = {0,0,0,0};
+     HANDLE handle, token;
+     IO_STATUS_BLOCK iosb;
+@@ -5762,6 +5764,39 @@ static void test_reparse_points(void)
+        "Symlink folder's access time does not match.\n");
+     CloseHandle(handle);
+ 
++    /* Create a Unix/Linux symlink */
++    HeapFree(GetProcessHeap(), 0, buffer);
++    RemoveDirectoryW(reparse_path);
++    bret = CreateDirectoryW(reparse_path, NULL);
++    handle = CreateFileW(reparse_path, GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING,
++                         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, 0);
++    if (handle == INVALID_HANDLE_VALUE)
++    {
++        win_skip("Failed to open symlink directory handle (0x%lx).\n", GetLastError());
++        goto cleanup;
++    }
++    dwret = NtQueryInformationFile(handle, &iosb, &old_attrib, sizeof(old_attrib), FileBasicInformation);
++    ok(dwret == STATUS_SUCCESS, "Failed to get symlink folder's attributes (0x%lx).\n", dwret);
++    path_len = strlen(unix_target);
++    buffer_len = offsetof(REPARSE_DATA_BUFFER, LinuxSymbolicLinkReparseBuffer.PathBuffer[path_len]);
++    buffer = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, buffer_len);
++    buffer->ReparseTag = IO_REPARSE_TAG_LX_SYMLINK;
++    buffer->ReparseDataLength = sizeof(ULONG) + path_len;
++    memcpy(buffer->LinuxSymbolicLinkReparseBuffer.PathBuffer, unix_target, path_len);
++    bret = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, (LPVOID)buffer, buffer_len, NULL, 0, &dwret, 0);
++    ok(bret, "Failed to create symlink! (0x%lx)\n", GetLastError());
++
++    /* Delete the symlink */
++    memset(&guid_buffer, 0x00, sizeof(guid_buffer));
++    guid_buffer.ReparseTag = IO_REPARSE_TAG_LX_SYMLINK;
++    bret = DeviceIoControl(handle, FSCTL_DELETE_REPARSE_POINT, (LPVOID)&guid_buffer,
++                           REPARSE_GUID_DATA_BUFFER_HEADER_SIZE, NULL, 0, &dwret, 0);
++    ok(bret, "Failed to delete symlink! (0x%lx)\n", GetLastError());
++    CloseHandle(handle);
++    RemoveDirectoryW(reparse_path);
++    DeleteFileW(reparse_path);
++    CreateDirectoryW(reparse_path, NULL);
++
+     /* Create a relative directory symlink */
+     HeapFree(GetProcessHeap(), 0, buffer);
+     handle = CreateFileW(reparse_path, GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING,
+diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
+index d5d62f3ba94..d495051a75a 100644
+--- a/dlls/ntdll/unix/file.c
++++ b/dlls/ntdll/unix/file.c
+@@ -3729,20 +3729,33 @@ NTSTATUS create_reparse_point(HANDLE handle, REPARSE_DATA_BUFFER *buffer)
+      * *) Append the base64-url encoded reparse point buffer
+      * *) Append the filename of the first continuing symlink (0) in case we need it
+      */
+-    strcpy( target_path, ".REPARSE_POINT/" );
+-    strcat( target_path, filename );
+-    strcat( target_path, "/" );
+-    if (is_dir)
+-        strcat( target_path, "." );
+-    strcat( target_path, "/" );
+-    i = 0;
+-    for (depth=0; i<encoded_len && strlen(target_path)<SYM_MAX-2; i+=chunk_len, depth++)
++    if (buffer->ReparseTag != IO_REPARSE_TAG_LX_SYMLINK)
+     {
+-        chunk_len = min(NAME_MAX, SYM_MAX-2-strlen(target_path));
+-        strncat( target_path, &encoded[i], chunk_len );
++        strcpy( target_path, ".REPARSE_POINT/" );
++        strcat( target_path, filename );
+         strcat( target_path, "/" );
++        if (is_dir)
++            strcat( target_path, "." );
++        strcat( target_path, "/" );
++        for (depth=0; i<encoded_len && strlen(target_path)<SYM_MAX-2; i+=chunk_len, depth++)
++        {
++            chunk_len = min(NAME_MAX, SYM_MAX-2-strlen(target_path));
++            strncat( target_path, &encoded[i], chunk_len );
++            strcat( target_path, "/" );
++        }
++        strcat( target_path, itoa(j) );
++    }
++    else
++    {
++        int unix_dest_len;
++        char *unix_dest;
++
++        unix_dest_len = buffer->ReparseDataLength - sizeof(ULONG);
++        unix_dest = (char *) &buffer->LinuxSymbolicLinkReparseBuffer.PathBuffer[0];
++        memcpy( target_path, unix_dest, unix_dest_len );
++        target_path[unix_dest_len] = 0;
++        i = encoded_len; /* no extended metadata to store */
+     }
+-    strcat( target_path, itoa(j) );
+ 
+     /* Produce the link in a temporary location in the same folder */
+     strcpy( tmpdir, unix_src );
+@@ -3804,11 +3817,14 @@ NTSTATUS create_reparse_point(HANDLE handle, REPARSE_DATA_BUFFER *buffer)
+     }
+ 
+     /* create the very last link directory */
+-    strcpy( link_path, target_path );
+-    strcpy( link_dir, link_path );
+-    link_dir[strlen(link_dir)-1] = 0;
+-    if (mkdir_p( link_dir, 0777) == 0)
+-        create_reparse_target( unix_src, depth + 2, link_path, buffer );
++    if (buffer->ReparseTag != IO_REPARSE_TAG_LX_SYMLINK)
++    {
++        strcpy( link_path, target_path );
++        strcpy( link_dir, link_path );
++        link_dir[strlen(link_dir)-1] = 0;
++        if (mkdir_p( link_dir, 0777) == 0)
++            create_reparse_target( unix_src, depth + 2, link_path, buffer );
++    }
+ 
+     /* revert to the original directory */
+     chdir( original_dir );
+diff --git a/include/ntifs.h b/include/ntifs.h
+index 0d02225bc4f..25af12a413a 100644
+--- a/include/ntifs.h
++++ b/include/ntifs.h
+@@ -42,6 +42,10 @@ typedef struct _REPARSE_DATA_BUFFER {
+             USHORT PrintNameLength;
+             WCHAR  PathBuffer[1];
+         } MountPointReparseBuffer;
++        struct {
++            ULONG  Version;
++            UCHAR  PathBuffer[1];
++        } LinuxSymbolicLinkReparseBuffer;
+         struct {
+             UCHAR DataBuffer[1];
+         } GenericReparseBuffer;
+diff --git a/include/winnt.h b/include/winnt.h
+index 76aee026d84..96cab40201d 100644
+--- a/include/winnt.h
++++ b/include/winnt.h
+@@ -2324,6 +2324,7 @@ extern struct _TEB * WINAPI NtCurrentTeb(void);
+ #define IO_REPARSE_TAG_CLOUD_MASK       __MSABI_LONG(0x0000F000)
+ #define IO_REPARSE_TAG_APPEXECLINK      __MSABI_LONG(0x8000001B)
+ #define IO_REPARSE_TAG_GVFS             __MSABI_LONG(0x9000001C)
++#define IO_REPARSE_TAG_LX_SYMLINK       __MSABI_LONG(0xA000001D)
+ #define IO_REPARSE_TAG_STORAGE_SYNC     __MSABI_LONG(0x8000001E)
+ #define IO_REPARSE_TAG_WCI_TOMBSTONE    __MSABI_LONG(0xA000001F)
+ #define IO_REPARSE_TAG_UNHANDLED        __MSABI_LONG(0x80000020)
+-- 
+2.35.1
+
