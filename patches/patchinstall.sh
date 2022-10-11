@@ -163,7 +163,6 @@ patch_enable_all ()
 	enable_riched20_IText_Interface="$1"
 	enable_sapi_ISpObjectToken_CreateInstance="$1"
 	enable_sapi_iteration_tokens="$1"
-	enable_secur32_InitializeSecurityContextW="$1"
 	enable_server_File_Permissions="$1"
 	enable_server_PeekMessage="$1"
 	enable_server_Realtime_Priority="$1"
@@ -507,9 +506,6 @@ patch_enable ()
 			;;
 		sapi-iteration-tokens)
 			enable_sapi_iteration_tokens="$2"
-			;;
-		secur32-InitializeSecurityContextW)
-			enable_secur32_InitializeSecurityContextW="$2"
 			;;
 		server-File_Permissions)
 			enable_server_File_Permissions="$2"
@@ -2556,18 +2552,6 @@ if test "$enable_sapi_iteration_tokens" -eq 1; then
 	patch_apply sapi-iteration-tokens/0007-sapi-Implement-ISpObjectToken-OpenKey.patch
 	patch_apply sapi-iteration-tokens/0008-sapi-Add-default-voice-registry-key.patch
 	patch_apply sapi-iteration-tokens/0009-sapi-Return-dump-object-in-ISpObjectTokenEnumBuilder.patch
-fi
-
-# Patchset secur32-InitializeSecurityContextW
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#51049] Create a new Context when the input object is NULL.
-# |
-# | Modified files:
-# |   *	dlls/secur32/schannel.c, dlls/secur32/tests/schannel.c
-# |
-if test "$enable_secur32_InitializeSecurityContextW" -eq 1; then
-	patch_apply secur32-InitializeSecurityContextW/0001-secur32-Input-Parameter-should-be-NULL-on-first-call.patch
 fi
 
 # Patchset server-File_Permissions
