@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "2a4ec7dafc7ee38108f6a9f626a7c39e6b6777e0"
+	echo "16c6c249a5134de2422fbd3471ead7425c968301"
 }
 
 # Show version information
@@ -132,7 +132,6 @@ patch_enable_all ()
 	enable_ntdll_APC_Performance="$1"
 	enable_ntdll_Builtin_Prot="$1"
 	enable_ntdll_CriticalSection="$1"
-	enable_ntdll_DOS_Attributes="$1"
 	enable_ntdll_Exception="$1"
 	enable_ntdll_ForceBottomUpAlloc="$1"
 	enable_ntdll_HashLinks="$1"
@@ -415,9 +414,6 @@ patch_enable ()
 			;;
 		ntdll-CriticalSection)
 			enable_ntdll_CriticalSection="$2"
-			;;
-		ntdll-DOS_Attributes)
-			enable_ntdll_DOS_Attributes="$2"
 			;;
 		ntdll-Exception)
 			enable_ntdll_Exception="$2"
@@ -1208,13 +1204,9 @@ if test "$enable_shell32_Progress_Dialog" -eq 1; then
 fi
 
 if test "$enable_server_Stored_ACLs" -eq 1; then
-	if test "$enable_ntdll_DOS_Attributes" -gt 1; then
-		abort "Patchset ntdll-DOS_Attributes disabled, but server-Stored_ACLs depends on that."
-	fi
 	if test "$enable_server_File_Permissions" -gt 1; then
 		abort "Patchset server-File_Permissions disabled, but server-Stored_ACLs depends on that."
 	fi
-	enable_ntdll_DOS_Attributes=1
 	enable_server_File_Permissions=1
 fi
 
@@ -1301,16 +1293,12 @@ if test "$enable_eventfd_synchronization" -eq 1; then
 fi
 
 if test "$enable_ntdll_Junction_Points" -eq 1; then
-	if test "$enable_ntdll_DOS_Attributes" -gt 1; then
-		abort "Patchset ntdll-DOS_Attributes disabled, but ntdll-Junction_Points depends on that."
-	fi
 	if test "$enable_ntdll_NtQueryEaFile" -gt 1; then
 		abort "Patchset ntdll-NtQueryEaFile disabled, but ntdll-Junction_Points depends on that."
 	fi
 	if test "$enable_ntdll_Serial_Port_Detection" -gt 1; then
 		abort "Patchset ntdll-Serial_Port_Detection disabled, but ntdll-Junction_Points depends on that."
 	fi
-	enable_ntdll_DOS_Attributes=1
 	enable_ntdll_NtQueryEaFile=1
 	enable_ntdll_Serial_Port_Detection=1
 fi
@@ -1677,25 +1665,6 @@ if test "$enable_dsound_EAX" -eq 1; then
 	patch_apply dsound-EAX/0023-dsound-Fake-success-for-EAX-Set-Buffer-ListenerPrope.patch
 fi
 
-# Patchset ntdll-DOS_Attributes
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#9158] Support for DOS hidden/system file attributes
-# |   *	[#15679] cygwin symlinks not working in wine
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/ntdll/tests/directory.c, dlls/ntdll/tests/file.c, dlls/ntdll/unix/file.c
-# |
-if test "$enable_ntdll_DOS_Attributes" -eq 1; then
-	patch_apply ntdll-DOS_Attributes/0001-ntdll-Implement-retrieving-DOS-attributes-in-fd_-get.patch
-	patch_apply ntdll-DOS_Attributes/0003-ntdll-Implement-storing-DOS-attributes-in-NtSetInfor.patch
-	patch_apply ntdll-DOS_Attributes/0004-ntdll-Implement-storing-DOS-attributes-in-NtCreateFi.patch
-	patch_apply ntdll-DOS_Attributes/0005-libport-Add-support-for-Mac-OS-X-style-extended-attr.patch
-	patch_apply ntdll-DOS_Attributes/0006-libport-Add-support-for-FreeBSD-style-extended-attri.patch
-	patch_apply ntdll-DOS_Attributes/0007-ntdll-Perform-the-Unix-style-hidden-file-check-withi.patch
-	patch_apply ntdll-DOS_Attributes/0008-ntdll-Always-store-SAMBA_XATTR_DOS_ATTRIB-when-path-.patch
-fi
-
 # Patchset ntdll-NtQueryEaFile
 # |
 # | Modified files:
@@ -1720,7 +1689,7 @@ fi
 # Patchset ntdll-Junction_Points
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-DOS_Attributes, ntdll-NtQueryEaFile, ntdll-Serial_Port_Detection
+# |   *	ntdll-NtQueryEaFile, ntdll-Serial_Port_Detection
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#12401] NET Framework 2.0, 3.0, 4.0 installers and other apps that make use of GAC API for managed assembly
@@ -1797,8 +1766,8 @@ fi
 # Patchset eventfd_synchronization
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-DOS_Attributes, ntdll-NtQueryEaFile, ntdll-Serial_Port_Detection, ntdll-Junction_Points, server-PeekMessage,
-# | 	server-Realtime_Priority, server-Signal_Thread
+# |   *	ntdll-NtQueryEaFile, ntdll-Serial_Port_Detection, ntdll-Junction_Points, server-PeekMessage, server-Realtime_Priority,
+# | 	server-Signal_Thread
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#36692] Many multi-threaded applications have poor performance due to heavy use of synchronization primitives
@@ -2577,14 +2546,13 @@ fi
 # |   *	[#51775] sapi: Allow iteration of Token objects.
 # |
 # | Modified files:
-# |   *	dlls/sapi/sapi.rgs, dlls/sapi/tests/token.c, dlls/sapi/token.c
+# |   *	dlls/sapi/sapi.rgs, dlls/sapi/token.c
 # |
 if test "$enable_sapi_iteration_tokens" -eq 1; then
 	patch_apply sapi-iteration-tokens/0001-sapi-Implement-ISpRegDataKey-CreateKey.patch
 	patch_apply sapi-iteration-tokens/0003-sapi-Implement-ISpRegDataKey-GetStringValue.patch
 	patch_apply sapi-iteration-tokens/0004-sapi-EnumTokens-setup-enumeration-members.patch
 	patch_apply sapi-iteration-tokens/0005-sapi-Implement-ISpObjectTokenEnumBuilder-Item.patch
-	patch_apply sapi-iteration-tokens/0006-sapi-Implement-ISpObjectToken-GetId.patch
 	patch_apply sapi-iteration-tokens/0007-sapi-Implement-ISpObjectToken-OpenKey.patch
 	patch_apply sapi-iteration-tokens/0008-sapi-Add-default-voice-registry-key.patch
 	patch_apply sapi-iteration-tokens/0009-sapi-Return-dump-object-in-ISpObjectTokenEnumBuilder.patch
@@ -2605,7 +2573,7 @@ fi
 # Patchset server-File_Permissions
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-DOS_Attributes, ntdll-NtQueryEaFile, ntdll-Serial_Port_Detection, ntdll-Junction_Points
+# |   *	ntdll-NtQueryEaFile, ntdll-Serial_Port_Detection, ntdll-Junction_Points
 # |
 # | Modified files:
 # |   *	dlls/advapi32/tests/security.c, dlls/ntdll/tests/file.c, server/fd.c
@@ -2623,7 +2591,7 @@ fi
 # Patchset server-Stored_ACLs
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-DOS_Attributes, ntdll-NtQueryEaFile, ntdll-Serial_Port_Detection, ntdll-Junction_Points, server-File_Permissions
+# |   *	ntdll-NtQueryEaFile, ntdll-Serial_Port_Detection, ntdll-Junction_Points, server-File_Permissions
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#33576] Support for stored file ACLs
