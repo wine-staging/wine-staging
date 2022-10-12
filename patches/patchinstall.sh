@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "16c6c249a5134de2422fbd3471ead7425c968301"
+	echo "4312be1646cad32548f855e25823857092bf31dc"
 }
 
 # Show version information
@@ -3722,7 +3722,7 @@ fi
 # |   *	[#44061] Check Parameter in WTHelperGetProvCertFromChain
 # |
 # | Modified files:
-# |   *	dlls/wintrust/tests/softpub.c, dlls/wintrust/wintrust_main.c
+# |   *	dlls/user.exe16/window.c, dlls/wintrust/tests/softpub.c, dlls/wintrust/wintrust_main.c
 # |
 if test "$enable_wintrust_WTHelperGetProvCertFromChain" -eq 1; then
 	patch_apply wintrust-WTHelperGetProvCertFromChain/0001-wintrust-Add-parameter-check-in-WTHelperGetProvCertF.patch
