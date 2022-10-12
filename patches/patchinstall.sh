@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "4312be1646cad32548f855e25823857092bf31dc"
+	echo "f87ad783e23a2b6f5e9b8cf78dbf99bad4471a25"
 }
 
 # Show version information
@@ -2545,8 +2545,6 @@ fi
 # |   *	dlls/sapi/sapi.rgs, dlls/sapi/token.c
 # |
 if test "$enable_sapi_iteration_tokens" -eq 1; then
-	patch_apply sapi-iteration-tokens/0001-sapi-Implement-ISpRegDataKey-CreateKey.patch
-	patch_apply sapi-iteration-tokens/0003-sapi-Implement-ISpRegDataKey-GetStringValue.patch
 	patch_apply sapi-iteration-tokens/0004-sapi-EnumTokens-setup-enumeration-members.patch
 	patch_apply sapi-iteration-tokens/0005-sapi-Implement-ISpObjectTokenEnumBuilder-Item.patch
 	patch_apply sapi-iteration-tokens/0007-sapi-Implement-ISpObjectToken-OpenKey.patch
@@ -3722,7 +3720,7 @@ fi
 # |   *	[#44061] Check Parameter in WTHelperGetProvCertFromChain
 # |
 # | Modified files:
-# |   *	dlls/user.exe16/window.c, dlls/wintrust/tests/softpub.c, dlls/wintrust/wintrust_main.c
+# |   *	dlls/wintrust/tests/softpub.c, dlls/wintrust/wintrust_main.c
 # |
 if test "$enable_wintrust_WTHelperGetProvCertFromChain" -eq 1; then
 	patch_apply wintrust-WTHelperGetProvCertFromChain/0001-wintrust-Add-parameter-check-in-WTHelperGetProvCertF.patch
