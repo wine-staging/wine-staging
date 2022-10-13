@@ -138,7 +138,6 @@ patch_enable_all ()
 	enable_ntdll_Hide_Wine_Exports="$1"
 	enable_ntdll_Junction_Points="$1"
 	enable_ntdll_Manifest_Range="$1"
-	enable_ntdll_NtQueryEaFile="$1"
 	enable_ntdll_NtQuerySection="$1"
 	enable_ntdll_NtSetLdtEntries="$1"
 	enable_ntdll_ProcessQuotaLimits="$1"
@@ -431,9 +430,6 @@ patch_enable ()
 			;;
 		ntdll-Manifest_Range)
 			enable_ntdll_Manifest_Range="$2"
-			;;
-		ntdll-NtQueryEaFile)
-			enable_ntdll_NtQueryEaFile="$2"
 			;;
 		ntdll-NtQuerySection)
 			enable_ntdll_NtQuerySection="$2"
@@ -1289,13 +1285,9 @@ if test "$enable_eventfd_synchronization" -eq 1; then
 fi
 
 if test "$enable_ntdll_Junction_Points" -eq 1; then
-	if test "$enable_ntdll_NtQueryEaFile" -gt 1; then
-		abort "Patchset ntdll-NtQueryEaFile disabled, but ntdll-Junction_Points depends on that."
-	fi
 	if test "$enable_ntdll_Serial_Port_Detection" -gt 1; then
 		abort "Patchset ntdll-Serial_Port_Detection disabled, but ntdll-Junction_Points depends on that."
 	fi
-	enable_ntdll_NtQueryEaFile=1
 	enable_ntdll_Serial_Port_Detection=1
 fi
 
@@ -1661,15 +1653,6 @@ if test "$enable_dsound_EAX" -eq 1; then
 	patch_apply dsound-EAX/0023-dsound-Fake-success-for-EAX-Set-Buffer-ListenerPrope.patch
 fi
 
-# Patchset ntdll-NtQueryEaFile
-# |
-# | Modified files:
-# |   *	dlls/ntdll/tests/file.c, dlls/ntdll/unix/file.c
-# |
-if test "$enable_ntdll_NtQueryEaFile" -eq 1; then
-	patch_apply ntdll-NtQueryEaFile/0001-ntdll-Improve-stub-of-NtQueryEaFile.patch
-fi
-
 # Patchset ntdll-Serial_Port_Detection
 # |
 # | This patchset fixes the following Wine bugs:
@@ -1685,7 +1668,7 @@ fi
 # Patchset ntdll-Junction_Points
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-NtQueryEaFile, ntdll-Serial_Port_Detection
+# |   *	ntdll-Serial_Port_Detection
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#12401] NET Framework 2.0, 3.0, 4.0 installers and other apps that make use of GAC API for managed assembly
@@ -1762,8 +1745,7 @@ fi
 # Patchset eventfd_synchronization
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-NtQueryEaFile, ntdll-Serial_Port_Detection, ntdll-Junction_Points, server-PeekMessage, server-Realtime_Priority,
-# | 	server-Signal_Thread
+# |   *	ntdll-Serial_Port_Detection, ntdll-Junction_Points, server-PeekMessage, server-Realtime_Priority, server-Signal_Thread
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#36692] Many multi-threaded applications have poor performance due to heavy use of synchronization primitives
@@ -2555,7 +2537,7 @@ fi
 # Patchset server-File_Permissions
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-NtQueryEaFile, ntdll-Serial_Port_Detection, ntdll-Junction_Points
+# |   *	ntdll-Serial_Port_Detection, ntdll-Junction_Points
 # |
 # | Modified files:
 # |   *	dlls/advapi32/tests/security.c, dlls/ntdll/tests/file.c, server/fd.c
@@ -2573,7 +2555,7 @@ fi
 # Patchset server-Stored_ACLs
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-NtQueryEaFile, ntdll-Serial_Port_Detection, ntdll-Junction_Points, server-File_Permissions
+# |   *	ntdll-Serial_Port_Detection, ntdll-Junction_Points, server-File_Permissions
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#33576] Support for stored file ACLs
