@@ -1,24 +1,24 @@
-From 9fb2b15dba901a3d43fad7e89bdf65fa42d8d3a3 Mon Sep 17 00:00:00 2001
+From 8919be537a3ada49b59f2686cc14dbfb81a37cb1 Mon Sep 17 00:00:00 2001
 From: "Erich E. Hoover" <erich.e.hoover@gmail.com>
 Date: Thu, 16 Jan 2014 20:56:49 -0700
-Subject: [PATCH] ntdll: Add support for creating reparse points.
+Subject: ntdll: Add support for creating reparse points.
 
 Signed-off-by: Erich E. Hoover <erich.e.hoover@gmail.com>
 ---
  configure.ac            |   2 +
  dlls/ntdll/Makefile.in  |   2 +-
  dlls/ntdll/tests/file.c | 152 ++++++++++++++++++++
- dlls/ntdll/unix/file.c  | 300 ++++++++++++++++++++++++++++++++++++++++
+ dlls/ntdll/unix/file.c  | 302 ++++++++++++++++++++++++++++++++++++++++
  include/Makefile.in     |   1 +
  include/ntifs.h         |  42 ++++++
- 6 files changed, 498 insertions(+), 1 deletion(-)
+ 6 files changed, 500 insertions(+), 1 deletion(-)
  create mode 100644 include/ntifs.h
 
 diff --git a/configure.ac b/configure.ac
-index 41a29cee398..167839c5793 100644
+index e11f3cfdb63..113d126a002 100644
 --- a/configure.ac
 +++ b/configure.ac
-@@ -2025,6 +2025,8 @@ AC_CHECK_FUNCS(\
+@@ -2018,6 +2018,8 @@ AC_CHECK_FUNCS(\
  	prctl \
  	proc_pidinfo \
  	sched_yield \
@@ -217,7 +217,7 @@ index c011733626f..93e50bd6952 100644
      test_mailslot_name();
  }
 diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
-index 604ca866890..58310fd8504 100644
+index 604ca866890..f3d831b0a33 100644
 --- a/dlls/ntdll/unix/file.c
 +++ b/dlls/ntdll/unix/file.c
 @@ -36,6 +36,8 @@
@@ -325,7 +325,7 @@ index 604ca866890..58310fd8504 100644
 +}
 +
 +/* create a directory and all the needed parent directories */
-+static int mkdir_p(const char *path, mode_t mode)
++static int mkdir_p( int dirfd, const char *path, mode_t mode )
 +{
 +    char path_tmp[PATH_MAX], *p;
 +
@@ -333,12 +333,12 @@ index 604ca866890..58310fd8504 100644
 +    for (p = path_tmp + 1; *p; p++) {
 +        if (*p == '/') {
 +            *p = '\0';
-+            if (mkdir(path_tmp, mode) != 0 && errno != EEXIST)
++            if (mkdirat( dirfd, path_tmp, mode ) != 0 && errno != EEXIST)
 +                return -1;
 +            *p = '/';
 +        }
 +    }
-+    if (mkdir(path_tmp, mode) != 0 && errno != EEXIST)
++    if (mkdirat( dirfd, path_tmp, mode ) != 0 && errno != EEXIST)
 +        return -1;
 +    return 0;
 +}
@@ -375,7 +375,7 @@ index 604ca866890..58310fd8504 100644
  static BOOL fd_is_mount_point( int fd, const struct stat *st )
  {
      struct stat parent;
-@@ -3303,6 +3423,179 @@ done:
+@@ -3303,6 +3423,181 @@ done:
  }
  
  
@@ -386,13 +386,14 @@ index 604ca866890..58310fd8504 100644
 +NTSTATUS create_reparse_point(HANDLE handle, REPARSE_DATA_BUFFER *buffer)
 +{
 +    int buffer_len = buffer->ReparseDataLength+FIELD_OFFSET(typeof(*buffer), GenericReparseBuffer);
-+    char target_path[PATH_MAX], link_path[PATH_MAX], link_dir[PATH_MAX], original_dir[PATH_MAX];
++    char target_path[PATH_MAX], link_path[PATH_MAX], link_dir[PATH_MAX];
 +    int encoded_len = (int)ceil(buffer_len*4/3.0) + 1, chunk_len;
 +    char tmpdir[PATH_MAX], tmplink[PATH_MAX], *d;
 +    BOOL needs_close, tempdir_created = FALSE;
 +    char filename_buf[PATH_MAX], *filename;
 +    char *unix_src = NULL, *encoded = NULL;
 +    int i = 0, j = 0, depth = 0, fd;
++    int link_dir_fd = -1;
 +    NTSTATUS status;
 +    struct stat st;
 +    BOOL is_dir;
@@ -469,14 +470,15 @@ index 604ca866890..58310fd8504 100644
 +    }
 +
 +    /* change to the link folder so that we can build any necessary additional data */
-+    getcwd( original_dir, PATH_MAX );
 +    strcpy( link_dir, tmpdir );
 +    link_dir[strlen(link_dir)-16] = 0;
-+    chdir( link_dir );
++    link_dir_fd = open( link_dir, O_RDONLY|O_DIRECTORY );
 +
 +    /* If there is any further information in the reparse tag then store it in the hidden folder */
 +    while(i < encoded_len)
 +    {
++        int fd;
++
 +        j++;
 +        strcpy( link_path, target_path );
 +
@@ -495,21 +497,20 @@ index 604ca866890..58310fd8504 100644
 +
 +        strcpy( link_dir, link_path );
 +        link_dir[strlen(link_dir)-1] = 0;
-+        if (mkdir_p( link_dir, 0777))
++        if (mkdir_p( link_dir_fd, link_dir, 0777))
 +        {
 +            status = errno_to_status( errno );
 +            goto cleanup;
 +        }
-+        if (symlink( target_path, link_path ))
++        if (symlinkat( target_path, link_dir_fd, link_path ))
 +        {
 +            status = errno_to_status( errno );
 +            goto cleanup;
 +        }
-+        chdir( link_dir );
++        fd = openat( link_dir_fd, link_dir, O_RDONLY|O_DIRECTORY );
++        close( link_dir_fd );
++        link_dir_fd = fd;
 +    }
-+
-+    /* revert to the original directory */
-+    chdir( original_dir );
 +
 +    /* Atomically move the initial link into position */
 +    if (!renameat2( -1, tmplink, -1, unix_src, RENAME_EXCHANGE ))
@@ -543,6 +544,7 @@ index 604ca866890..58310fd8504 100644
 +    status = STATUS_SUCCESS;
 +
 +cleanup:
++    if (link_dir_fd != -1) close( link_dir_fd );
 +    if (tempdir_created) rmdir( tmpdir );
 +    if (needs_close) close( fd );
 +    free( unix_src );
@@ -555,7 +557,7 @@ index 604ca866890..58310fd8504 100644
  /******************************************************************************
   *           lookup_unix_name
   *
-@@ -6052,6 +6345,13 @@ NTSTATUS WINAPI NtFsControlFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE ap
+@@ -6052,6 +6347,13 @@ NTSTATUS WINAPI NtFsControlFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE ap
          break;
      }
  
@@ -630,5 +632,5 @@ index 00000000000..21d42e17325
 +
 +#endif /* __WINE_NTIFS_H */
 -- 
-2.35.1
+2.17.1
 

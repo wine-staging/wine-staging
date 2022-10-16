@@ -1,16 +1,16 @@
-From ff29165847ca6ea105053843f46cac727c7083c8 Mon Sep 17 00:00:00 2001
+From a3eedb8eb82f841ae48633d1e3c0416a362ccd34 Mon Sep 17 00:00:00 2001
 From: "Erich E. Hoover" <erich.e.hoover@gmail.com>
 Date: Sat, 3 Sep 2022 11:23:31 -0600
-Subject: [PATCH] ntdll: Follow reparse points during path resolution.
+Subject: ntdll: Follow reparse points during path resolution.
 
 Signed-off-by: Erich E. Hoover <erich.e.hoover@gmail.com>
 ---
- dlls/ntdll/tests/file.c |  11 +++-
- dlls/ntdll/unix/file.c  | 122 +++++++++++++++++++++++++++++++++++++---
- 2 files changed, 124 insertions(+), 9 deletions(-)
+ dlls/ntdll/tests/file.c |  11 ++-
+ dlls/ntdll/unix/file.c  | 189 +++++++++++++++++++++++++++++++++++-----
+ 2 files changed, 177 insertions(+), 23 deletions(-)
 
 diff --git a/dlls/ntdll/tests/file.c b/dlls/ntdll/tests/file.c
-index b1290f9ef7b..799a8cebe50 100644
+index 390768f557d..a0b84849490 100644
 --- a/dlls/ntdll/tests/file.c
 +++ b/dlls/ntdll/tests/file.c
 @@ -5381,7 +5381,7 @@ static INT build_reparse_buffer(const WCHAR *filename, ULONG tag, ULONG flags,
@@ -44,10 +44,46 @@ index b1290f9ef7b..799a8cebe50 100644
      ok(bret, "Failed to remove temporary reparse point directory!\n");
      bret = RemoveDirectoryW(target_path);
 diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
-index 907d51f1fc3..d520a73b253 100644
+index 9ae5e194c6d..ba844e90272 100644
 --- a/dlls/ntdll/unix/file.c
 +++ b/dlls/ntdll/unix/file.c
-@@ -3700,14 +3700,13 @@ cleanup:
+@@ -3516,6 +3516,35 @@ done:
+ }
+ 
+ 
++static NTSTATUS get_reparse_target( UNICODE_STRING *nt_target, REPARSE_DATA_BUFFER *buffer,
++                                    int *is_relative )
++{
++    int target_len, offset;
++    WCHAR *target;
++
++    switch( buffer->ReparseTag )
++    {
++    case IO_REPARSE_TAG_MOUNT_POINT:
++        offset = buffer->MountPointReparseBuffer.SubstituteNameOffset/sizeof(WCHAR);
++        target = &buffer->MountPointReparseBuffer.PathBuffer[offset];
++        target_len = buffer->MountPointReparseBuffer.SubstituteNameLength;
++        *is_relative = FALSE;
++        break;
++    case IO_REPARSE_TAG_SYMLINK:
++        offset = buffer->SymbolicLinkReparseBuffer.SubstituteNameOffset/sizeof(WCHAR);
++        target = &buffer->SymbolicLinkReparseBuffer.PathBuffer[offset];
++        target_len = buffer->SymbolicLinkReparseBuffer.SubstituteNameLength;
++        *is_relative = (buffer->SymbolicLinkReparseBuffer.Flags & SYMLINK_FLAG_RELATIVE) == SYMLINK_FLAG_RELATIVE;
++        break;
++    default:
++        return STATUS_IO_REPARSE_TAG_NOT_HANDLED;
++    }
++    nt_target->Buffer = target;
++    nt_target->Length = target_len;
++    return STATUS_REPARSE;
++}
++
++
+ /*
+  * Retrieve the unix name corresponding to a file handle, remove that directory, and then symlink
+  * the requested directory to the location of the old directory.
+@@ -3692,16 +3721,14 @@ cleanup:
  
  
  /*
@@ -56,26 +92,33 @@ index 907d51f1fc3..d520a73b253 100644
 + * Obtain the reparse point buffer from the unix filename for the reparse point.
   */
 -NTSTATUS get_reparse_point(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG *size)
-+NTSTATUS get_reparse_point_unix(const char *unix_src, REPARSE_DATA_BUFFER *buffer, ULONG *size)
++NTSTATUS get_reparse_point_unix(const char *unix_name, REPARSE_DATA_BUFFER *buffer, ULONG *size)
  {
-     char link_dir[PATH_MAX], original_dir[PATH_MAX], *d;
+     char link_dir[PATH_MAX], link_path[PATH_MAX], *d;
      int link_path_len, buffer_len, encoded_len;
--    char *unix_src, link_path[PATH_MAX];
-+    char link_path[PATH_MAX];
      REPARSE_DATA_BUFFER header;
      ULONG out_size = *size;
+-    char *unix_name = NULL;
      char *encoded = NULL;
-@@ -3716,9 +3715,6 @@ NTSTATUS get_reparse_point(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG *si
+     int link_dir_fd = -1;
+     NTSTATUS status;
+@@ -3709,9 +3736,6 @@ NTSTATUS get_reparse_point(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG *si
      int depth;
      char *p;
  
--    if ((status = server_get_unix_name( handle, &unix_src )))
+-    if ((status = server_get_unix_name( handle, &unix_name )))
 -        goto cleanup;
 -
-     ret = readlink( unix_src, link_path, sizeof(link_path) );
+     ret = readlink( unix_name, link_path, sizeof(link_path) );
      if (ret < 0)
      {
-@@ -3822,6 +3818,75 @@ cleanup:
+@@ -3811,12 +3835,76 @@ NTSTATUS get_reparse_point(HANDLE handle, REPARSE_DATA_BUFFER *buffer, ULONG *si
+ 
+ cleanup:
+     if (link_dir_fd != -1) close( link_dir_fd );
+-    free( unix_name );
+     free( encoded );
+     return status;
  }
  
  
@@ -97,13 +140,14 @@ index 907d51f1fc3..d520a73b253 100644
 +
 +
 +/* find the NT target of a reparse point */
-+static NTSTATUS find_reparse_target( const char *unix_name, WCHAR **new_name, int *new_name_len)
++static NTSTATUS find_reparse_target( const char *unix_name, const WCHAR *parent, int parent_len,
++                                     WCHAR **new_name, int *new_name_len)
 +{
 +    REPARSE_DATA_BUFFER *buffer = NULL;
-+    int offset, target_len;
++    UNICODE_STRING nt_target;
 +    ULONG buffer_len = 0;
++    int is_relative;
 +    NTSTATUS status;
-+    WCHAR *target;
 +
 +    status = get_reparse_point_unix( unix_name, NULL, &buffer_len );
 +    if (status != STATUS_BUFFER_TOO_SMALL)
@@ -117,32 +161,27 @@ index 907d51f1fc3..d520a73b253 100644
 +        free( buffer );
 +        return status;
 +    }
-+
-+    switch( buffer->ReparseTag )
++    if ((status = get_reparse_target( &nt_target, buffer, &is_relative )) == STATUS_REPARSE)
 +    {
-+    case IO_REPARSE_TAG_MOUNT_POINT:
-+        offset = buffer->MountPointReparseBuffer.SubstituteNameOffset/sizeof(WCHAR);
-+        target = &buffer->MountPointReparseBuffer.PathBuffer[offset];
-+        target_len = buffer->MountPointReparseBuffer.SubstituteNameLength;
-+        break;
-+    case IO_REPARSE_TAG_SYMLINK:
-+        offset = buffer->SymbolicLinkReparseBuffer.SubstituteNameOffset/sizeof(WCHAR);
-+        target = &buffer->SymbolicLinkReparseBuffer.PathBuffer[offset];
-+        target_len = buffer->SymbolicLinkReparseBuffer.SubstituteNameLength;
-+        break;
-+    default:
-+        WARN( "Reparse point with unsupported tag: 0x%08x\n", buffer->ReparseTag );
-+        status = STATUS_NOT_IMPLEMENTED;
-+        break;
++        WCHAR *p;
++
++        p = *new_name = malloc( nt_target.Length + parent_len*sizeof(WCHAR) );
++        if (!p)
++        {
++            status = STATUS_NO_MEMORY;
++            goto done;
++        }
++        if (is_relative)
++        {
++            memcpy( p, parent, parent_len*sizeof(WCHAR) );
++            p += parent_len;
++        }
++        memcpy( p, nt_target.Buffer, nt_target.Length );
++        p += nt_target.Length/sizeof(WCHAR);
++        *new_name_len = p - *new_name;
 +    }
 +
-+    if (status == STATUS_SUCCESS)
-+    {
-+        *new_name_len = target_len/sizeof(WCHAR);
-+        *new_name = malloc( target_len );
-+        if (*new_name) memcpy( *new_name, target, target_len );
-+    }
-+
++done:
 +    free( buffer );
 +    return status;
 +}
@@ -151,26 +190,35 @@ index 907d51f1fc3..d520a73b253 100644
  /*
   * Retrieve the unix name corresponding to a file handle, remove that symlink, and then recreate
   * a directory at the location of the old filename.
-@@ -3924,11 +3989,13 @@ static NTSTATUS lookup_unix_name( const WCHAR *name, int name_len, char **buffer
-                                   UINT disposition, BOOL is_unix )
+@@ -3910,15 +3998,25 @@ cleanup:
+ }
+ 
+ 
++static NTSTATUS IoReplaceFileObjectName( FILE_OBJECT *fileobj, PWSTR name, USHORT name_len )
++{
++    fileobj->FileName.Buffer = name;
++    fileobj->FileName.Length = name_len;
++    return STATUS_SUCCESS;
++}
++
++
+ /******************************************************************************
+  *           lookup_unix_name
+  *
+  * Helper for nt_to_unix_file_name
+  */
+-static NTSTATUS lookup_unix_name( const WCHAR *name, int name_len, char **buffer, int unix_len, int pos,
+-                                  UINT disposition, BOOL is_unix )
++static NTSTATUS lookup_unix_name( FILE_OBJECT *fileobj, const WCHAR *name, int name_len,
++                                  char **buffer, int unix_len, int pos, UINT disposition,
++                                  BOOL is_unix )
  {
      static const WCHAR invalid_charsW[] = { INVALID_NT_CHARS, '/', 0 };
-+    WCHAR *name_buf = NULL;
++    const WCHAR *fullname = fileobj->FileName.Buffer;
      NTSTATUS status;
      int ret;
      struct stat st;
-     char *unix_name = *buffer;
-     const WCHAR *ptr, *end;
-+    int old_cwd;
- 
-     /* check syntax of individual components */
- 
-@@ -3977,9 +4044,13 @@ static NTSTATUS lookup_unix_name( const WCHAR *name, int name_len, char **buffer
- 
-     /* now do it component by component */
- 
-+    old_cwd = open( ".", O_RDONLY );
-+
+@@ -3975,6 +4073,8 @@ static NTSTATUS lookup_unix_name( const WCHAR *name, int name_len, char **buffer
      while (name_len)
      {
          const WCHAR *end, *next;
@@ -179,40 +227,32 @@ index 907d51f1fc3..d520a73b253 100644
  
          end = name;
          while (end < name + name_len && *end != '\\') end++;
-@@ -3999,8 +4070,39 @@ static NTSTATUS lookup_unix_name( const WCHAR *name, int name_len, char **buffer
+@@ -3994,8 +4094,31 @@ static NTSTATUS lookup_unix_name( const WCHAR *name, int name_len, char **buffer
  
          status = find_file_in_dir( unix_name, pos, name, end - name, is_unix );
  
 +        /* follow reparse point and restart from there (if applicable) */
-+        if (find_reparse_target( unix_name, &target, &target_len ) == STATUS_SUCCESS)
++        if (name_len && find_reparse_target( unix_name, fullname, name - fullname, &target, &target_len ) == STATUS_REPARSE)
 +        {
 +            int new_name_len = target_len + name_len + 1;
-+            WCHAR *new_name, *p;
++            WCHAR *p, *new_name;
 +
 +            if (!(p = new_name = malloc( new_name_len*sizeof(WCHAR) )))
 +            {
 +                free( target );
-+                return STATUS_NO_MEMORY;
++                status = STATUS_NO_MEMORY;
++                break;
 +            }
 +            memcpy( p, target, target_len*sizeof(WCHAR) );
 +            p += target_len;
 +            (p++)[0] = '\\';
 +            memcpy( p, next, name_len*sizeof(WCHAR) );
-+            if (target[0] == '\\')
-+            {
-+                strcpy( unix_name, "/" );
-+                pos = 0;
-+            }
-+            else
-+                unix_name = dirname( unix_name );
-+            TRACE( "Follow reparse point %s => %s, %s\n", debugstr_wn(name, end-name), unix_name,
-+                                                          debugstr_wn(new_name, new_name_len) );
-+            next = new_name;
-+            name_len = new_name_len;
++            TRACE( "Follow reparse point %s => %s\n", debugstr_wn(fullname, end-fullname),
++                                                      debugstr_wn(new_name, new_name_len) );
 +            free( target );
-+            free( name_buf );
-+            name_buf = new_name;
-+            status = STATUS_SUCCESS;
++            if (IoReplaceFileObjectName( fileobj, new_name, new_name_len*sizeof(WCHAR) ))
++                free( new_name );
++            return STATUS_REPARSE;
 +        }
          /* if this is the last element, not finding it is not necessarily fatal */
 -        if (!name_len)
@@ -220,21 +260,118 @@ index 907d51f1fc3..d520a73b253 100644
          {
              if (status == STATUS_OBJECT_NAME_NOT_FOUND)
              {
-@@ -4028,10 +4130,14 @@ static NTSTATUS lookup_unix_name( const WCHAR *name, int name_len, char **buffer
+@@ -4034,12 +4157,12 @@ static NTSTATUS lookup_unix_name( const WCHAR *name, int name_len, char **buffer
+ /******************************************************************************
+  *           nt_to_unix_file_name_no_root
+  */
+-static NTSTATUS nt_to_unix_file_name_no_root( const UNICODE_STRING *nameW, char **unix_name_ret,
++static NTSTATUS nt_to_unix_file_name_no_root( FILE_OBJECT *fileobj, char **unix_name_ret,
+                                               UINT disposition )
+ {
+     static const WCHAR unixW[] = {'u','n','i','x'};
+     static const WCHAR invalid_charsW[] = { INVALID_NT_CHARS, 0 };
+-
++    const UNICODE_STRING *nameW = &fileobj->FileName;
+     NTSTATUS status = STATUS_SUCCESS;
+     const WCHAR *name;
+     struct stat st;
+@@ -4129,7 +4252,7 @@ static NTSTATUS nt_to_unix_file_name_no_root( const UNICODE_STRING *nameW, char
+     name += prefix_len;
+     name_len -= prefix_len;
  
-         if (status != STATUS_SUCCESS) break;
- 
-+        chdir( unix_name );
-         pos += strlen( unix_name + pos );
-         name = next;
+-    status = lookup_unix_name( name, name_len, &unix_name, unix_len, pos, disposition, is_unix );
++    status = lookup_unix_name( fileobj, name, name_len, &unix_name, unix_len, pos, disposition, is_unix );
+     if (status == STATUS_SUCCESS || status == STATUS_NO_SUCH_FILE)
+     {
+         TRACE( "%s -> %s\n", debugstr_us(nameW), debugstr_a(unix_name) );
+@@ -4137,7 +4260,8 @@ static NTSTATUS nt_to_unix_file_name_no_root( const UNICODE_STRING *nameW, char
      }
+     else
+     {
+-        TRACE( "%s not found in %s\n", debugstr_w(name), unix_name );
++        if (status != STATUS_REPARSE)
++            TRACE( "%s not found in %s\n", debugstr_w(name), unix_name );
+         free( unix_name );
+     }
+     return status;
+@@ -4155,18 +4279,30 @@ static NTSTATUS nt_to_unix_file_name_no_root( const UNICODE_STRING *nameW, char
+  */
+ NTSTATUS nt_to_unix_file_name( const OBJECT_ATTRIBUTES *attr, char **name_ret, UINT disposition )
+ {
++    HANDLE rootdir = attr->RootDirectory;
+     enum server_fd_type type;
+     int old_cwd, root_fd, needs_close;
++    int reparse_count = 0;
++    FILE_OBJECT fileobj;
+     const WCHAR *name;
+     char *unix_name;
+     int name_len, unix_len;
+     NTSTATUS status;
  
-+    fchdir( old_cwd );
-+    free( name_buf );
+-    if (!attr->RootDirectory)  /* without root dir fall back to normal lookup */
+-        return nt_to_unix_file_name_no_root( attr->ObjectName, name_ret, disposition );
++    fileobj.FileName = *attr->ObjectName;
++reparse:
++    if (reparse_count++ == 31)
++        return STATUS_REPARSE_POINT_NOT_RESOLVED;
++    if (!rootdir) /* without root dir fall back to normal lookup */
++    {
++        status = nt_to_unix_file_name_no_root( &fileobj, name_ret, disposition );
++        if (status == STATUS_REPARSE) goto reparse;
++        if (fileobj.FileName.Buffer != attr->ObjectName->Buffer) free( fileobj.FileName.Buffer);
++        return status;
++    }
+ 
+-    name     = attr->ObjectName->Buffer;
+-    name_len = attr->ObjectName->Length / sizeof(WCHAR);
++    name     = fileobj.FileName.Buffer;
++    name_len = fileobj.FileName.Length / sizeof(WCHAR);
+ 
+     if (name_len && name[0] == '\\') return STATUS_INVALID_PARAMETER;
+ 
+@@ -4174,7 +4310,7 @@ NTSTATUS nt_to_unix_file_name( const OBJECT_ATTRIBUTES *attr, char **name_ret, U
+     if (!(unix_name = malloc( unix_len ))) return STATUS_NO_MEMORY;
+     unix_name[0] = '.';
+ 
+-    if (!(status = server_get_unix_fd( attr->RootDirectory, 0, &root_fd, &needs_close, &type, NULL )))
++    if (!(status = server_get_unix_fd( rootdir, 0, &root_fd, &needs_close, &type, NULL )))
+     {
+         if (type != FD_TYPE_DIR)
+         {
+@@ -4186,7 +4322,8 @@ NTSTATUS nt_to_unix_file_name( const OBJECT_ATTRIBUTES *attr, char **name_ret, U
+             mutex_lock( &dir_mutex );
+             if ((old_cwd = open( ".", O_RDONLY )) != -1 && fchdir( root_fd ) != -1)
+             {
+-                status = lookup_unix_name( name, name_len, &unix_name, unix_len, 1, disposition, FALSE );
++                status = lookup_unix_name( &fileobj, name, name_len, &unix_name, unix_len, 1,
++                                           disposition, FALSE );
+                 if (fchdir( old_cwd ) == -1) chdir( "/" );
+             }
+             else status = errno_to_status( errno );
+@@ -4199,14 +4336,22 @@ NTSTATUS nt_to_unix_file_name( const OBJECT_ATTRIBUTES *attr, char **name_ret, U
+ 
+     if (status == STATUS_SUCCESS || status == STATUS_NO_SUCH_FILE)
+     {
+-        TRACE( "%s -> %s\n", debugstr_us(attr->ObjectName), debugstr_a(unix_name) );
++        TRACE( "%s -> %s\n", debugstr_us(&fileobj.FileName), debugstr_a(unix_name) );
+         *name_ret = unix_name;
+     }
++    else if (status == STATUS_REPARSE)
++    {
++        if (fileobj.FileName.Buffer[0] == '\\') rootdir = 0;
++        free( unix_name );
++        goto reparse;
++    }
+     else
+     {
+         TRACE( "%s not found in %s\n", debugstr_w(name), unix_name );
+         free( unix_name );
+     }
 +
++    if (fileobj.FileName.Buffer != attr->ObjectName->Buffer) free( fileobj.FileName.Buffer);
      return status;
  }
  
 -- 
-2.35.1
+2.17.1
 
