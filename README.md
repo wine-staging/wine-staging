@@ -101,7 +101,7 @@ of pocket. In order to alleviate these expenses, we are now accepting donations.
 This in turn allows us to continue to perform testing, provide fixes, and get
 them upstreamed, ultimately aiming to provide a better experience for all WINE
 users. All of our work is provided publicly for free and can be found at
-<https://github.com/wine-staging/wine-staging>. We do not expect to be paid for
+<https://gitlab.winehq.org/wine/wine-staging>. We do not expect to be paid for
 any of the work provided, nor will donators receive any special benefits or
 compensation.
 

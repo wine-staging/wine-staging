@@ -68,7 +68,7 @@ class config(object):
     bugtracker_user         = None
     bugtracker_pass         = None
 
-    github_url              = "https://github.com/wine-staging/wine-staging"
+    github_url              = "https://gitlab.winehq.org/wine/wine-staging"
 
 class PatchUpdaterError(RuntimeError):
     """Failed to update patches."""
