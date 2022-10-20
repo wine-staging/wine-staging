@@ -94,7 +94,7 @@ proper implementation. In the event that this happens, we add the patches to
 wine-staging instead, and keep them updated and maintained as well as attempt to
 clean them up to be upstreamed. We also both write and verify patches which fix
 various bugs that may not have patches, and in turn allow them run better using
-WINE. This includes testing on various hardware, games, and applications.
+WINE. This includes testing on various hardware, games and applications.
 
 Any expenses for applications, games, or hardware which we do not own comes out
 of pocket. In order to alleviate these expenses, we are now accepting donations.
