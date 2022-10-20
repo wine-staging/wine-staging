@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "e3f00bf7c944f1cde6151fde969f2b49649c3de7"
+	echo "e72a16b57f66b63a16bb3d1619ac4d42632cb141"
 }
 
 # Show version information
@@ -2528,7 +2528,6 @@ fi
 if test "$enable_sapi_iteration_tokens" -eq 1; then
 	patch_apply sapi-iteration-tokens/0004-sapi-EnumTokens-setup-enumeration-members.patch
 	patch_apply sapi-iteration-tokens/0005-sapi-Implement-ISpObjectTokenEnumBuilder-Item.patch
-	patch_apply sapi-iteration-tokens/0007-sapi-Implement-ISpObjectToken-OpenKey.patch
 	patch_apply sapi-iteration-tokens/0008-sapi-Add-default-voice-registry-key.patch
 	patch_apply sapi-iteration-tokens/0009-sapi-Return-dump-object-in-ISpObjectTokenEnumBuilder.patch
 fi
