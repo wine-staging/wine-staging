@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "e72a16b57f66b63a16bb3d1619ac4d42632cb141"
+	echo "25b05840d4fad5d12f308077925e3cf92bcebfb7"
 }
 
 # Show version information
@@ -2320,6 +2320,7 @@ if test "$enable_nvcuda_CUDA_Support" -eq 1; then
 	patch_apply nvcuda-CUDA_Support/0014-nvcuda-Implement-cuDeviceGetUuid-and-cuDeviceGetLuid.patch
 	patch_apply nvcuda-CUDA_Support/0015-nvcuda-Expand-the-Unknown1-table.patch
 	patch_apply nvcuda-CUDA_Support/0016-nvcuda-Make-nvcuda-attempt-to-load-libcuda.so.1.patch
+	patch_apply nvcuda-CUDA_Support/0017-nvcuda-Add-empty-stub-for-function-cuFuncSetAttr.patch
 fi
 
 # Patchset nvapi-Stub_DLL
