@@ -122,6 +122,7 @@ patch_enable_all ()
 	enable_krnl386_exe16_GDT_LDT_Emulation="$1"
 	enable_krnl386_exe16_Invalid_Console_Handles="$1"
 	enable_loader_KeyboardLayouts="$1"
+	enable_mfplat_streaming_support="$1"
 	enable_mmsystem_dll16_MIDIHDR_Refcount="$1"
 	enable_mountmgr_DosDevices="$1"
 	enable_mscoree_CorValidateImage="$1"
@@ -381,6 +382,9 @@ patch_enable ()
 			;;
 		loader-KeyboardLayouts)
 			enable_loader_KeyboardLayouts="$2"
+			;;
+		mfplat-streaming-support)
+			enable_mfplat_streaming_support="$2"
 			;;
 		mmsystem.dll16-MIDIHDR_Refcount)
 			enable_mmsystem_dll16_MIDIHDR_Refcount="$2"
@@ -1995,6 +1999,24 @@ fi
 if test "$enable_loader_KeyboardLayouts" -eq 1; then
 	patch_apply loader-KeyboardLayouts/0001-loader-Add-Keyboard-Layouts-registry-enteries.patch
 	patch_apply loader-KeyboardLayouts/0002-user32-Improve-GetKeyboardLayoutList.patch
+fi
+
+# Patchset mfplat-streaming-support
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#49692] Multiple applications need a Media Foundation media source implementation
+# |
+# | Modified files:
+# |   *	dlls/winegstreamer/gst_private.h, dlls/winegstreamer/main.c, dlls/winegstreamer/media_source.c,
+# | 	dlls/winegstreamer/unixlib.h, dlls/winegstreamer/wg_parser.c
+# |
+if test "$enable_mfplat_streaming_support" -eq 1; then
+	patch_apply mfplat-streaming-support/0008-winegstreamer-Allow-videoconvert-to-parallelize.patch
+	patch_apply mfplat-streaming-support/0025-winegstreamer-Report-streams-backwards-in-media-sour.patch
+	patch_apply mfplat-streaming-support/0038-winegstreamer-In-the-default-configuration-select-on.patch
+	patch_apply mfplat-streaming-support/0043-winegstreamer-Update-offset-according-to-the-size-of.patch
+	patch_apply mfplat-streaming-support/0050-winegstreamer-Implement-MF_SD_LANGUAGE.patch
+	patch_apply mfplat-streaming-support/0055-winegstreamer-Add-MFVideoFormat_ARGB32-output-for-th.patch
 fi
 
 # Patchset mmsystem.dll16-MIDIHDR_Refcount
