@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "25b05840d4fad5d12f308077925e3cf92bcebfb7"
+	echo "65797763b3ac4fcab7ffc83a4f95b2e87c81f58a"
 }
 
 # Show version information
@@ -161,7 +161,6 @@ patch_enable_all ()
 	enable_programs_systeminfo="$1"
 	enable_riched20_IText_Interface="$1"
 	enable_sapi_ISpObjectToken_CreateInstance="$1"
-	enable_sapi_iteration_tokens="$1"
 	enable_server_File_Permissions="$1"
 	enable_server_PeekMessage="$1"
 	enable_server_Realtime_Priority="$1"
@@ -499,9 +498,6 @@ patch_enable ()
 			;;
 		sapi-ISpObjectToken-CreateInstance)
 			enable_sapi_ISpObjectToken_CreateInstance="$2"
-			;;
-		sapi-iteration-tokens)
-			enable_sapi_iteration_tokens="$2"
 			;;
 		server-File_Permissions)
 			enable_server_File_Permissions="$2"
@@ -1209,13 +1205,6 @@ if test "$enable_server_File_Permissions" -eq 1; then
 	enable_ntdll_Junction_Points=1
 fi
 
-if test "$enable_sapi_iteration_tokens" -eq 1; then
-	if test "$enable_sapi_ISpObjectToken_CreateInstance" -gt 1; then
-		abort "Patchset sapi-ISpObjectToken-CreateInstance disabled, but sapi-iteration-tokens depends on that."
-	fi
-	enable_sapi_ISpObjectToken_CreateInstance=1
-fi
-
 if test "$enable_oleaut32_OLEPictureImpl_SaveAsFile" -eq 1; then
 	if test "$enable_oleaut32_Load_Save_EMF" -gt 1; then
 		abort "Patchset oleaut32-Load_Save_EMF disabled, but oleaut32-OLEPictureImpl_SaveAsFile depends on that."
@@ -1709,6 +1698,7 @@ if test "$enable_ntdll_Junction_Points" -eq 1; then
 	patch_apply ntdll-Junction_Points/0023-wcmd-Add-junction-point-support-to-mklink.patch
 	patch_apply ntdll-Junction_Points/0024-ntdll-Add-support-for-creating-Unix-Linux-symlinks.patch
 	patch_apply ntdll-Junction_Points/0025-ntdll-Report-regular-Unix-symlinks-as-WSL-Linux-Unix.patch
+	patch_apply ntdll-Junction_Points/0026-include-Add-ntifs.h.patch
 fi
 
 # Patchset server-PeekMessage
@@ -2513,24 +2503,6 @@ fi
 # |
 if test "$enable_sapi_ISpObjectToken_CreateInstance" -eq 1; then
 	patch_apply sapi-ISpObjectToken-CreateInstance/0004-sapi-ISpObjectToken-CreateInstance-support-ISpAudio.patch
-fi
-
-# Patchset sapi-iteration-tokens
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	sapi-ISpObjectToken-CreateInstance
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#51775] sapi: Allow iteration of Token objects.
-# |
-# | Modified files:
-# |   *	dlls/sapi/sapi.rgs, dlls/sapi/token.c
-# |
-if test "$enable_sapi_iteration_tokens" -eq 1; then
-	patch_apply sapi-iteration-tokens/0004-sapi-EnumTokens-setup-enumeration-members.patch
-	patch_apply sapi-iteration-tokens/0005-sapi-Implement-ISpObjectTokenEnumBuilder-Item.patch
-	patch_apply sapi-iteration-tokens/0008-sapi-Add-default-voice-registry-key.patch
-	patch_apply sapi-iteration-tokens/0009-sapi-Return-dump-object-in-ISpObjectTokenEnumBuilder.patch
 fi
 
 # Patchset server-File_Permissions

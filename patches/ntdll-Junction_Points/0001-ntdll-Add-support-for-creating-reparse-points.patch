@@ -1,21 +1,19 @@
-From 8919be537a3ada49b59f2686cc14dbfb81a37cb1 Mon Sep 17 00:00:00 2001
+From 5a529bea97ee22d51f07f9d3cd77c00ea5292878 Mon Sep 17 00:00:00 2001
 From: "Erich E. Hoover" <erich.e.hoover@gmail.com>
 Date: Thu, 16 Jan 2014 20:56:49 -0700
-Subject: ntdll: Add support for creating reparse points.
+Subject: [PATCH] ntdll: Add support for creating reparse points.
 
 Signed-off-by: Erich E. Hoover <erich.e.hoover@gmail.com>
 ---
  configure.ac            |   2 +
  dlls/ntdll/Makefile.in  |   2 +-
- dlls/ntdll/tests/file.c | 152 ++++++++++++++++++++
+ dlls/ntdll/tests/file.c | 159 ++++++++++++++++++---
  dlls/ntdll/unix/file.c  | 302 ++++++++++++++++++++++++++++++++++++++++
  include/Makefile.in     |   1 +
- include/ntifs.h         |  42 ++++++
- 6 files changed, 500 insertions(+), 1 deletion(-)
- create mode 100644 include/ntifs.h
+ 5 files changed, 447 insertions(+), 19 deletions(-)
 
 diff --git a/configure.ac b/configure.ac
-index e11f3cfdb63..113d126a002 100644
+index 628cce28815..2adf40c0ef1 100644
 --- a/configure.ac
 +++ b/configure.ac
 @@ -2018,6 +2018,8 @@ AC_CHECK_FUNCS(\
@@ -41,7 +39,7 @@ index 3b1cdb54f9f..6eb4690f8e0 100644
  EXTRADLLFLAGS = -nodefaultlibs -Wl,--image-base,0x7bc00000
  x86_64_EXTRADLLFLAGS = -nodefaultlibs -Wl,--image-base,0x170000000
 diff --git a/dlls/ntdll/tests/file.c b/dlls/ntdll/tests/file.c
-index c011733626f..93e50bd6952 100644
+index 98d9e6b3b0a..93e50bd6952 100644
 --- a/dlls/ntdll/tests/file.c
 +++ b/dlls/ntdll/tests/file.c
 @@ -38,6 +38,7 @@
@@ -52,7 +50,7 @@ index c011733626f..93e50bd6952 100644
  
  #ifndef IO_COMPLETION_ALL_ACCESS
  #define IO_COMPLETION_ALL_ACCESS 0x001F0003
-@@ -5326,6 +5327,156 @@ static void test_mailslot_name(void)
+@@ -5326,32 +5327,154 @@ static void test_mailslot_name(void)
      CloseHandle( device );
  }
  
@@ -82,8 +80,12 @@ index c011733626f..93e50bd6952 100644
 +    return buffer_size;
 +}
 +
-+static void test_reparse_points(void)
-+{
+ static void test_reparse_points(void)
+ {
+-    OBJECT_ATTRIBUTES attr;
+-    HANDLE handle;
+-    IO_STATUS_BLOCK io;
+-    NTSTATUS status;
 +    WCHAR path[MAX_PATH], reparse_path[MAX_PATH], target_path[MAX_PATH], volnameW[MAX_PATH];
 +    static const WCHAR reparseW[] = {'\\','r','e','p','a','r','s','e',0};
 +    static const WCHAR targetW[] = {'\\','t','a','r','g','e','t',0};
@@ -93,7 +95,8 @@ index c011733626f..93e50bd6952 100644
 +    static const WCHAR dotW[] = {'.',0};
 +    REPARSE_DATA_BUFFER *buffer = NULL;
 +    DWORD dwret, dwLen, dwFlags;
-+    UNICODE_STRING nameW;
+     UNICODE_STRING nameW;
+-    unsigned char reparse_data[1];
 +    WCHAR *long_path;
 +    INT buffer_len;
 +    HANDLE handle;
@@ -130,7 +133,9 @@ index c011733626f..93e50bd6952 100644
 +    lstrcatW(reparse_path, reparseW);
 +    bret = CreateDirectoryW(reparse_path, NULL);
 +    ok(bret, "Failed to create junction point directory.\n");
-+
+ 
+-    pRtlInitUnicodeString( &nameW, L"\\??\\C:\\" );
+-    InitializeObjectAttributes( &attr, &nameW, 0, NULL, NULL );
 +    /* Create a destination folder for the junction point to target */
 +    lstrcpyW(target_path, path);
 +    for (int i=0; i<1; i++)
@@ -142,7 +147,9 @@ index c011733626f..93e50bd6952 100644
 +    bret = CreateDirectoryW(target_path, NULL);
 +    ok(bret, "Failed to create junction point target directory.\n");
 +    pRtlDosPathNameToNtPathName_U(path, &nameW, NULL, NULL);
-+
+ 
+-    status = pNtOpenFile( &handle, READ_CONTROL, &attr, &io, 0, 0 );
+-    ok( !status, "open %s failed %#lx\n", wine_dbgstr_w(nameW.Buffer), status );
 +    /* construct a too long pathname (resulting reparse buffer over 16 kiB limit) */
 +    long_path = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 32767);
 +    lstrcpyW(long_path, nameW.Buffer);
@@ -166,7 +173,9 @@ index c011733626f..93e50bd6952 100644
 +    ok(!bret && GetLastError()==ERROR_INVALID_REPARSE_DATA, "Unexpected error (0x%lx)\n", GetLastError());
 +    HeapFree(GetProcessHeap(), 0, buffer);
 +    CloseHandle(handle);
-+
+ 
+-    status = pNtFsControlFile( handle, NULL, NULL, NULL, &io, FSCTL_GET_REPARSE_POINT, NULL, 0, NULL, 0 );
+-    ok( status == STATUS_INVALID_USER_BUFFER, "expected %#lx, got %#lx\n", STATUS_INVALID_USER_BUFFER, status );
 +    /* construct a long pathname to demonstrate correct behavior with very large reparse points */
 +    pRtlDosPathNameToNtPathName_U(path, &nameW, NULL, NULL);
 +    lstrcpyW(long_path, nameW.Buffer);
@@ -176,11 +185,16 @@ index c011733626f..93e50bd6952 100644
 +        lstrcatW(long_path, path);
 +    }
 +    lstrcatW(long_path, targetW);
-+
+ 
+-    status = pNtFsControlFile( handle, NULL, NULL, NULL, &io, FSCTL_GET_REPARSE_POINT, NULL, 0, reparse_data, 0 );
+-    ok( status == STATUS_INVALID_USER_BUFFER, "expected %#lx, got %#lx\n", STATUS_INVALID_USER_BUFFER, status );
 +    /* use a sane (not obscenely long) target for the rest of testing */
 +    pRtlFreeUnicodeString(&nameW);
 +    pRtlDosPathNameToNtPathName_U(target_path, &nameW, NULL, NULL);
-+
+ 
+-    /* a volume cannot be a reparse point by definition */
+-    status = pNtFsControlFile( handle, NULL, NULL, NULL, &io, FSCTL_GET_REPARSE_POINT, NULL, 0, reparse_data, 1 );
+-    ok( status == STATUS_NOT_A_REPARSE_POINT, "expected %#lx, got %#lx\n", STATUS_NOT_A_REPARSE_POINT, status );
 +    /* Create the junction point */
 +    handle = CreateFileW(reparse_path, GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING,
 +                         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, 0);
@@ -193,7 +207,8 @@ index c011733626f..93e50bd6952 100644
 +    bret = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, (LPVOID)buffer, buffer_len, NULL, 0, &dwret, 0);
 +    ok(bret, "Failed to create junction point! (0x%lx)\n", GetLastError());
 +    CloseHandle(handle);
-+
+ 
+-    CloseHandle( handle );
 +cleanup:
 +    /* Cleanup */
 +    pRtlFreeUnicodeString(&nameW);
@@ -204,20 +219,19 @@ index c011733626f..93e50bd6952 100644
 +    bret = RemoveDirectoryW(target_path);
 +    ok(bret, "Failed to remove temporary target directory!\n");
 +    RemoveDirectoryW(path);
-+}
-+
+ }
+ 
  START_TEST(file)
- {
-     HMODULE hkernel32 = GetModuleHandleA("kernel32.dll");
-@@ -5398,5 +5549,6 @@ START_TEST(file)
+@@ -5426,6 +5549,6 @@ START_TEST(file)
      test_ioctl();
      test_query_ea();
      test_flush_buffers_file();
-+    test_reparse_points();
-     test_mailslot_name();
+-    test_mailslot_name();
+     test_reparse_points();
++    test_mailslot_name();
  }
 diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
-index 604ca866890..f3d831b0a33 100644
+index 6b73d9dc7e8..52b85cfc6d1 100644
 --- a/dlls/ntdll/unix/file.c
 +++ b/dlls/ntdll/unix/file.c
 @@ -36,6 +36,8 @@
@@ -375,7 +389,7 @@ index 604ca866890..f3d831b0a33 100644
  static BOOL fd_is_mount_point( int fd, const struct stat *st )
  {
      struct stat parent;
-@@ -3303,6 +3423,181 @@ done:
+@@ -3313,6 +3433,181 @@ done:
  }
  
  
@@ -557,7 +571,7 @@ index 604ca866890..f3d831b0a33 100644
  /******************************************************************************
   *           lookup_unix_name
   *
-@@ -6052,6 +6347,13 @@ NTSTATUS WINAPI NtFsControlFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE ap
+@@ -6072,6 +6367,13 @@ NTSTATUS WINAPI NtFsControlFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE ap
          break;
      }
  
@@ -583,54 +597,6 @@ index 1c04f9a298b..7a2c9f96c1b 100644
  	ntlsa.h \
  	ntquery.h \
  	ntsecapi.h \
-diff --git a/include/ntifs.h b/include/ntifs.h
-new file mode 100644
-index 00000000000..21d42e17325
---- /dev/null
-+++ b/include/ntifs.h
-@@ -0,0 +1,42 @@
-+/*
-+ * Win32 definitions for Windows NT
-+ *
-+ * Copyright 2012 Erich E. Hoover
-+ *
-+ * This library is free software; you can redistribute it and/or
-+ * modify it under the terms of the GNU Lesser General Public
-+ * License as published by the Free Software Foundation; either
-+ * version 2.1 of the License, or (at your option) any later version.
-+ *
-+ * This library is distributed in the hope that it will be useful,
-+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
-+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
-+ * Lesser General Public License for more details.
-+ *
-+ * You should have received a copy of the GNU Lesser General Public
-+ * License along with this library; if not, write to the Free Software
-+ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
-+ */
-+
-+#ifndef __WINE_NTIFS_H
-+#define __WINE_NTIFS_H
-+
-+typedef struct _REPARSE_DATA_BUFFER {
-+    ULONG  ReparseTag;
-+    USHORT ReparseDataLength;
-+    USHORT Reserved;
-+    union {
-+        struct {
-+            USHORT SubstituteNameOffset;
-+            USHORT SubstituteNameLength;
-+            USHORT PrintNameOffset;
-+            USHORT PrintNameLength;
-+            WCHAR  PathBuffer[1];
-+        } MountPointReparseBuffer;
-+        struct {
-+            UCHAR DataBuffer[1];
-+        } GenericReparseBuffer;
-+    };
-+} REPARSE_DATA_BUFFER, *PREPARSE_DATA_BUFFER;
-+
-+#endif /* __WINE_NTIFS_H */
 -- 
-2.17.1
+2.37.2
 
