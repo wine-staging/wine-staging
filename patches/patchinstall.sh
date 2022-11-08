@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "7be72ce2a708ec88aa2362352f37db30529251c4"
+	echo "1d636da205e39436bbd71849ceeebc5420bf98a9"
 }
 
 # Show version information
@@ -126,7 +126,6 @@ patch_enable_all ()
 	enable_mmsystem_dll16_MIDIHDR_Refcount="$1"
 	enable_mountmgr_DosDevices="$1"
 	enable_mscoree_CorValidateImage="$1"
-	enable_mshtml_HTMLLocation_put_hash="$1"
 	enable_mshtml_TranslateAccelerator="$1"
 	enable_msi_msi_vcl_get_cost="$1"
 	enable_msxml3_FreeThreadedXMLHTTP60="$1"
@@ -394,9 +393,6 @@ patch_enable ()
 			;;
 		mscoree-CorValidateImage)
 			enable_mscoree_CorValidateImage="$2"
-			;;
-		mshtml-HTMLLocation_put_hash)
-			enable_mshtml_HTMLLocation_put_hash="$2"
 			;;
 		mshtml-TranslateAccelerator)
 			enable_mshtml_TranslateAccelerator="$2"
@@ -2054,18 +2050,6 @@ fi
 # |
 if test "$enable_mscoree_CorValidateImage" -eq 1; then
 	patch_apply mscoree-CorValidateImage/0001-mscoree-Implement-_CorValidateImage.patch
-fi
-
-# Patchset mshtml-HTMLLocation_put_hash
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#32967] Add IHTMLLocation::hash property's getter implementation
-# |
-# | Modified files:
-# |   *	dlls/mshtml/htmllocation.c, dlls/mshtml/tests/htmldoc.c
-# |
-if test "$enable_mshtml_HTMLLocation_put_hash" -eq 1; then
-	patch_apply mshtml-HTMLLocation_put_hash/0001-mshtml-Add-IHTMLLocation-hash-property-s-getter-impl.patch
 fi
 
 # Patchset mshtml-TranslateAccelerator
