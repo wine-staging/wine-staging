@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "1d636da205e39436bbd71849ceeebc5420bf98a9"
+	echo "13cc08e32d6c04f8f915d07cda39638ee99c3d43"
 }
 
 # Show version information
@@ -204,7 +204,6 @@ patch_enable_all ()
 	enable_user32_rawinput_mouse="$1"
 	enable_user32_rawinput_mouse_experimental="$1"
 	enable_user32_recursive_activation="$1"
-	enable_uxtheme_CloseThemeClass="$1"
 	enable_version_VerQueryValue="$1"
 	enable_wbemdisp_ISWbemObject_Invoke="$1"
 	enable_widl_SLTG_Typelib_Support="$1"
@@ -627,9 +626,6 @@ patch_enable ()
 			;;
 		user32-recursive-activation)
 			enable_user32_recursive_activation="$2"
-			;;
-		uxtheme-CloseThemeClass)
-			enable_uxtheme_CloseThemeClass="$2"
 			;;
 		version-VerQueryValue)
 			enable_version_VerQueryValue="$2"
@@ -3113,18 +3109,6 @@ fi
 if test "$enable_user32_recursive_activation" -eq 1; then
 	patch_apply user32-recursive-activation/0001-user32-focus-Prevent-a-recursive-loop-with-the-activ.patch
 	patch_apply user32-recursive-activation/0002-user32-tests-Test-a-recursive-activation-loop-on-WM_.patch
-fi
-
-# Patchset uxtheme-CloseThemeClass
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#41729] Protect CloseThemeData() from invalid input
-# |
-# | Modified files:
-# |   *	dlls/uxtheme/msstyles.c, dlls/uxtheme/msstyles.h, dlls/uxtheme/tests/system.c
-# |
-if test "$enable_uxtheme_CloseThemeClass" -eq 1; then
-	patch_apply uxtheme-CloseThemeClass/0001-uxtheme-Protect-CloseThemeData-from-invalid-input.patch
 fi
 
 # Patchset version-VerQueryValue
