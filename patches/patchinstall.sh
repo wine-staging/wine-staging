@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "13cc08e32d6c04f8f915d07cda39638ee99c3d43"
+	echo "384b0b35c357ca31ccb080162e1f39f93ec70054"
 }
 
 # Show version information
@@ -133,7 +133,6 @@ patch_enable_all ()
 	enable_ntdll_Builtin_Prot="$1"
 	enable_ntdll_CriticalSection="$1"
 	enable_ntdll_Exception="$1"
-	enable_ntdll_ForceBottomUpAlloc="$1"
 	enable_ntdll_HashLinks="$1"
 	enable_ntdll_Hide_Wine_Exports="$1"
 	enable_ntdll_Junction_Points="$1"
@@ -143,7 +142,6 @@ patch_enable_all ()
 	enable_ntdll_ProcessQuotaLimits="$1"
 	enable_ntdll_RtlQueryPackageIdentity="$1"
 	enable_ntdll_Serial_Port_Detection="$1"
-	enable_ntdll_Syscall_Emulation="$1"
 	enable_ntdll_WRITECOPY="$1"
 	enable_ntdll_ext4_case_folder="$1"
 	enable_ntdll_wine_frames="$1"
@@ -193,7 +191,6 @@ patch_enable_all ()
 	enable_user32_LR_LOADFROMFILE="$1"
 	enable_user32_ListBox_Size="$1"
 	enable_user32_LoadKeyboardLayoutEx="$1"
-	enable_user32_MessageBox_WS_EX_TOPMOST="$1"
 	enable_user32_Mouse_Message_Hwnd="$1"
 	enable_user32_QueryDisplayConfig="$1"
 	enable_user32_Refresh_MDI_Menus="$1"
@@ -414,9 +411,6 @@ patch_enable ()
 		ntdll-Exception)
 			enable_ntdll_Exception="$2"
 			;;
-		ntdll-ForceBottomUpAlloc)
-			enable_ntdll_ForceBottomUpAlloc="$2"
-			;;
 		ntdll-HashLinks)
 			enable_ntdll_HashLinks="$2"
 			;;
@@ -443,9 +437,6 @@ patch_enable ()
 			;;
 		ntdll-Serial_Port_Detection)
 			enable_ntdll_Serial_Port_Detection="$2"
-			;;
-		ntdll-Syscall_Emulation)
-			enable_ntdll_Syscall_Emulation="$2"
 			;;
 		ntdll-WRITECOPY)
 			enable_ntdll_WRITECOPY="$2"
@@ -593,9 +584,6 @@ patch_enable ()
 			;;
 		user32-LoadKeyboardLayoutEx)
 			enable_user32_LoadKeyboardLayoutEx="$2"
-			;;
-		user32-MessageBox_WS_EX_TOPMOST)
-			enable_user32_MessageBox_WS_EX_TOPMOST="$2"
 			;;
 		user32-Mouse_Message_Hwnd)
 			enable_user32_Mouse_Message_Hwnd="$2"
@@ -1234,13 +1222,6 @@ if test "$enable_ntdll_Builtin_Prot" -eq 1; then
 		abort "Patchset ntdll-WRITECOPY disabled, but ntdll-Builtin_Prot depends on that."
 	fi
 	enable_ntdll_WRITECOPY=1
-fi
-
-if test "$enable_ntdll_WRITECOPY" -eq 1; then
-	if test "$enable_ntdll_ForceBottomUpAlloc" -gt 1; then
-		abort "Patchset ntdll-ForceBottomUpAlloc disabled, but ntdll-WRITECOPY depends on that."
-	fi
-	enable_ntdll_ForceBottomUpAlloc=1
 fi
 
 if test "$enable_fltmgr_sys_FltBuildDefaultSecurityDescriptor" -eq 1; then
@@ -2093,27 +2074,7 @@ if test "$enable_ntdll_APC_Performance" -eq 1; then
 	patch_apply ntdll-APC_Performance/0001-ntdll-Reuse-old-async-fileio-structures-if-possible.patch
 fi
 
-# Patchset ntdll-ForceBottomUpAlloc
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#48175] AION (64 bit) - crashes in crysystem.dll.CryFree() due to high memory pointers allocated
-# |   *	[#46568] 64-bit msxml6.dll from Microsoft Core XML Services 6.0 redist package fails to load (Wine doesn't respect
-# | 	44-bit user-mode VA limitation from Windows < 8.1)
-# |
-# | Modified files:
-# |   *	dlls/ntdll/unix/virtual.c
-# |
-if test "$enable_ntdll_ForceBottomUpAlloc" -eq 1; then
-	patch_apply ntdll-ForceBottomUpAlloc/0001-ntdll-Increase-step-after-failed-map-attempt-in-try_.patch
-	patch_apply ntdll-ForceBottomUpAlloc/0002-ntdll-Increase-free-ranges-view-block-size-on-64-bit.patch
-	patch_apply ntdll-ForceBottomUpAlloc/0003-ntdll-Force-virtual-memory-allocation-order.patch
-	patch_apply ntdll-ForceBottomUpAlloc/0004-ntdll-Exclude-natively-mapped-areas-from-free-areas-.patch
-fi
-
 # Patchset ntdll-WRITECOPY
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-ForceBottomUpAlloc
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#29384] Multiple applications expect correct handling of WRITECOPY memory protection (Voobly fails to launch Age of
@@ -2138,7 +2099,7 @@ fi
 # Patchset ntdll-Builtin_Prot
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-ForceBottomUpAlloc, ntdll-WRITECOPY
+# |   *	ntdll-WRITECOPY
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#44650] Fix holes in ELF mappings
@@ -2246,18 +2207,6 @@ fi
 # |
 if test "$enable_ntdll_RtlQueryPackageIdentity" -eq 1; then
 	patch_apply ntdll-RtlQueryPackageIdentity/0003-ntdll-tests-Add-basic-tests-for-RtlQueryPackageIdent.patch
-fi
-
-# Patchset ntdll-Syscall_Emulation
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#48291] Detroit: Become Human crashes on launch
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/ntdll/unix/signal_x86_64.c, tools/winebuild/import.c
-# |
-if test "$enable_ntdll_Syscall_Emulation" -eq 1; then
-	patch_apply ntdll-Syscall_Emulation/0001-ntdll-Support-x86_64-syscall-emulation.patch
 fi
 
 # Patchset ntdll-ext4-case-folder
@@ -2934,16 +2883,6 @@ fi
 # |
 if test "$enable_user32_LoadKeyboardLayoutEx" -eq 1; then
 	patch_apply user32-LoadKeyboardLayoutEx/0001-user32-Added-LoadKeyboardLayoutEx-stub.patch
-fi
-
-# Patchset user32-MessageBox_WS_EX_TOPMOST
-# |
-# | Modified files:
-# |   *	dlls/user32/msgbox.c, dlls/user32/tests/dialog.c
-# |
-if test "$enable_user32_MessageBox_WS_EX_TOPMOST" -eq 1; then
-	patch_apply user32-MessageBox_WS_EX_TOPMOST/0001-user32-tests-Add-some-tests-to-see-when-MessageBox-g.patch
-	patch_apply user32-MessageBox_WS_EX_TOPMOST/0002-user32-MessageBox-should-be-topmost-when-MB_SYSTEMMO.patch
 fi
 
 # Patchset user32-Mouse_Message_Hwnd
