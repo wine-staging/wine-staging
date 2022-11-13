@@ -139,6 +139,7 @@ patch_enable_all ()
 	enable_ntdll_Manifest_Range="$1"
 	enable_ntdll_NtQuerySection="$1"
 	enable_ntdll_NtSetLdtEntries="$1"
+	enable_ntdll_Placeholders="$1"
 	enable_ntdll_ProcessQuotaLimits="$1"
 	enable_ntdll_RtlQueryPackageIdentity="$1"
 	enable_ntdll_Serial_Port_Detection="$1"
@@ -429,6 +430,9 @@ patch_enable ()
 			;;
 		ntdll-NtSetLdtEntries)
 			enable_ntdll_NtSetLdtEntries="$2"
+			;;
+		ntdll-Placeholders)
+			enable_ntdll_Placeholders="$2"
 			;;
 		ntdll-ProcessQuotaLimits)
 			enable_ntdll_ProcessQuotaLimits="$2"
@@ -2189,6 +2193,32 @@ fi
 if test "$enable_ntdll_NtSetLdtEntries" -eq 1; then
 	patch_apply ntdll-NtSetLdtEntries/0001-ntdll-Implement-NtSetLdtEntries.patch
 	patch_apply ntdll-NtSetLdtEntries/0002-libs-wine-Allow-to-modify-reserved-LDT-entries.patch
+fi
+
+# Patchset ntdll-Placeholders
+# |
+# | Modified files:
+# |   *	dlls/kernelbase/memory.c, dlls/kernelbase/tests/process.c, dlls/ntdll/tests/virtual.c, dlls/ntdll/unix/server.c,
+# | 	dlls/ntdll/unix/virtual.c, server/protocol.def
+# |
+if test "$enable_ntdll_Placeholders" -eq 1; then
+	patch_apply ntdll-Placeholders/0001-ntdll-tests-Add-tests-for-freeing-a-part-of-view.patch
+	patch_apply ntdll-Placeholders/0002-kernelbase-Validate-nonzero-size-for-MEM_RELEASE-in-.patch
+	patch_apply ntdll-Placeholders/0003-ntdll-Fix-size-validation-in-NtFreeVirtualMemory.patch
+	patch_apply ntdll-Placeholders/0004-ntdll-Fully-support-unaligned-views-in-free-ranges-m.patch
+	patch_apply ntdll-Placeholders/0005-ntdll-Factor-out-some-view-manipulation-functions.patch
+	patch_apply ntdll-Placeholders/0006-ntdll-Support-partial-view-release-in-NtFreeVirtualM.patch
+	patch_apply ntdll-Placeholders/0007-ntdll-Add-logging-for-free-ranges.patch
+	patch_apply ntdll-Placeholders/0008-ntdll-Handle-NULL-process-handle-in-MapViewOfFile3.patch
+	patch_apply ntdll-Placeholders/0009-ntdll-Support-MEM_PRESERVE_PLACEHOLDER-in-NtFreeVirt.patch
+	patch_apply ntdll-Placeholders/0010-ntdll-Pass-allocation-type-to-map_view.patch
+	patch_apply ntdll-Placeholders/0011-ntdll-Support-MEM_RESERVE_PLACEHOLDER-in-NtAllocateV.patch
+	patch_apply ntdll-Placeholders/0012-ntdll-Support-MEM_REPLACE_PLACEHOLDER-in-NtAllocateV.patch
+	patch_apply ntdll-Placeholders/0013-ntdll-Support-MEM_REPLACE_PLACEHOLDER-in-virtual_map.patch
+	patch_apply ntdll-Placeholders/0014-ntdll-tests-Add-more-tests-for-placeholders.patch
+	patch_apply ntdll-Placeholders/0015-ntdll-Support-MEM_COALESCE_PLACEHOLDERS-in-NtFreeVir.patch
+	patch_apply ntdll-Placeholders/0016-ntdll-Factor-out-unmap_view_of_section-function.patch
+	patch_apply ntdll-Placeholders/0017-ntdll-Support-MEM_PRESERVE_PLACEHOLDER-in-NtUnmapVie.patch
 fi
 
 # Patchset ntdll-ProcessQuotaLimits

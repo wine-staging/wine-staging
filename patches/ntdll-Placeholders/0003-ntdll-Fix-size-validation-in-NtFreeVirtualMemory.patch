@@ -1,0 +1,117 @@
+From 22dc17764c3b231ebd226e479686a00c7aaaf01a Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Fri, 11 Nov 2022 18:12:47 -0600
+Subject: [PATCH] ntdll: Fix size validation in NtFreeVirtualMemory().
+
+---
+ dlls/ntdll/tests/virtual.c | 16 ++++++++--------
+ dlls/ntdll/unix/virtual.c  | 26 ++++++++++++++++++--------
+ 2 files changed, 26 insertions(+), 16 deletions(-)
+
+diff --git a/dlls/ntdll/tests/virtual.c b/dlls/ntdll/tests/virtual.c
+index 8e94566fb7f..81e9bd0bda3 100644
+--- a/dlls/ntdll/tests/virtual.c
++++ b/dlls/ntdll/tests/virtual.c
+@@ -1659,12 +1659,12 @@ static void test_NtFreeVirtualMemory(void)
+ 
+     size = 0x11000;
+     status = NtFreeVirtualMemory(NtCurrentProcess(), &addr1, &size, MEM_RELEASE);
+-    todo_wine ok(status == STATUS_UNABLE_TO_FREE_VM, "Unexpected status %08lx.\n", status);
++    ok(status == STATUS_UNABLE_TO_FREE_VM, "Unexpected status %08lx.\n", status);
+ 
+     addr = (char *)addr1 + 0x1001;
+     size = 0xffff;
+     status = NtFreeVirtualMemory(NtCurrentProcess(), &addr, &size, MEM_RELEASE);
+-    todo_wine ok(status == STATUS_UNABLE_TO_FREE_VM, "Unexpected status %08lx.\n", status);
++    ok(status == STATUS_UNABLE_TO_FREE_VM, "Unexpected status %08lx.\n", status);
+     ok(size == 0xffff, "Unexpected size %p.\n", (void *)size);
+     ok(addr == (char *)addr1 + 0x1001, "Got addr %p, addr1 %p.\n", addr, addr1);
+ 
+@@ -1674,16 +1674,16 @@ static void test_NtFreeVirtualMemory(void)
+     todo_wine ok(status == STATUS_SUCCESS, "Unexpected status %08lx.\n", status);
+     *(volatile char *)addr1 = 1;
+     *((volatile char *)addr1 + 0x2000) = 1;
+-    todo_wine ok(size == 0x1000, "Unexpected size %p.\n", (void *)size);
+-    todo_wine ok(addr == (char *)addr1 + 0x1000, "Got addr %p, addr1 %p.\n", addr, addr1);
++    ok(size == 0x1000, "Unexpected size %p.\n", (void *)size);
++    ok(addr == (char *)addr1 + 0x1000, "Got addr %p, addr1 %p.\n", addr, addr1);
+ 
+     size = 0xfff;
+     addr = (char *)addr1 + 1;
+     status = NtFreeVirtualMemory(NtCurrentProcess(), &addr, &size, MEM_RELEASE);
+     todo_wine ok(status == STATUS_SUCCESS, "Unexpected status %08lx.\n", status);
+     *((volatile char *)addr1 + 0x2000) = 1;
+-    todo_wine ok(size == 0x1000, "Unexpected size %p.\n", (void *)size);
+-    todo_wine ok(addr == addr1, "Got addr %p, addr1 %p.\n", addr, addr1);
++    ok(size == 0x1000, "Unexpected size %p.\n", (void *)size);
++    ok(addr == addr1, "Got addr %p, addr1 %p.\n", addr, addr1);
+ 
+     size = 0x1000;
+     addr = addr1;
+@@ -1703,12 +1703,12 @@ static void test_NtFreeVirtualMemory(void)
+     size = 0;
+     addr = (char *)addr1 + 0x1000;
+     status = NtFreeVirtualMemory(NtCurrentProcess(), &addr, &size, MEM_RELEASE);
+-    todo_wine ok(status == STATUS_MEMORY_NOT_ALLOCATED, "Unexpected status %08lx.\n", status);
++    ok(status == STATUS_MEMORY_NOT_ALLOCATED, "Unexpected status %08lx.\n", status);
+ 
+     size = 0x1000;
+     addr = (char *)addr1 + 0x1000;
+     status = NtFreeVirtualMemory(NtCurrentProcess(), &addr, &size, MEM_DECOMMIT);
+-    todo_wine ok(status == STATUS_MEMORY_NOT_ALLOCATED, "Unexpected status %08lx.\n", status);
++    ok(status == STATUS_MEMORY_NOT_ALLOCATED, "Unexpected status %08lx.\n", status);
+ 
+     size = 0;
+     addr = (char *)addr1 + 0x2000;
+diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
+index 24d5a4e2da8..4cb0f349ffc 100644
+--- a/dlls/ntdll/unix/virtual.c
++++ b/dlls/ntdll/unix/virtual.c
+@@ -4127,26 +4127,36 @@ NTSTATUS WINAPI NtFreeVirtualMemory( HANDLE process, PVOID *addr_ptr, SIZE_T *si
+         if (addr == (void *)1 && !size && type == MEM_RELEASE) virtual_release_address_space();
+         else status = STATUS_INVALID_PARAMETER;
+     }
+-    else if (!(view = find_view( base, size )) || !is_view_valloc( view ))
+-    {
+-        status = STATUS_INVALID_PARAMETER;
+-    }
++    else if (!(view = find_view( base, 0 ))) status = STATUS_MEMORY_NOT_ALLOCATED;
++    else if (!is_view_valloc( view )) status = STATUS_INVALID_PARAMETER;
+     else if (type == MEM_RELEASE)
+     {
+         /* Free the pages */
+ 
+-        if (size) status = STATUS_INVALID_PARAMETER;
+-        else if (base != view->base) status = STATUS_FREE_VM_NOT_AT_BASE;
++        if (size && (char *)view->base + view->size - base < size) status = STATUS_UNABLE_TO_FREE_VM;
++        else if (!size && base != view->base) status = STATUS_FREE_VM_NOT_AT_BASE;
+         else
+         {
++            if (!size) size = view->size;
++
++            if (size == view->size)
++            {
++                assert( base == view->base );
++                delete_view( view );
++            }
++            else
++            {
++                FIXME( "Parial view release is not supported.\n" );
++                status = STATUS_INVALID_PARAMETER;
++            }
+             *addr_ptr = base;
+-            *size_ptr = view->size;
+-            delete_view( view );
++            *size_ptr = size;
+         }
+     }
+     else if (type == MEM_DECOMMIT)
+     {
+         if (!size && base != view->base) status = STATUS_FREE_VM_NOT_AT_BASE;
++        else if (base - (char *)view->base + size > view->size) status = STATUS_UNABLE_TO_FREE_VM;
+         else status = decommit_pages( view, base - (char *)view->base, size );
+         if (status == STATUS_SUCCESS)
+         {
+-- 
+2.38.1
+
