@@ -1,19 +1,18 @@
-From d7be25a11e01c6f223b39df2fb45cc9f531f6c83 Mon Sep 17 00:00:00 2001
+From a53a38937f258294b4c98b3de57f8734158f5b6b Mon Sep 17 00:00:00 2001
 From: Paul Gofman <pgofman@codeweavers.com>
 Date: Tue, 14 Jul 2020 15:00:34 +0300
 Subject: [PATCH] ntdll: Support x86_64 syscall emulation.
 
 ---
  configure.ac                    |   1 +
- dlls/ntdll/unix/signal_x86_64.c | 123 ++++++++++++++++++++++++++++++++
- tools/winebuild/import.c        |   3 +-
- 3 files changed, 125 insertions(+), 2 deletions(-)
+ dlls/ntdll/unix/signal_x86_64.c | 185 ++++++++++++++++++++++++++++++++
+ 2 files changed, 186 insertions(+)
 
 diff --git a/configure.ac b/configure.ac
-index 5a5d88f10b0..7ae43b0c593 100644
+index db7753959d7..08dd970506e 100644
 --- a/configure.ac
 +++ b/configure.ac
-@@ -448,6 +448,7 @@ AC_CHECK_HEADERS(\
+@@ -445,6 +445,7 @@ AC_CHECK_HEADERS(\
  	linux/ioctl.h \
  	linux/major.h \
  	linux/param.h \
@@ -22,10 +21,10 @@ index 5a5d88f10b0..7ae43b0c593 100644
  	linux/types.h \
  	linux/ucdrom.h \
 diff --git a/dlls/ntdll/unix/signal_x86_64.c b/dlls/ntdll/unix/signal_x86_64.c
-index 06d99545913..9a46b4a50b0 100644
+index c726b962074..ae985625e50 100644
 --- a/dlls/ntdll/unix/signal_x86_64.c
 +++ b/dlls/ntdll/unix/signal_x86_64.c
-@@ -27,11 +27,13 @@
+@@ -27,6 +27,7 @@
  #include "config.h"
  
  #include <assert.h>
@@ -33,13 +32,16 @@ index 06d99545913..9a46b4a50b0 100644
  #include <pthread.h>
  #include <signal.h>
  #include <stdlib.h>
- #include <stdarg.h>
+@@ -34,6 +35,8 @@
  #include <stdio.h>
-+#include <fcntl.h>
  #include <sys/types.h>
  #include <sys/mman.h>
++#include <sys/stat.h>
++#include <fcntl.h>
  #include <unistd.h>
-@@ -65,6 +67,13 @@
+ #ifdef HAVE_MACHINE_SYSARCH_H
+ # include <machine/sysarch.h>
+@@ -65,6 +68,14 @@
  # include <mach/mach.h>
  #endif
  
@@ -48,29 +50,34 @@ index 06d99545913..9a46b4a50b0 100644
 +# include <linux/filter.h>
 +# include <linux/seccomp.h>
 +# include <sys/prctl.h>
++# include <linux/audit.h>
 +#endif
 +
  #define NONAMELESSUNION
  #define NONAMELESSSTRUCT
  #include "ntstatus.h"
-@@ -2432,6 +2441,118 @@ static inline DWORD is_privileged_instr( CONTEXT *context )
+@@ -1807,6 +1818,179 @@ static inline DWORD is_privileged_instr( CONTEXT *context )
      return 0;
  }
  
 +#ifdef HAVE_SECCOMP
 +static void sigsys_handler( int signal, siginfo_t *siginfo, void *sigcontext )
 +{
++    extern void __wine_syscall_dispatcher_prolog_end(void);
++    struct syscall_frame *frame = amd64_thread_data()->syscall_frame;
 +    ucontext_t *ctx = sigcontext;
-+    void ***rsp;
 +
-+    TRACE("SIGSYS, rax %#llx, rip %#llx.\n", ctx->uc_mcontext.gregs[REG_RAX],
++    TRACE_(seh)("SIGSYS, rax %#llx, rip %#llx.\n", ctx->uc_mcontext.gregs[REG_RAX],
 +            ctx->uc_mcontext.gregs[REG_RIP]);
 +
-+    rsp = (void ***)&ctx->uc_mcontext.gregs[REG_RSP];
-+    *rsp -= 1;
-+    **rsp = (void *)(ctx->uc_mcontext.gregs[REG_RIP] + 0xb);
-+
-+    ctx->uc_mcontext.gregs[REG_RIP] = (ULONG64)__wine_syscall_dispatcher;
++    frame->rip = ctx->uc_mcontext.gregs[REG_RIP] + 0xb;
++    frame->rcx = ctx->uc_mcontext.gregs[REG_RIP];
++    frame->eflags = ctx->uc_mcontext.gregs[REG_EFL];
++    frame->restore_flags = 0;
++    ctx->uc_mcontext.gregs[REG_RCX] = (ULONG_PTR)frame;
++    ctx->uc_mcontext.gregs[REG_R11] = frame->eflags;
++    ctx->uc_mcontext.gregs[REG_EFL] &= ~0x100;  /* clear single-step flag */
++    ctx->uc_mcontext.gregs[REG_RIP] = (ULONG64)__wine_syscall_dispatcher_prolog_end;
 +}
 +#endif
 +
@@ -92,20 +99,20 @@ index 06d99545913..9a46b4a50b0 100644
 +    fd = open("/proc/sys/net/core/bpf_jit_enable", O_RDONLY);
 +    if (fd == -1)
 +    {
-+        WARN("Could not open /proc/sys/net/core/bpf_jit_enable.\n");
++        WARN_(seh)("Could not open /proc/sys/net/core/bpf_jit_enable.\n");
 +        return;
 +    }
 +
 +    if (read(fd, &enabled, sizeof(enabled)) == sizeof(enabled))
 +    {
-+        TRACE("enabled %#x.\n", enabled);
++        TRACE_(seh)("enabled %#x.\n", enabled);
 +
 +        if (enabled != '1')
-+            ERR("BPF JIT is not enabled in the kernel, enable it to reduce syscall emulation overhead.\n");
++            ERR_(seh)("BPF JIT is not enabled in the kernel, enable it to reduce syscall emulation overhead.\n");
 +    }
 +    else
 +    {
-+        WARN("Could not read /proc/sys/net/core/bpf_jit_enable.\n");
++        WARN_(seh)("Could not read /proc/sys/net/core/bpf_jit_enable.\n");
 +    }
 +    close(fd);
 +}
@@ -120,59 +127,116 @@ index 06d99545913..9a46b4a50b0 100644
 +#   ifndef SECCOMP_SET_MODE_FILTER
 +#       define SECCOMP_SET_MODE_FILTER 1
 +#   endif
++    static const BYTE syscall_trap_test[] =
++    {
++        0x48, 0x89, 0xc8,   /* mov %rcx, %rax */
++        0x0f, 0x05,         /* syscall */
++        0xc3,               /* retq */
++    };
 +    static const unsigned int flags = SECCOMP_FILTER_FLAG_SPEC_ALLOW;
++
++#define NATIVE_SYSCALL_ADDRESS_START 0x700000000000
++
 +    static struct sock_filter filter[] =
 +    {
-+       BPF_STMT(BPF_LD | BPF_W | BPF_ABS,
-+                (offsetof(struct seccomp_data, nr))),
-+       BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, 0xf000, 0, 1),
-+       BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRAP),
-+       BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
++        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, instruction_pointer) + 4),
++        /* Native libs are loaded at high addresses. */
++        BPF_JUMP(BPF_JMP | BPF_JGT | BPF_K, NATIVE_SYSCALL_ADDRESS_START >> 32, 0, 1),
++        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
++        /* Allow i386. */
++        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, arch)),
++        BPF_JUMP (BPF_JMP | BPF_JEQ | BPF_K, AUDIT_ARCH_X86_64, 1, 0),
++        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
++        /* Allow wine64-preloader */
++        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, offsetof(struct seccomp_data, instruction_pointer)),
++        BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, 0x7d400000, 1, 0),
++        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRAP),
++        BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, 0x7d402000, 0, 1),
++        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_TRAP),
++        BPF_STMT(BPF_RET | BPF_K, SECCOMP_RET_ALLOW),
 +    };
++    long (WINAPI *test_syscall)(long sc_number);
 +    struct syscall_frame *frame = amd64_thread_data()->syscall_frame;
 +    struct sock_fprog prog;
 +    NTSTATUS status;
 +
++    if ((ULONG_PTR)sc_seccomp < NATIVE_SYSCALL_ADDRESS_START
++            || (ULONG_PTR)syscall < NATIVE_SYSCALL_ADDRESS_START)
++    {
++        ERR_(seh)("Native libs are being loaded in low addresses, sc_seccomp %p, syscall %p, not installing seccomp.\n",
++                sc_seccomp, syscall);
++        ERR_(seh)("The known reasons are /proc/sys/vm/legacy_va_layout set to 1 or 'ulimit -s' being 'unlimited'.\n");
++        return;
++    }
++
 +    sig_act->sa_sigaction = sigsys_handler;
++    memset(&prog, 0, sizeof(prog));
++
 +    sigaction(SIGSYS, sig_act, NULL);
 +
 +    frame->syscall_flags = syscall_flags;
 +    frame->syscall_table = KeServiceDescriptorTable;
 +
-+    if ((status = syscall(0xffff)) == STATUS_INVALID_PARAMETER)
++    test_syscall = mmap((void *)0x600000000000, 0x1000, PROT_EXEC | PROT_READ | PROT_WRITE,
++            MAP_PRIVATE | MAP_ANON, -1, 0);
++    if (test_syscall != (void *)0x600000000000)
 +    {
-+        TRACE("Seccomp filters already installed.\n");
-+        return;
++        int ret;
++
++        ERR("Could not allocate test syscall, falling back to seccomp presence check, test_syscall %p, errno %d.\n",
++                test_syscall, errno);
++        if (test_syscall != MAP_FAILED) munmap(test_syscall, 0x1000);
++
++        if ((ret = prctl(PR_GET_SECCOMP, 0, NULL, 0, 0)))
++        {
++            if (ret == 2)
++                TRACE_(seh)("Seccomp filters already installed.\n");
++            else
++                ERR_(seh)("Seccomp filters cannot be installed, ret %d, error %s.\n", ret, strerror(errno));
++            return;
++        }
 +    }
-+    if (status != -ENOSYS && (status != -1 || errno != ENOSYS))
++    else
 +    {
-+        ERR("Unexpected status %#x, errno %d.\n", status, errno);
-+        return;
++        memcpy(test_syscall, syscall_trap_test, sizeof(syscall_trap_test));
++        status = test_syscall(0xffff);
++        munmap(test_syscall, 0x1000);
++        if (status == STATUS_INVALID_PARAMETER)
++        {
++            TRACE_(seh)("Seccomp filters already installed.\n");
++            return;
++        }
++        if (status != -ENOSYS && (status != -1 || errno != ENOSYS))
++        {
++            ERR_(seh)("Unexpected status %#x, errno %d.\n", status, errno);
++            return;
++        }
 +    }
 +
-+    memset(&prog, 0, sizeof(prog));
++    TRACE_(seh)("Installing seccomp filters.\n");
++
 +    prog.len = ARRAY_SIZE(filter);
 +    prog.filter = filter;
 +
 +    if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0))
 +    {
-+        ERR("prctl(PR_SET_NO_NEW_PRIVS, ...): %s.\n", strerror(errno));
++        ERR_(seh)("prctl(PR_SET_NO_NEW_PRIVS, ...): %s.\n", strerror(errno));
 +        return;
 +    }
 +    if (sc_seccomp(SECCOMP_SET_MODE_FILTER, flags, &prog))
 +    {
-+        ERR("prctl(PR_SET_SECCOMP, ...): %s.\n", strerror(errno));
++        ERR_(seh)("prctl(PR_SET_SECCOMP, ...): %s.\n", strerror(errno));
 +        return;
 +    }
 +    check_bpf_jit_enable();
 +#else
-+    WARN("Built without seccomp.\n");
++    WARN_(seh)("Built without seccomp.\n");
 +#endif
 +}
  
  /***********************************************************************
   *           handle_interrupt
-@@ -3010,6 +3131,7 @@ void signal_init_process(void)
+@@ -2479,6 +2663,7 @@ void signal_init_process(void)
      if (sigaction( SIGSEGV, &sig_act, NULL ) == -1) goto error;
      if (sigaction( SIGILL, &sig_act, NULL ) == -1) goto error;
      if (sigaction( SIGBUS, &sig_act, NULL ) == -1) goto error;
@@ -180,35 +244,6 @@ index 06d99545913..9a46b4a50b0 100644
      return;
  
   error:
-@@ -3228,6 +3350,7 @@ __ASM_GLOBAL_FUNC( __wine_syscall_dispatcher,
-                    "leaq 0x28(%rsp),%rsi\n\t"      /* first argument */
-                    "movq %rcx,%rsp\n\t"
-                    "movq 0x00(%rcx),%rax\n\t"
-+                   "subq $0xf000,%rax\n\t"
-                    "movq 0x18(%rcx),%rdx\n\t"
-                    "movl %eax,%ebx\n\t"
-                    "shrl $8,%ebx\n\t"
-diff --git a/tools/winebuild/import.c b/tools/winebuild/import.c
-index c876d51f8e6..37f1465a139 100644
---- a/tools/winebuild/import.c
-+++ b/tools/winebuild/import.c
-@@ -1366,7 +1366,6 @@ static int cmp_link_name( const void *e1, const void *e2 )
-     return strcmp( odp1->link_name, odp2->link_name );
- }
- 
--
- /* output the functions for system calls */
- void output_syscalls( DLLSPEC *spec )
- {
-@@ -1424,7 +1423,7 @@ void output_syscalls( DLLSPEC *spec )
-              * validate that instruction, we can just put a jmp there instead. */
-             output( "\t.byte 0x4c,0x8b,0xd1\n" ); /* movq %rcx,%r10 */
-             output( "\t.byte 0xb8\n" );           /* movl $i,%eax */
--            output( "\t.long %u\n", id );
-+            output( "\t.long %u\n", 0xf000 + id );
-             output( "\t.byte 0xf6,0x04,0x25,0x08,0x03,0xfe,0x7f,0x01\n" ); /* testb $1,0x7ffe0308 */
-             output( "\t.byte 0x75,0x03\n" );      /* jne 1f */
-             output( "\t.byte 0x0f,0x05\n" );      /* syscall */
 -- 
-2.33.0
+2.38.1
 

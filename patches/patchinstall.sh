@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "384b0b35c357ca31ccb080162e1f39f93ec70054"
+	echo "053ee2d23d825f800baa16e455a218834aa2dec0"
 }
 
 # Show version information
@@ -142,6 +142,7 @@ patch_enable_all ()
 	enable_ntdll_ProcessQuotaLimits="$1"
 	enable_ntdll_RtlQueryPackageIdentity="$1"
 	enable_ntdll_Serial_Port_Detection="$1"
+	enable_ntdll_Syscall_Emulation="$1"
 	enable_ntdll_WRITECOPY="$1"
 	enable_ntdll_ext4_case_folder="$1"
 	enable_ntdll_wine_frames="$1"
@@ -437,6 +438,9 @@ patch_enable ()
 			;;
 		ntdll-Serial_Port_Detection)
 			enable_ntdll_Serial_Port_Detection="$2"
+			;;
+		ntdll-Syscall_Emulation)
+			enable_ntdll_Syscall_Emulation="$2"
 			;;
 		ntdll-WRITECOPY)
 			enable_ntdll_WRITECOPY="$2"
@@ -2207,6 +2211,18 @@ fi
 # |
 if test "$enable_ntdll_RtlQueryPackageIdentity" -eq 1; then
 	patch_apply ntdll-RtlQueryPackageIdentity/0003-ntdll-tests-Add-basic-tests-for-RtlQueryPackageIdent.patch
+fi
+
+# Patchset ntdll-Syscall_Emulation
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#48291] Detroit: Become Human crashes on launch
+# |
+# | Modified files:
+# |   *	configure.ac, dlls/ntdll/unix/signal_x86_64.c
+# |
+if test "$enable_ntdll_Syscall_Emulation" -eq 1; then
+	patch_apply ntdll-Syscall_Emulation/0001-ntdll-Support-x86_64-syscall-emulation.patch
 fi
 
 # Patchset ntdll-ext4-case-folder
