@@ -133,6 +133,7 @@ patch_enable_all ()
 	enable_ntdll_Builtin_Prot="$1"
 	enable_ntdll_CriticalSection="$1"
 	enable_ntdll_Exception="$1"
+	enable_ntdll_ForceBottomUpAlloc="$1"
 	enable_ntdll_HashLinks="$1"
 	enable_ntdll_Hide_Wine_Exports="$1"
 	enable_ntdll_Junction_Points="$1"
@@ -412,6 +413,9 @@ patch_enable ()
 			;;
 		ntdll-Exception)
 			enable_ntdll_Exception="$2"
+			;;
+		ntdll-ForceBottomUpAlloc)
+			enable_ntdll_ForceBottomUpAlloc="$2"
 			;;
 		ntdll-HashLinks)
 			enable_ntdll_HashLinks="$2"
@@ -1223,6 +1227,13 @@ if test "$enable_nvapi_Stub_DLL" -eq 1; then
 		abort "Patchset nvcuda-CUDA_Support disabled, but nvapi-Stub_DLL depends on that."
 	fi
 	enable_nvcuda_CUDA_Support=1
+fi
+
+if test "$enable_ntdll_ForceBottomUpAlloc" -eq 1; then
+	if test "$enable_ntdll_Placeholders" -gt 1; then
+		abort "Patchset ntdll-Placeholders disabled, but ntdll-ForceBottomUpAlloc depends on that."
+	fi
+	enable_ntdll_Placeholders=1
 fi
 
 if test "$enable_ntdll_Builtin_Prot" -eq 1; then
@@ -2142,6 +2153,52 @@ if test "$enable_ntdll_Exception" -eq 1; then
 	patch_apply ntdll-Exception/0002-ntdll-OutputDebugString-should-throw-the-exception-a.patch
 fi
 
+# Patchset ntdll-Placeholders
+# |
+# | Modified files:
+# |   *	dlls/kernelbase/memory.c, dlls/kernelbase/tests/process.c, dlls/ntdll/tests/virtual.c, dlls/ntdll/unix/server.c,
+# | 	dlls/ntdll/unix/virtual.c, server/protocol.def
+# |
+if test "$enable_ntdll_Placeholders" -eq 1; then
+	patch_apply ntdll-Placeholders/0001-ntdll-tests-Add-tests-for-freeing-a-part-of-view.patch
+	patch_apply ntdll-Placeholders/0002-kernelbase-Validate-nonzero-size-for-MEM_RELEASE-in-.patch
+	patch_apply ntdll-Placeholders/0003-ntdll-Fix-size-validation-in-NtFreeVirtualMemory.patch
+	patch_apply ntdll-Placeholders/0004-ntdll-Fully-support-unaligned-views-in-free-ranges-m.patch
+	patch_apply ntdll-Placeholders/0005-ntdll-Factor-out-some-view-manipulation-functions.patch
+	patch_apply ntdll-Placeholders/0006-ntdll-Support-partial-view-release-in-NtFreeVirtualM.patch
+	patch_apply ntdll-Placeholders/0007-ntdll-Add-logging-for-free-ranges.patch
+	patch_apply ntdll-Placeholders/0008-ntdll-Handle-NULL-process-handle-in-MapViewOfFile3.patch
+	patch_apply ntdll-Placeholders/0009-ntdll-Support-MEM_PRESERVE_PLACEHOLDER-in-NtFreeVirt.patch
+	patch_apply ntdll-Placeholders/0010-ntdll-Pass-allocation-type-to-map_view.patch
+	patch_apply ntdll-Placeholders/0011-ntdll-Support-MEM_RESERVE_PLACEHOLDER-in-NtAllocateV.patch
+	patch_apply ntdll-Placeholders/0012-ntdll-Support-MEM_REPLACE_PLACEHOLDER-in-NtAllocateV.patch
+	patch_apply ntdll-Placeholders/0013-ntdll-Support-MEM_REPLACE_PLACEHOLDER-in-virtual_map.patch
+	patch_apply ntdll-Placeholders/0014-ntdll-tests-Add-more-tests-for-placeholders.patch
+	patch_apply ntdll-Placeholders/0015-ntdll-Support-MEM_COALESCE_PLACEHOLDERS-in-NtFreeVir.patch
+	patch_apply ntdll-Placeholders/0016-ntdll-Factor-out-unmap_view_of_section-function.patch
+	patch_apply ntdll-Placeholders/0017-ntdll-Support-MEM_PRESERVE_PLACEHOLDER-in-NtUnmapVie.patch
+fi
+
+# Patchset ntdll-ForceBottomUpAlloc
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	ntdll-Placeholders
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#48175] AION (64 bit) - crashes in crysystem.dll.CryFree() due to high memory pointers allocated
+# |   *	[#46568] 64-bit msxml6.dll from Microsoft Core XML Services 6.0 redist package fails to load (Wine doesn't respect
+# | 	44-bit user-mode VA limitation from Windows < 8.1)
+# |
+# | Modified files:
+# |   *	dlls/ntdll/unix/virtual.c
+# |
+if test "$enable_ntdll_ForceBottomUpAlloc" -eq 1; then
+	patch_apply ntdll-ForceBottomUpAlloc/0001-ntdll-Increase-step-after-failed-map-attempt-in-try_.patch
+	patch_apply ntdll-ForceBottomUpAlloc/0002-ntdll-Increase-free-ranges-view-block-size-on-64-bit.patch
+	patch_apply ntdll-ForceBottomUpAlloc/0003-ntdll-Force-virtual-memory-allocation-order.patch
+	patch_apply ntdll-ForceBottomUpAlloc/0004-ntdll-Exclude-natively-mapped-areas-from-free-areas-.patch
+fi
+
 # Patchset ntdll-HashLinks
 # |
 # | Modified files:
@@ -2193,32 +2250,6 @@ fi
 if test "$enable_ntdll_NtSetLdtEntries" -eq 1; then
 	patch_apply ntdll-NtSetLdtEntries/0001-ntdll-Implement-NtSetLdtEntries.patch
 	patch_apply ntdll-NtSetLdtEntries/0002-libs-wine-Allow-to-modify-reserved-LDT-entries.patch
-fi
-
-# Patchset ntdll-Placeholders
-# |
-# | Modified files:
-# |   *	dlls/kernelbase/memory.c, dlls/kernelbase/tests/process.c, dlls/ntdll/tests/virtual.c, dlls/ntdll/unix/server.c,
-# | 	dlls/ntdll/unix/virtual.c, server/protocol.def
-# |
-if test "$enable_ntdll_Placeholders" -eq 1; then
-	patch_apply ntdll-Placeholders/0001-ntdll-tests-Add-tests-for-freeing-a-part-of-view.patch
-	patch_apply ntdll-Placeholders/0002-kernelbase-Validate-nonzero-size-for-MEM_RELEASE-in-.patch
-	patch_apply ntdll-Placeholders/0003-ntdll-Fix-size-validation-in-NtFreeVirtualMemory.patch
-	patch_apply ntdll-Placeholders/0004-ntdll-Fully-support-unaligned-views-in-free-ranges-m.patch
-	patch_apply ntdll-Placeholders/0005-ntdll-Factor-out-some-view-manipulation-functions.patch
-	patch_apply ntdll-Placeholders/0006-ntdll-Support-partial-view-release-in-NtFreeVirtualM.patch
-	patch_apply ntdll-Placeholders/0007-ntdll-Add-logging-for-free-ranges.patch
-	patch_apply ntdll-Placeholders/0008-ntdll-Handle-NULL-process-handle-in-MapViewOfFile3.patch
-	patch_apply ntdll-Placeholders/0009-ntdll-Support-MEM_PRESERVE_PLACEHOLDER-in-NtFreeVirt.patch
-	patch_apply ntdll-Placeholders/0010-ntdll-Pass-allocation-type-to-map_view.patch
-	patch_apply ntdll-Placeholders/0011-ntdll-Support-MEM_RESERVE_PLACEHOLDER-in-NtAllocateV.patch
-	patch_apply ntdll-Placeholders/0012-ntdll-Support-MEM_REPLACE_PLACEHOLDER-in-NtAllocateV.patch
-	patch_apply ntdll-Placeholders/0013-ntdll-Support-MEM_REPLACE_PLACEHOLDER-in-virtual_map.patch
-	patch_apply ntdll-Placeholders/0014-ntdll-tests-Add-more-tests-for-placeholders.patch
-	patch_apply ntdll-Placeholders/0015-ntdll-Support-MEM_COALESCE_PLACEHOLDERS-in-NtFreeVir.patch
-	patch_apply ntdll-Placeholders/0016-ntdll-Factor-out-unmap_view_of_section-function.patch
-	patch_apply ntdll-Placeholders/0017-ntdll-Support-MEM_PRESERVE_PLACEHOLDER-in-NtUnmapVie.patch
 fi
 
 # Patchset ntdll-ProcessQuotaLimits
