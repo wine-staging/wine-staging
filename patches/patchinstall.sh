@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "ae73e09a8d071eaa33fafe785e8295384b9e64a7"
+	echo "fbf23011777e2ff308ccbc09a07b81917f08796d"
 }
 
 # Show version information
@@ -148,10 +148,6 @@ patch_enable_all ()
 	enable_ntdll_WRITECOPY="$1"
 	enable_ntdll_ext4_case_folder="$1"
 	enable_ntdll_wine_frames="$1"
-	enable_nvapi_Stub_DLL="$1"
-	enable_nvcuda_CUDA_Support="$1"
-	enable_nvcuvid_CUDA_Video_Support="$1"
-	enable_nvencodeapi_Video_Encoder="$1"
 	enable_oleaut32_CreateTypeLib="$1"
 	enable_oleaut32_Load_Save_EMF="$1"
 	enable_oleaut32_OLEPictureImpl_SaveAsFile="$1"
@@ -458,18 +454,6 @@ patch_enable ()
 			;;
 		ntdll-wine-frames)
 			enable_ntdll_wine_frames="$2"
-			;;
-		nvapi-Stub_DLL)
-			enable_nvapi_Stub_DLL="$2"
-			;;
-		nvcuda-CUDA_Support)
-			enable_nvcuda_CUDA_Support="$2"
-			;;
-		nvcuvid-CUDA_Video_Support)
-			enable_nvcuvid_CUDA_Video_Support="$2"
-			;;
-		nvencodeapi-Video_Encoder)
-			enable_nvencodeapi_Video_Encoder="$2"
 			;;
 		oleaut32-CreateTypeLib)
 			enable_oleaut32_CreateTypeLib="$2"
@@ -1206,27 +1190,6 @@ if test "$enable_oleaut32_OLEPictureImpl_SaveAsFile" -eq 1; then
 		abort "Patchset oleaut32-Load_Save_EMF disabled, but oleaut32-OLEPictureImpl_SaveAsFile depends on that."
 	fi
 	enable_oleaut32_Load_Save_EMF=1
-fi
-
-if test "$enable_nvencodeapi_Video_Encoder" -eq 1; then
-	if test "$enable_nvcuvid_CUDA_Video_Support" -gt 1; then
-		abort "Patchset nvcuvid-CUDA_Video_Support disabled, but nvencodeapi-Video_Encoder depends on that."
-	fi
-	enable_nvcuvid_CUDA_Video_Support=1
-fi
-
-if test "$enable_nvcuvid_CUDA_Video_Support" -eq 1; then
-	if test "$enable_nvapi_Stub_DLL" -gt 1; then
-		abort "Patchset nvapi-Stub_DLL disabled, but nvcuvid-CUDA_Video_Support depends on that."
-	fi
-	enable_nvapi_Stub_DLL=1
-fi
-
-if test "$enable_nvapi_Stub_DLL" -eq 1; then
-	if test "$enable_nvcuda_CUDA_Support" -gt 1; then
-		abort "Patchset nvcuda-CUDA_Support disabled, but nvapi-Stub_DLL depends on that."
-	fi
-	enable_nvcuda_CUDA_Support=1
 fi
 
 if test "$enable_ntdll_ForceBottomUpAlloc" -eq 1; then
@@ -2308,106 +2271,6 @@ fi
 # |
 if test "$enable_ntdll_wine_frames" -eq 1; then
 	patch_apply ntdll-wine-frames/0001-ntdll-Don-t-use-Wine-frames-during-exception-process.patch
-fi
-
-# Patchset nvcuda-CUDA_Support
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#37664] MediaCoder needs CUDA for video encoding
-# |   *	[#51523] Add cuD3D11GetDevice and cuGraphicsD3D11RegisterResource stubs
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/nvcuda/Makefile.in, dlls/nvcuda/internal.c, dlls/nvcuda/nvcuda.c, dlls/nvcuda/nvcuda.h,
-# | 	dlls/nvcuda/nvcuda.rc, dlls/nvcuda/nvcuda.spec, dlls/nvcuda/tests/Makefile.in, dlls/nvcuda/tests/nvcuda.c,
-# | 	include/Makefile.in, include/cuda.h
-# |
-if test "$enable_nvcuda_CUDA_Support" -eq 1; then
-	patch_apply nvcuda-CUDA_Support/0001-include-Add-cuda.h.h.patch
-	patch_apply nvcuda-CUDA_Support/0002-nvcuda-Add-stub-dll.patch
-	patch_apply nvcuda-CUDA_Support/0003-nvcuda-First-implementation.patch
-	patch_apply nvcuda-CUDA_Support/0004-nvcuda-Implement-new-functions-added-in-CUDA-6.5.patch
-	patch_apply nvcuda-CUDA_Support/0005-nvcuda-Properly-wrap-undocumented-ContextStorage-int.patch
-	patch_apply nvcuda-CUDA_Support/0006-nvcuda-Emulate-two-d3d9-initialization-functions.patch
-	patch_apply nvcuda-CUDA_Support/0007-nvcuda-Properly-wrap-stream-callbacks-by-forwarding-.patch
-	patch_apply nvcuda-CUDA_Support/0008-nvcuda-Add-support-for-CUDA-7.0.patch
-	patch_apply nvcuda-CUDA_Support/0009-nvcuda-Implement-cuModuleLoad-wrapper-function.patch
-	patch_apply nvcuda-CUDA_Support/0010-nvcuda-Search-for-dylib-library-on-Mac-OS-X.patch
-	patch_apply nvcuda-CUDA_Support/0011-nvcuda-Add-semi-stub-for-cuD3D10GetDevice.patch
-	patch_apply nvcuda-CUDA_Support/0012-nvcuda-Add-semi-stub-for-cuD3D11GetDevice-and-cuGrap.patch
-	patch_apply nvcuda-CUDA_Support/0013-nvcuda-Update-spec-file.patch
-	patch_apply nvcuda-CUDA_Support/0014-nvcuda-Implement-cuDeviceGetUuid-and-cuDeviceGetLuid.patch
-	patch_apply nvcuda-CUDA_Support/0015-nvcuda-Expand-the-Unknown1-table.patch
-	patch_apply nvcuda-CUDA_Support/0016-nvcuda-Make-nvcuda-attempt-to-load-libcuda.so.1.patch
-	patch_apply nvcuda-CUDA_Support/0017-nvcuda-Add-empty-stub-for-function-cuFuncSetAttr.patch
-fi
-
-# Patchset nvapi-Stub_DLL
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	nvcuda-CUDA_Support
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#35062] Fix graphical corruption in FarCry 3 with NVIDIA drivers
-# |   *	[#43862] CS:GO fails to start when nvapi cannot be initialized
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/d3d11/d3d11_private.h, dlls/d3d11/device.c, dlls/nvapi/Makefile.in, dlls/nvapi/nvapi.c,
-# | 	dlls/nvapi/nvapi.spec, dlls/nvapi/tests/Makefile.in, dlls/nvapi/tests/nvapi.c, dlls/nvapi64/Makefile.in,
-# | 	dlls/nvapi64/nvapi64.spec, dlls/wined3d/cs.c, dlls/wined3d/device.c, dlls/wined3d/state.c, dlls/wined3d/utils.c,
-# | 	dlls/wined3d/wined3d.spec, dlls/wined3d/wined3d_private.h, include/Makefile.in, include/nvapi.h, include/wine/wined3d.h,
-# | 	include/wine/winedxgi.idl
-# |
-if test "$enable_nvapi_Stub_DLL" -eq 1; then
-	patch_apply nvapi-Stub_DLL/0001-nvapi-First-implementation.patch
-	patch_apply nvapi-Stub_DLL/0002-nvapi-Add-stubs-for-NvAPI_EnumLogicalGPUs-and-undocu.patch
-	patch_apply nvapi-Stub_DLL/0003-nvapi-Add-NvAPI_GetPhysicalGPUsFromLogicalGPU.patch
-	patch_apply nvapi-Stub_DLL/0004-nvapi-Add-stub-for-NvAPI_EnumPhysicalGPUs.patch
-	patch_apply nvapi-Stub_DLL/0005-nvapi-Add-stubs-for-NvAPI_GPU_GetFullName.patch
-	patch_apply nvapi-Stub_DLL/0006-nvapi-Explicity-return-NULL-for-0x33c7358c-and-0x593.patch
-	patch_apply nvapi-Stub_DLL/0007-nvapi-Add-stub-for-NvAPI_DISP_GetGDIPrimaryDisplayId.patch
-	patch_apply nvapi-Stub_DLL/0008-nvapi-Add-stub-for-EnumNvidiaDisplayHandle.patch
-	patch_apply nvapi-Stub_DLL/0009-nvapi-Add-stub-for-NvAPI_SYS_GetDriverAndBranchVersi.patch
-	patch_apply nvapi-Stub_DLL/0010-nvapi-Add-stub-for-NvAPI_Unload.patch
-	patch_apply nvapi-Stub_DLL/0011-nvapi-Add-stub-for-NvAPI_D3D_GetCurrentSLIState.patch
-	patch_apply nvapi-Stub_DLL/0012-nvapi-tests-Use-structure-to-list-imports.patch
-	patch_apply nvapi-Stub_DLL/0013-nvapi-Add-stub-for-NvAPI_GetLogicalGPUFromDisplay.patch
-	patch_apply nvapi-Stub_DLL/0014-nvapi-Add-stub-for-NvAPI_D3D_GetObjectHandleForResou.patch
-	patch_apply nvapi-Stub_DLL/0015-nvapi-Add-stub-for-NvAPI_D3D9_RegisterResource.patch
-	patch_apply nvapi-Stub_DLL/0016-nvapi-Improve-NvAPI_D3D_GetCurrentSLIState.patch
-	patch_apply nvapi-Stub_DLL/0017-nvapi-Implement-NvAPI_GPU_Get-Physical-Virtual-Frame.patch
-	patch_apply nvapi-Stub_DLL/0018-nvapi-Add-stub-for-NvAPI_GPU_GetGpuCoreCount.patch
-	patch_apply nvapi-Stub_DLL/0019-wined3d-Make-depth-bounds-test-into-a-proper-state.patch
-	patch_apply nvapi-Stub_DLL/0020-d3d11-Introduce-a-COM-interface-to-retrieve-the-wine.patch
-	patch_apply nvapi-Stub_DLL/0021-nvapi-Implement-NvAPI_D3D11_SetDepthBoundsTest.patch
-	patch_apply nvapi-Stub_DLL/0022-nvapi-Implement-NvAPI_D3D11_CreateDevice-and-NvAPI_D.patch
-fi
-
-# Patchset nvcuvid-CUDA_Video_Support
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	nvcuda-CUDA_Support, nvapi-Stub_DLL
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/nvcuvid/Makefile.in, dlls/nvcuvid/nvcuvid.c, dlls/nvcuvid/nvcuvid.spec, include/Makefile.in,
-# | 	include/cuviddec.h, include/nvcuvid.h
-# |
-if test "$enable_nvcuvid_CUDA_Video_Support" -eq 1; then
-	patch_apply nvcuvid-CUDA_Video_Support/0001-nvcuvid-First-implementation.patch
-fi
-
-# Patchset nvencodeapi-Video_Encoder
-# |
-# | This patchset has the following (direct or indirect) dependencies:
-# |   *	nvcuda-CUDA_Support, nvapi-Stub_DLL, nvcuvid-CUDA_Video_Support
-# |
-# | Modified files:
-# |   *	configure.ac, dlls/nvencodeapi/Makefile.in, dlls/nvencodeapi/nvencodeapi.c, dlls/nvencodeapi/nvencodeapi.spec,
-# | 	dlls/nvencodeapi64/Makefile.in, dlls/nvencodeapi64/nvencodeapi64.spec, include/Makefile.in, include/nvencodeapi.h
-# |
-if test "$enable_nvencodeapi_Video_Encoder" -eq 1; then
-	patch_apply nvencodeapi-Video_Encoder/0001-nvencodeapi-First-implementation.patch
-	patch_apply nvencodeapi-Video_Encoder/0002-nvencodeapi-Add-debian-specific-paths-to-native-libr.patch
-	patch_apply nvencodeapi-Video_Encoder/0003-nvencodeapi-Add-support-for-version-6.0.patch
 fi
 
 # Patchset oleaut32-CreateTypeLib
