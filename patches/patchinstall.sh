@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "4febd9d880abe22e77a3d8283de245a691cf2b7f"
+	echo "0fe562b4ae3f66f9c0e29ab8f27a4abf2ac78501"
 }
 
 # Show version information
@@ -1962,15 +1962,13 @@ fi
 # |   *	[#49692] Multiple applications need a Media Foundation media source implementation
 # |
 # | Modified files:
-# |   *	dlls/winegstreamer/gst_private.h, dlls/winegstreamer/main.c, dlls/winegstreamer/media_source.c,
-# | 	dlls/winegstreamer/unixlib.h, dlls/winegstreamer/wg_parser.c
+# |   *	dlls/winegstreamer/media_source.c, dlls/winegstreamer/wg_parser.c
 # |
 if test "$enable_mfplat_streaming_support" -eq 1; then
 	patch_apply mfplat-streaming-support/0008-winegstreamer-Allow-videoconvert-to-parallelize.patch
 	patch_apply mfplat-streaming-support/0025-winegstreamer-Report-streams-backwards-in-media-sour.patch
 	patch_apply mfplat-streaming-support/0038-winegstreamer-In-the-default-configuration-select-on.patch
 	patch_apply mfplat-streaming-support/0043-winegstreamer-Update-offset-according-to-the-size-of.patch
-	patch_apply mfplat-streaming-support/0050-winegstreamer-Implement-MF_SD_LANGUAGE.patch
 	patch_apply mfplat-streaming-support/0055-winegstreamer-Add-MFVideoFormat_ARGB32-output-for-th.patch
 fi
 
