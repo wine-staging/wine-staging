@@ -1,18 +1,18 @@
-From f3656ad722d12021db19a015a57fa9d2b9e72622 Mon Sep 17 00:00:00 2001
+From 7bbc11e52188ec7babe97270f03e2e5015ac22ff Mon Sep 17 00:00:00 2001
 From: =?UTF-8?q?Michael=20M=C3=BCller?= <michael@fds-team.de>
-Date: Fri, 26 May 2017 05:17:17 +0200
+Date: Tue, 30 Nov 2021 16:32:34 +0300
 Subject: [PATCH] ntdll: Implement opening files through nt device paths.
 
 ---
  dlls/ntdll/tests/file.c |  25 +++++++-
- dlls/ntdll/unix/file.c  | 124 +++++++++++++++++++++++++++++++++++++++-
- 2 files changed, 146 insertions(+), 3 deletions(-)
+ dlls/ntdll/unix/file.c  | 134 +++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 156 insertions(+), 3 deletions(-)
 
 diff --git a/dlls/ntdll/tests/file.c b/dlls/ntdll/tests/file.c
-index 839046a7488..8756c18c9e8 100644
+index 640fd2d81db..e8e8652334e 100644
 --- a/dlls/ntdll/tests/file.c
 +++ b/dlls/ntdll/tests/file.c
-@@ -135,18 +135,22 @@ static void WINAPI apc( void *arg, IO_STATUS_BLOCK *iosb, ULONG reserved )
+@@ -137,18 +137,22 @@ static void WINAPI apc( void *arg, IO_STATUS_BLOCK *iosb, ULONG reserved )
  
  static void create_file_test(void)
  {
@@ -36,10 +36,10 @@ index 839046a7488..8756c18c9e8 100644
      OBJECT_ATTRIBUTES attr;
      IO_STATUS_BLOCK io;
      UNICODE_STRING nameW;
-@@ -326,6 +330,25 @@ static void create_file_test(void)
+@@ -328,6 +332,25 @@ static void create_file_test(void)
      status = pNtQueryFullAttributesFile( &attr, &info );
      ok( status == STATUS_OBJECT_NAME_INVALID,
-         "query %s failed %x\n", wine_dbgstr_w(nameW.Buffer), status );
+         "query %s failed %lx\n", wine_dbgstr_w(nameW.Buffer), status );
 +
 +    GetWindowsDirectoryW( path, MAX_PATH );
 +    path[2] = 0;
@@ -63,23 +63,30 @@ index 839046a7488..8756c18c9e8 100644
  
  static void open_file_test(void)
 diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
-index d3750109a79..6250ada9570 100644
+index 67e0c6f0b40..25a03ef84f1 100644
 --- a/dlls/ntdll/unix/file.c
 +++ b/dlls/ntdll/unix/file.c
-@@ -3297,8 +3297,8 @@ static NTSTATUS nt_to_unix_file_name_attr( const OBJECT_ATTRIBUTES *attr, char *
+@@ -4494,7 +4494,7 @@ static NTSTATUS nt_to_unix_file_name_no_root( FILE_OBJECT *fileobj, char **unix_
+ 
+ 
+ /******************************************************************************
+- *           nt_to_unix_file_name
++ *           nt_to_unix_file_name_internal
+  *
+  * Convert a file name from NT namespace to Unix namespace.
+  *
+@@ -4502,7 +4502,7 @@ static NTSTATUS nt_to_unix_file_name_no_root( FILE_OBJECT *fileobj, char **unix_
   * element doesn't have to exist; in that case STATUS_NO_SUCH_FILE is
   * returned, but the unix name is still filled in properly.
   */
--NTSTATUS nt_to_unix_file_name( const UNICODE_STRING *nameW, char **unix_name_ret,
--                               UNICODE_STRING *nt_name, UINT disposition )
-+static NTSTATUS nt_to_unix_file_name_internal( const UNICODE_STRING *nameW, char **unix_name_ret,
-+                                               UNICODE_STRING *nt_name, UINT disposition )
+-NTSTATUS nt_to_unix_file_name( const OBJECT_ATTRIBUTES *attr, char **name_ret, UINT disposition )
++NTSTATUS nt_to_unix_file_name_internal( const OBJECT_ATTRIBUTES *attr, char **name_ret, UINT disposition )
  {
-     static const WCHAR unixW[] = {'u','n','i','x'};
-     static const WCHAR pipeW[] = {'p','i','p','e'};
-@@ -3436,6 +3436,126 @@ NTSTATUS CDECL wine_nt_to_unix_file_name( const UNICODE_STRING *nameW, char *nam
-     return status;
+     HANDLE rootdir = attr->RootDirectory;
+     enum server_fd_type type;
+@@ -4581,6 +4581,136 @@ reparse:
  }
+ 
  
 +/* read the contents of an NT symlink object */
 +static NTSTATUS read_nt_symlink( HANDLE root, UNICODE_STRING *name, WCHAR *target, size_t length )
@@ -147,7 +154,7 @@ index d3750109a79..6250ada9570 100644
 +}
 +
 +/******************************************************************************
-+ *           nt_to_unix_file_name  (NTDLL.@) Not a Windows API
++ *           nt_to_unix_file_name
 + *
 + * Convert a file name from NT namespace to Unix namespace.
 + *
@@ -155,31 +162,37 @@ index d3750109a79..6250ada9570 100644
 + * element doesn't have to exist; in that case STATUS_NO_SUCH_FILE is
 + * returned, but the unix name is still filled in properly.
 + */
-+NTSTATUS nt_to_unix_file_name( const UNICODE_STRING *nameW, char **unix_name_ret,
-+                               UNICODE_STRING *nt_name, UINT disposition )
++NTSTATUS nt_to_unix_file_name( const OBJECT_ATTRIBUTES *attr, char **name_ret, UINT disposition )
 +{
 +    static const WCHAR systemrootW[] = {'\\','S','y','s','t','e','m','R','o','o','t','\\',0};
 +    static const WCHAR dosprefixW[] = {'\\','?','?','\\'};
 +    static const WCHAR deviceW[] = {'\\','D','e','v','i','c','e','\\',0};
 +    WCHAR *name, *ptr, *prefix, buffer[3] = {'c',':',0};
-+    UNICODE_STRING dospathW;
++    UNICODE_STRING dospathW, *nameW;
++    OBJECT_ATTRIBUTES attr_copy;
 +    size_t offset, name_len;
 +    NTSTATUS status;
 +
-+    if (!wcsnicmp( nameW->Buffer, deviceW, nameW->Length / sizeof(WCHAR) ))
++    if (attr->RootDirectory) return nt_to_unix_file_name_internal( attr, name_ret, disposition );
++
++    nameW = attr->ObjectName;
++
++    if (nameW->Length >= sizeof(deviceW) - sizeof(WCHAR)
++        && !wcsnicmp( nameW->Buffer, deviceW, ARRAY_SIZE(deviceW) - 1 ))
 +    {
 +        offset = sizeof(deviceW) / sizeof(WCHAR);
 +        while (offset * sizeof(WCHAR) < nameW->Length && nameW->Buffer[ offset ] != '\\') offset++;
 +        if ((status = nt_to_dos_device( nameW->Buffer, offset, buffer ))) return status;
 +        prefix = buffer;
 +    }
-+    else if (!wcsnicmp( nameW->Buffer, systemrootW, nameW->Length / sizeof(WCHAR) ))
++    else if (nameW->Length >= sizeof(systemrootW) - sizeof(WCHAR) &&
++             !wcsnicmp( nameW->Buffer, systemrootW, ARRAY_SIZE(systemrootW) - 1 ))
 +    {
 +        offset = (sizeof(systemrootW) - 1) / sizeof(WCHAR);
 +        prefix = user_shared_data->NtSystemRoot;
 +    }
 +    else
-+        return nt_to_unix_file_name_internal( nameW, unix_name_ret, nt_name, disposition );
++        return nt_to_unix_file_name_internal( attr, name_ret, disposition );
 +
 +    name_len = sizeof(dosprefixW) + wcslen(prefix) * sizeof(WCHAR) +
 +               nameW->Length - offset * sizeof(WCHAR) + sizeof(WCHAR);
@@ -191,19 +204,23 @@ index d3750109a79..6250ada9570 100644
 +    ptr += sizeof(dosprefixW) / sizeof(WCHAR);
 +    wcscpy( ptr, prefix );
 +    ptr += wcslen(ptr);
++    *ptr++ = '\\';
 +    memcpy( ptr, nameW->Buffer + offset, nameW->Length - offset * sizeof(WCHAR) );
 +    ptr[ nameW->Length / sizeof(WCHAR) - offset ] = 0;
 +
 +    dospathW.Buffer = name;
 +    dospathW.Length = wcslen( name ) * sizeof(WCHAR);
-+    status = nt_to_unix_file_name_internal( &dospathW, unix_name_ret, nt_name, disposition );
++    attr_copy = *attr;
++    attr_copy.ObjectName = &dospathW;
++    status = nt_to_unix_file_name_internal( &attr_copy, name_ret, disposition );
 +
 +    free( name );
 +    return status;
 +}
- 
- /******************************************************************
-  *		collapse_path
++
+ /******************************************************************************
+  *           wine_nt_to_unix_file_name
+  *
 -- 
-2.30.2
+2.38.1
 

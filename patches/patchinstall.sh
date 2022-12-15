@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "ec62575e9d99fc35752760cc37ded207febdfd11"
+	echo "ccdef80543ff5c1f08a8aaff39c3f623522152df"
 }
 
 # Show version information
@@ -138,6 +138,7 @@ patch_enable_all ()
 	enable_ntdll_Hide_Wine_Exports="$1"
 	enable_ntdll_Junction_Points="$1"
 	enable_ntdll_Manifest_Range="$1"
+	enable_ntdll_NtDevicePath="$1"
 	enable_ntdll_NtQuerySection="$1"
 	enable_ntdll_NtSetLdtEntries="$1"
 	enable_ntdll_Placeholders="$1"
@@ -424,6 +425,9 @@ patch_enable ()
 			;;
 		ntdll-Manifest_Range)
 			enable_ntdll_Manifest_Range="$2"
+			;;
+		ntdll-NtDevicePath)
+			enable_ntdll_NtDevicePath="$2"
 			;;
 		ntdll-NtQuerySection)
 			enable_ntdll_NtQuerySection="$2"
@@ -2192,6 +2196,18 @@ fi
 # |
 if test "$enable_ntdll_Manifest_Range" -eq 1; then
 	patch_apply ntdll-Manifest_Range/0001-ntdll-Support-ISOLATIONAWARE_MANIFEST_RESOURCE_ID-ra.patch
+fi
+
+# Patchset ntdll-NtDevicePath
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#37487] Resolve \\SystemRoot\\ prefix when opening files
+# |
+# | Modified files:
+# |   *	dlls/ntdll/tests/file.c, dlls/ntdll/unix/file.c
+# |
+if test "$enable_ntdll_NtDevicePath" -eq 1; then
+	patch_apply ntdll-NtDevicePath/0001-ntdll-Implement-opening-files-through-nt-device-path.patch
 fi
 
 # Patchset ntdll-NtQuerySection
