@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "2d7d84a65ace4c669698740c11cab5dbf127a0c6"
+	echo "d059dd1cd0770e9c63da33562f6bcba4ef52846b"
 }
 
 # Show version information
@@ -1636,6 +1636,7 @@ fi
 # | 	server/file.c, server/protocol.def
 # |
 if test "$enable_ntdll_Junction_Points" -eq 1; then
+	patch_apply ntdll-Junction_Points/0000-include-Add-ntifs.h.patch
 	patch_apply ntdll-Junction_Points/0001-ntdll-Add-support-for-creating-reparse-points.patch
 	patch_apply ntdll-Junction_Points/0002-ntdll-Add-support-for-reading-reparse-points.patch
 	patch_apply ntdll-Junction_Points/0003-ntdll-Add-support-for-deleting-reparse-points.patch
@@ -1661,7 +1662,6 @@ if test "$enable_ntdll_Junction_Points" -eq 1; then
 	patch_apply ntdll-Junction_Points/0023-wcmd-Add-junction-point-support-to-mklink.patch
 	patch_apply ntdll-Junction_Points/0024-ntdll-Add-support-for-creating-Unix-Linux-symlinks.patch
 	patch_apply ntdll-Junction_Points/0025-ntdll-Report-regular-Unix-symlinks-as-WSL-Linux-Unix.patch
-	patch_apply ntdll-Junction_Points/0026-include-Add-ntifs.h.patch
 fi
 
 # Patchset server-PeekMessage
