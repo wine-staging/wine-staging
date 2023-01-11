@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "9e33e4f4a26091fc02106a1cd874f77098b99883"
+	echo "90d975ac1ed5da6de23d4edb732c0d08954b000a"
 }
 
 # Show version information
@@ -2047,6 +2047,10 @@ fi
 if test "$enable_msxml3_FreeThreadedXMLHTTP60" -eq 1; then
 	patch_apply msxml3-FreeThreadedXMLHTTP60/0001-include-Remove-interfaces-already-define-in-msxml6.i.patch
 	patch_apply msxml3-FreeThreadedXMLHTTP60/0003-msxml3-Implement-FreeThreadedXMLHTTP60.patch
+	patch_apply msxml3-FreeThreadedXMLHTTP60/0004-include-Add-_XHR-enum-values.patch
+	patch_apply msxml3-FreeThreadedXMLHTTP60/0005-msxml3-Implement-IXMLHTTPRequest3-SetProperty.patch
+	patch_apply msxml3-FreeThreadedXMLHTTP60/0006-msxml3-Copy-body-size-to-request-object.patch
+	patch_apply msxml3-FreeThreadedXMLHTTP60/0007-msxml3-Correct-xml_http_request_2_GetResponseHeader.patch
 fi
 
 # Patchset ntdll-APC_Performance
