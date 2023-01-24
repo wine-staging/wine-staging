@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "6677c044abb711f423fadfb61f2c9a37da6ff686"
+	echo "be57ebe01581f709b0e52a29304668eaaf6f0634"
 }
 
 # Show version information
@@ -242,7 +242,6 @@ patch_enable_all ()
 	enable_winex11_XEMBED="$1"
 	enable_winex11__NET_ACTIVE_WINDOW="$1"
 	enable_winex11_ime_check_thread_data="$1"
-	enable_winex11_wglShareLists="$1"
 	enable_winex11_drv_Query_server_position="$1"
 	enable_wininet_Cleanup="$1"
 	enable_winmm_mciSendCommandA="$1"
@@ -737,9 +736,6 @@ patch_enable ()
 			;;
 		winex11-ime-check-thread-data)
 			enable_winex11_ime_check_thread_data="$2"
-			;;
-		winex11-wglShareLists)
-			enable_winex11_wglShareLists="$2"
 			;;
 		winex11.drv-Query_server_position)
 			enable_winex11_drv_Query_server_position="$2"
@@ -1257,9 +1253,9 @@ fi
 # |   *	dlls/bcrypt/gnutls.c, dlls/d2d1/bitmap.c, dlls/d2d1/brush.c, dlls/d2d1/dc_render_target.c, dlls/d2d1/geometry.c,
 # | 	dlls/d2d1/hwnd_render_target.c, dlls/d2d1/state_block.c, dlls/d3d10/effect.c, dlls/d3d11/view.c, dlls/d3d8/texture.c,
 # | 	dlls/d3d9/texture.c, dlls/ddraw/viewport.c, dlls/dwrite/font.c, dlls/dxgi/output.c, dlls/msctf/range.c,
-# | 	dlls/msxml3/schema.c, dlls/ntdll/unix/virtual.c, dlls/oleaut32/oleaut.c, dlls/rpcrt4/cstub.c,
-# | 	dlls/rpcrt4/ndr_marshall.c, dlls/rpcrt4/ndr_typelib.c, dlls/vbscript/vbdisp.c, dlls/wbemdisp/locator.c,
-# | 	dlls/windowscodecs/info.c, dlls/wsdapi/msgparams.c, include/wine/list.h, include/wine/rbtree.h, include/winnt.h
+# | 	dlls/msxml3/schema.c, dlls/ntdll/unix/virtual.c, dlls/oleaut32/oleaut.c, dlls/rpcrt4/ndr_marshall.c,
+# | 	dlls/rpcrt4/ndr_typelib.c, dlls/vbscript/vbdisp.c, dlls/wbemdisp/locator.c, dlls/windowscodecs/info.c,
+# | 	dlls/wsdapi/msgparams.c, include/wine/list.h, include/wine/rbtree.h, include/winnt.h
 # |
 if test "$enable_Compiler_Warnings" -eq 1; then
 	patch_apply Compiler_Warnings/0001-windowscodecs-Avoid-implicit-cast-of-interface-point.patch
@@ -1271,7 +1267,6 @@ if test "$enable_Compiler_Warnings" -eq 1; then
 	patch_apply Compiler_Warnings/0026-dwrite-Avoid-implicit-cast-of-interface-pointer.patch
 	patch_apply Compiler_Warnings/0027-msxml3-Avoid-implicit-cast-of-interface-pointer.patch
 	patch_apply Compiler_Warnings/0028-oleaut32-Avoid-implicit-cast-of-interface-pointer.patch
-	patch_apply Compiler_Warnings/0029-rpcrt4-Avoid-implicit-cast-of-interface-pointer.patch
 	patch_apply Compiler_Warnings/0030-vbscript-Avoid-implicit-cast-of-interface-pointer.patch
 	patch_apply Compiler_Warnings/0031-include-Check-element-type-in-CONTAINING_RECORD-and-.patch
 	patch_apply Compiler_Warnings/0032-wsdapi-Avoid-implicit-cast-of-interface-pointer.patch
@@ -3476,19 +3471,6 @@ fi
 # |
 if test "$enable_winex11_ime_check_thread_data" -eq 1; then
 	patch_apply winex11-ime-check-thread-data/0001-winex11.drv-handle-missing-thread-data-in-X11DRV_get_ic.patch
-fi
-
-# Patchset winex11-wglShareLists
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#11436] Do not fail when a used context is passed to wglShareLists
-# |   *	[#25419] Fix broken textures in XIII Century: Death or Glory
-# |
-# | Modified files:
-# |   *	dlls/opengl32/tests/opengl.c, dlls/winex11.drv/opengl.c
-# |
-if test "$enable_winex11_wglShareLists" -eq 1; then
-	patch_apply winex11-wglShareLists/0001-winex11.drv-Only-warn-about-used-contexts-in-wglShar.patch
 fi
 
 # Patchset winex11.drv-Query_server_position
