@@ -242,6 +242,7 @@ patch_enable_all ()
 	enable_winex11_XEMBED="$1"
 	enable_winex11__NET_ACTIVE_WINDOW="$1"
 	enable_winex11_ime_check_thread_data="$1"
+	enable_winex11_wglShareLists="$1"
 	enable_winex11_drv_Query_server_position="$1"
 	enable_wininet_Cleanup="$1"
 	enable_winmm_mciSendCommandA="$1"
@@ -736,6 +737,9 @@ patch_enable ()
 			;;
 		winex11-ime-check-thread-data)
 			enable_winex11_ime_check_thread_data="$2"
+			;;
+		winex11-wglShareLists)
+			enable_winex11_wglShareLists="$2"
 			;;
 		winex11.drv-Query_server_position)
 			enable_winex11_drv_Query_server_position="$2"
@@ -3471,6 +3475,19 @@ fi
 # |
 if test "$enable_winex11_ime_check_thread_data" -eq 1; then
 	patch_apply winex11-ime-check-thread-data/0001-winex11.drv-handle-missing-thread-data-in-X11DRV_get_ic.patch
+fi
+
+# Patchset winex11-wglShareLists
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#11436] Do not fail when a used context is passed to wglShareLists
+# |   *	[#25419] Fix broken textures in XIII Century: Death or Glory
+# |
+# | Modified files:
+# |   *	dlls/opengl32/tests/opengl.c, dlls/winex11.drv/opengl.c
+# |
+if test "$enable_winex11_wglShareLists" -eq 1; then
+	patch_apply winex11-wglShareLists/0001-winex11.drv-Only-warn-about-used-contexts-in-wglShar.patch
 fi
 
 # Patchset winex11.drv-Query_server_position
