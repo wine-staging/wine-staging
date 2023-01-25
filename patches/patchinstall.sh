@@ -51,7 +51,7 @@ usage()
 # Get the upstream commit sha
 upstream_commit()
 {
-	echo "be57ebe01581f709b0e52a29304668eaaf6f0634"
+	echo "876742bf2bf23765cd8a845a20b297cdf7803c67"
 }
 
 # Show version information
@@ -2046,7 +2046,6 @@ fi
 if test "$enable_msxml3_FreeThreadedXMLHTTP60" -eq 1; then
 	patch_apply msxml3-FreeThreadedXMLHTTP60/0001-include-Remove-interfaces-already-define-in-msxml6.i.patch
 	patch_apply msxml3-FreeThreadedXMLHTTP60/0003-msxml3-Implement-FreeThreadedXMLHTTP60.patch
-	patch_apply msxml3-FreeThreadedXMLHTTP60/0004-include-Add-_XHR-enum-values.patch
 	patch_apply msxml3-FreeThreadedXMLHTTP60/0005-msxml3-Implement-IXMLHTTPRequest3-SetProperty.patch
 	patch_apply msxml3-FreeThreadedXMLHTTP60/0006-msxml3-Copy-body-size-to-request-object.patch
 	patch_apply msxml3-FreeThreadedXMLHTTP60/0007-msxml3-Correct-xml_http_request_2_GetResponseHeader.patch
