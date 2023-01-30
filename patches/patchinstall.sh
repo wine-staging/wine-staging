@@ -1199,6 +1199,13 @@ if test "$enable_ntdll_ForceBottomUpAlloc" -eq 1; then
 	enable_ntdll_Placeholders=1
 fi
 
+if test "$enable_ntdll_Placeholders" -eq 1; then
+	if test "$enable_ntdll_WRITECOPY" -gt 1; then
+		abort "Patchset ntdll-WRITECOPY disabled, but ntdll-Placeholders depends on that."
+	fi
+	enable_ntdll_WRITECOPY=1
+fi
+
 if test "$enable_fltmgr_sys_FltBuildDefaultSecurityDescriptor" -eq 1; then
 	if test "$enable_winedevice_Default_Drivers" -gt 1; then
 		abort "Patchset winedevice-Default_Drivers disabled, but fltmgr.sys-FltBuildDefaultSecurityDescriptor depends on that."
@@ -2072,7 +2079,32 @@ if test "$enable_ntdll_Exception" -eq 1; then
 	patch_apply ntdll-Exception/0002-ntdll-OutputDebugString-should-throw-the-exception-a.patch
 fi
 
+# Patchset ntdll-WRITECOPY
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#29384] Multiple applications expect correct handling of WRITECOPY memory protection (Voobly fails to launch Age of
+# | 	Empires II, MSYS2)
+# |
+# | Modified files:
+# |   *	dlls/kernel32/tests/virtual.c, dlls/ntdll/unix/loader.c, dlls/ntdll/unix/server.c, dlls/ntdll/unix/signal_arm.c,
+# | 	dlls/ntdll/unix/signal_arm64.c, dlls/ntdll/unix/signal_i386.c, dlls/ntdll/unix/signal_x86_64.c,
+# | 	dlls/ntdll/unix/unix_private.h, dlls/ntdll/unix/virtual.c, dlls/psapi/tests/psapi_main.c
+# |
+if test "$enable_ntdll_WRITECOPY" -eq 1; then
+	patch_apply ntdll-WRITECOPY/0001-ntdll-Trigger-write-watches-before-passing-userdata-.patch
+	patch_apply ntdll-WRITECOPY/0003-ntdll-Setup-a-temporary-signal-handler-during-proces.patch
+	patch_apply ntdll-WRITECOPY/0004-ntdll-Properly-handle-PAGE_WRITECOPY-protection.-try.patch
+	patch_apply ntdll-WRITECOPY/0005-ntdll-Track-if-a-WRITECOPY-page-has-been-modified.patch
+	patch_apply ntdll-WRITECOPY/0006-ntdll-Support-WRITECOPY-on-x64.patch
+	patch_apply ntdll-WRITECOPY/0007-ntdll-Report-unmodified-WRITECOPY-pages-as-shared.patch
+	patch_apply ntdll-WRITECOPY/0008-ntdll-Fallback-to-copy-pages-for-WRITECOPY.patch
+	patch_apply ntdll-WRITECOPY/0009-kernel32-tests-psapi-tests-Update-tests.patch
+fi
+
 # Patchset ntdll-Placeholders
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	ntdll-WRITECOPY
 # |
 # | Modified files:
 # |   *	dlls/kernelbase/memory.c, dlls/kernelbase/tests/process.c, dlls/ntdll/tests/virtual.c, dlls/ntdll/unix/server.c,
@@ -2101,7 +2133,7 @@ fi
 # Patchset ntdll-ForceBottomUpAlloc
 # |
 # | This patchset has the following (direct or indirect) dependencies:
-# |   *	ntdll-Placeholders
+# |   *	ntdll-WRITECOPY, ntdll-Placeholders
 # |
 # | This patchset fixes the following Wine bugs:
 # |   *	[#48175] AION (64 bit) - crashes in crysystem.dll.CryFree() due to high memory pointers allocated
@@ -2215,28 +2247,6 @@ fi
 # |
 if test "$enable_ntdll_Syscall_Emulation" -eq 1; then
 	patch_apply ntdll-Syscall_Emulation/0001-ntdll-Support-x86_64-syscall-emulation.patch
-fi
-
-# Patchset ntdll-WRITECOPY
-# |
-# | This patchset fixes the following Wine bugs:
-# |   *	[#29384] Multiple applications expect correct handling of WRITECOPY memory protection (Voobly fails to launch Age of
-# | 	Empires II, MSYS2)
-# |
-# | Modified files:
-# |   *	dlls/kernel32/tests/virtual.c, dlls/ntdll/unix/loader.c, dlls/ntdll/unix/server.c, dlls/ntdll/unix/signal_arm.c,
-# | 	dlls/ntdll/unix/signal_arm64.c, dlls/ntdll/unix/signal_i386.c, dlls/ntdll/unix/signal_x86_64.c,
-# | 	dlls/ntdll/unix/unix_private.h, dlls/ntdll/unix/virtual.c, dlls/psapi/tests/psapi_main.c
-# |
-if test "$enable_ntdll_WRITECOPY" -eq 1; then
-	patch_apply ntdll-WRITECOPY/0001-ntdll-Trigger-write-watches-before-passing-userdata-.patch
-	patch_apply ntdll-WRITECOPY/0003-ntdll-Setup-a-temporary-signal-handler-during-proces.patch
-	patch_apply ntdll-WRITECOPY/0004-ntdll-Properly-handle-PAGE_WRITECOPY-protection.-try.patch
-	patch_apply ntdll-WRITECOPY/0005-ntdll-Track-if-a-WRITECOPY-page-has-been-modified.patch
-	patch_apply ntdll-WRITECOPY/0006-ntdll-Support-WRITECOPY-on-x64.patch
-	patch_apply ntdll-WRITECOPY/0007-ntdll-Report-unmodified-WRITECOPY-pages-as-shared.patch
-	patch_apply ntdll-WRITECOPY/0008-ntdll-Fallback-to-copy-pages-for-WRITECOPY.patch
-	patch_apply ntdll-WRITECOPY/0009-kernel32-tests-psapi-tests-Update-tests.patch
 fi
 
 # Patchset ntdll-ext4-case-folder
