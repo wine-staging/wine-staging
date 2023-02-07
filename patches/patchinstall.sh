@@ -105,6 +105,7 @@ patch_enable_all ()
 	enable_ddraw_IDirect3DTexture2_Load="$1"
 	enable_ddraw_Silence_FIXMEs="$1"
 	enable_dinput_joy_mappings="$1"
+	enable_dmime_load_wave="$1"
 	enable_dsound_EAX="$1"
 	enable_dsound_Fast_Mixer="$1"
 	enable_eventfd_synchronization="$1"
@@ -326,6 +327,9 @@ patch_enable ()
 			;;
 		dinput-joy-mappings)
 			enable_dinput_joy_mappings="$2"
+			;;
+		dmime-load-wave)
+			enable_dmime_load_wave="$2"
 			;;
 		dsound-EAX)
 			enable_dsound_EAX="$2"
@@ -1552,6 +1556,23 @@ if test "$enable_dinput_joy_mappings" -eq 1; then
 	patch_apply dinput-joy-mappings/0002-dinput-Support-username-in-Config-dialog.patch
 	patch_apply dinput-joy-mappings/0003-dinput-Dont-allow-Fixed-actions-to-be-changed.patch
 	patch_apply dinput-joy-mappings/0004-dinput-Allow-mapping-of-controls-based-of-Genre-type.patch
+fi
+
+# Patchset dmime-load-wave
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#48220] dmime: Handle basic loading of Wave files and playing them.
+# |   *	[#61322] dmine: No Sound in Black Rockman Shooter.
+# |   *	[#34751] dmime: Aura: Fate of the Ages: sounds aren't played, but music works fine
+# |   *	[#9027] dmime: No sound for rise of nations - all versions.
+# |
+# | Modified files:
+# |   *	dlls/dmime/dmime_private.h, dlls/dmime/performance.c, dlls/dmime/segment.c
+# |
+if test "$enable_dmime_load_wave" -eq 1; then
+	patch_apply dmime-load-wave/0001-dmime-Store-WAVE-data-when-Loading.patch
+	patch_apply dmime-load-wave/0002-dmime-Implement-IDirectMusicSegment8-Download.patch
+	patch_apply dmime-load-wave/0003-dmime-Play-a-sound-in-IDirectMusicPerformance8-PlayS.patch
 fi
 
 # Patchset dsound-Fast_Mixer
@@ -3202,7 +3223,7 @@ fi
 # Patchset wined3d-atomic_minmax_merge
 # |
 # | This patchset fixes the following Wine bugs:
-# |   *	[#52233] wined3d: Handle u/signed integers that same
+# |   *	[#52233] wined3d: Handle u/signed integers the same
 # |
 # | Modified files:
 # |   *	dlls/wined3d/glsl_shader.c
