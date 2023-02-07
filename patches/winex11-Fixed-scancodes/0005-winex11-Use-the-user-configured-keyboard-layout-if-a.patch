@@ -1,0 +1,140 @@
+From 95f66fcd054ff2bae4e35e25a632b88a63aa4bb1 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Fri, 6 Jan 2023 08:09:11 +0100
+Subject: [PATCH 5/9] winex11: Use the user configured keyboard layout if any.
+
+Wine-Bug: https://bugs.winehq.org/show_bug.cgi?id=30984
+Wine-Bug: https://bugs.winehq.org/show_bug.cgi?id=45605
+---
+ dlls/winex11.drv/keyboard.c    | 33 +++++++++++++++++++++++++++------
+ dlls/winex11.drv/x11drv.h      |  2 ++
+ dlls/winex11.drv/x11drv_main.c |  4 ++++
+ 3 files changed, 33 insertions(+), 6 deletions(-)
+
+diff --git a/dlls/winex11.drv/keyboard.c b/dlls/winex11.drv/keyboard.c
+index 187979c4494..26548c9256e 100644
+--- a/dlls/winex11.drv/keyboard.c
++++ b/dlls/winex11.drv/keyboard.c
+@@ -934,7 +934,6 @@ static const struct {
+ 
+  {0, NULL, NULL, NULL, NULL} /* sentinel */
+ };
+-static unsigned kbd_layout=0; /* index into above table of layouts */
+ 
+ /* maybe more of these scancodes should be extended? */
+                 /* extended must be set for ALT_R, CTRL_R,
+@@ -1089,6 +1088,26 @@ static const WORD xfree86_vendor_key_vkey[256] =
+     0, 0, 0, 0, 0, 0, 0, 0                                      /* 1008FFF8 */
+ };
+ 
++int x11drv_find_keyboard_layout( const WCHAR *layout )
++{
++    int i, len;
++    char *tmp;
++
++    len = lstrlenW( layout );
++    if (!(tmp = malloc( len * 3 + 1 ))) return -1;
++    ntdll_wcstoumbs( layout, len + 1, tmp, len * 3 + 1, FALSE );
++
++    for (i = 0; main_key_tab[i].comment; i++)
++    {
++        const char *name = main_key_tab[i].comment;
++        if (!strcmp( name, tmp )) break;
++    }
++    free( tmp );
++
++    if (!main_key_tab[i].comment) return -1;
++    return i;
++}
++
+ WCHAR *x11drv_get_keyboard_layout_list( DWORD *length )
+ {
+     WCHAR *tmp, *layouts = calloc( 1, sizeof(WCHAR) );
+@@ -1442,11 +1461,11 @@ BOOL X11DRV_KeyEvent( HWND hwnd, XEvent *xev )
+  *  whichever matches most closely.
+  * kbd_section must be held.
+  */
+-static void
++static int
+ X11DRV_KEYBOARD_DetectLayout( Display *display )
+ {
+   unsigned current, match, mismatch, seq, i, syms;
+-  int score, keyc, key, pkey, ok;
++  int score, keyc, key, pkey, ok, kbd_layout = 0;
+   KeySym keysym = 0;
+   const char (*lkey)[MAIN_LEN][4];
+   unsigned max_seq = 0;
+@@ -1546,6 +1565,7 @@ X11DRV_KEYBOARD_DetectLayout( Display *display )
+         main_key_tab[kbd_layout].comment);
+ 
+   TRACE("detected layout is \"%s\"\n", main_key_tab[kbd_layout].comment);
++  return kbd_layout;
+ }
+ 
+ static HKL get_locale_kbd_layout(void)
+@@ -1614,7 +1634,7 @@ void X11DRV_InitKeyboard( Display *display )
+         { 0x41, 0x5a }, /* VK_A - VK_Z */
+         { 0, 0 }
+     };
+-    int vkey_range;
++    int vkey_range, kbd_layout;
+ 
+     pthread_mutex_lock( &kbd_mutex );
+     XDisplayKeycodes(display, &min_keycode, &max_keycode);
+@@ -1648,8 +1668,9 @@ void X11DRV_InitKeyboard( Display *display )
+     }
+     XFreeModifiermap(mmp);
+ 
+-    /* Detect the keyboard layout */
+-    X11DRV_KEYBOARD_DetectLayout( display );
++    /* use the configured layout from registry or auto detect it */
++    kbd_layout = keyboard_layout;
++    if (kbd_layout == -1) kbd_layout = X11DRV_KEYBOARD_DetectLayout( display );
+     lkey = main_key_tab[kbd_layout].key;
+     syms = (keysyms_per_keycode > 4) ? 4 : keysyms_per_keycode;
+ 
+diff --git a/dlls/winex11.drv/x11drv.h b/dlls/winex11.drv/x11drv.h
+index 7d96ec648d1..c02a6c67111 100644
+--- a/dlls/winex11.drv/x11drv.h
++++ b/dlls/winex11.drv/x11drv.h
+@@ -443,6 +443,7 @@ extern BOOL use_system_cursors DECLSPEC_HIDDEN;
+ extern BOOL show_systray DECLSPEC_HIDDEN;
+ extern BOOL grab_pointer DECLSPEC_HIDDEN;
+ extern BOOL grab_fullscreen DECLSPEC_HIDDEN;
++extern int keyboard_layout DECLSPEC_HIDDEN;
+ extern BOOL usexcomposite DECLSPEC_HIDDEN;
+ extern BOOL managed_mode DECLSPEC_HIDDEN;
+ extern BOOL decorated_mode DECLSPEC_HIDDEN;
+@@ -711,6 +712,7 @@ extern void init_recursive_mutex( pthread_mutex_t *mutex ) DECLSPEC_HIDDEN;
+ 
+ /* keyboard.c */
+ 
++extern int x11drv_find_keyboard_layout( const WCHAR *layout ) DECLSPEC_HIDDEN;
+ extern WCHAR *x11drv_get_keyboard_layout_list( DWORD *size ) DECLSPEC_HIDDEN;
+ 
+ #define DEPTH_COUNT 3
+diff --git a/dlls/winex11.drv/x11drv_main.c b/dlls/winex11.drv/x11drv_main.c
+index 66dbc3c8270..dc2eb716d0b 100644
+--- a/dlls/winex11.drv/x11drv_main.c
++++ b/dlls/winex11.drv/x11drv_main.c
+@@ -79,6 +79,7 @@ BOOL use_system_cursors = TRUE;
+ BOOL show_systray = TRUE;
+ BOOL grab_pointer = TRUE;
+ BOOL grab_fullscreen = FALSE;
++int keyboard_layout = -1;
+ BOOL managed_mode = TRUE;
+ BOOL decorated_mode = TRUE;
+ BOOL private_color_map = FALSE;
+@@ -580,6 +581,9 @@ static void setup_options(void)
+     if (!get_config_key( hkey, appkey, "GrabFullscreen", buffer, sizeof(buffer) ))
+         grab_fullscreen = IS_OPTION_TRUE( buffer[0] );
+ 
++    if (!get_config_key( hkey, appkey, "KeyboardLayout", buffer, sizeof(buffer) ))
++        keyboard_layout = x11drv_find_keyboard_layout( buffer );
++
+     p = x11drv_get_keyboard_layout_list( &len );
+     if (p) set_reg_string_value( hkey, "KeyboardLayoutList", p, len * sizeof(WCHAR) );
+     free( p );
+-- 
+2.39.1
+

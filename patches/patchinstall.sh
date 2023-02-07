@@ -235,6 +235,7 @@ patch_enable_all ()
 	enable_winepulse_PulseAudio_Support="$1"
 	enable_winepulse_aux_channels="$1"
 	enable_winex11_CandidateWindowPos="$1"
+	enable_winex11_Fixed_scancodes="$1"
 	enable_winex11_MWM_Decorations="$1"
 	enable_winex11_UpdateLayeredWindow="$1"
 	enable_winex11_Vulkan_support="$1"
@@ -718,6 +719,9 @@ patch_enable ()
 		winex11-CandidateWindowPos)
 			enable_winex11_CandidateWindowPos="$2"
 			;;
+		winex11-Fixed-scancodes)
+			enable_winex11_Fixed_scancodes="$2"
+			;;
 		winex11-MWM_Decorations)
 			enable_winex11_MWM_Decorations="$2"
 			;;
@@ -1124,6 +1128,13 @@ if test "$enable_winex11_WM_WINDOWPOSCHANGING" -eq 1; then
 		abort "Patchset winex11-_NET_ACTIVE_WINDOW disabled, but winex11-WM_WINDOWPOSCHANGING depends on that."
 	fi
 	enable_winex11__NET_ACTIVE_WINDOW=1
+fi
+
+if test "$enable_winex11_Fixed_scancodes" -eq 1; then
+	if test "$enable_winecfg_Staging" -gt 1; then
+		abort "Patchset winecfg-Staging disabled, but winex11-Fixed-scancodes depends on that."
+	fi
+	enable_winecfg_Staging=1
 fi
 
 if test "$enable_wined3d_Indexed_Vertex_Blending" -eq 1; then
@@ -3409,6 +3420,32 @@ fi
 # |
 if test "$enable_winex11_CandidateWindowPos" -eq 1; then
 	patch_apply winex11-CandidateWindowPos/0001-winex11.drv-Update-a-candidate-window-s-position-wit.patch
+fi
+
+# Patchset winex11-Fixed-scancodes
+# |
+# | This patchset has the following (direct or indirect) dependencies:
+# |   *	winecfg-Staging
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#30984] Improve key translation.
+# |   *	[#45605] Letter keys doesn't work in DirectX aplications
+# |
+# | Modified files:
+# |   *	MAINTAINERS, dlls/winex11.drv/keyboard.c, dlls/winex11.drv/x11drv.h, dlls/winex11.drv/x11drv_main.c,
+# | 	programs/winecfg/Makefile.in, programs/winecfg/input.c, programs/winecfg/main.c, programs/winecfg/resource.h,
+# | 	programs/winecfg/winecfg.h, programs/winecfg/winecfg.rc, programs/winecfg/x11drvdlg.c
+# |
+if test "$enable_winex11_Fixed_scancodes" -eq 1; then
+	patch_apply winex11-Fixed-scancodes/0001-winecfg-Move-input-config-options-to-a-dedicated-tab.patch
+	patch_apply winex11-Fixed-scancodes/0002-winex11-Always-create-the-HKCU-configuration-registr.patch
+	patch_apply winex11-Fixed-scancodes/0003-winex11-Write-supported-keyboard-layout-list-in-regi.patch
+	patch_apply winex11-Fixed-scancodes/0004-winecfg-Add-a-keyboard-layout-selection-config-optio.patch
+	patch_apply winex11-Fixed-scancodes/0005-winex11-Use-the-user-configured-keyboard-layout-if-a.patch
+	patch_apply winex11-Fixed-scancodes/0006-winecfg-Add-a-keyboard-scancode-detection-toggle-opt.patch
+	patch_apply winex11-Fixed-scancodes/0007-winex11-Use-scancode-high-bit-to-set-KEYEVENTF_EXTEN.patch
+	patch_apply winex11-Fixed-scancodes/0008-winex11-Support-fixed-X11-keycode-to-scancode-conver.patch
+	patch_apply winex11-Fixed-scancodes/0009-winex11-Disable-keyboard-scancode-auto-detection-by-.patch
 fi
 
 # Patchset winex11-MWM_Decorations
