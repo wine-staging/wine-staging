@@ -1,4 +1,4 @@
-#!/usr/bin/env python2
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 #
 # Automatic patch dependency checker and apply script generator.
@@ -24,7 +24,7 @@
 from patchutils import escape_sh, escape_c
 import argparse
 import binascii
-import cPickle as pickle
+import pickle
 import contextlib
 import fnmatch
 import hashlib
@@ -41,8 +41,8 @@ import subprocess
 import sys
 import tempfile
 import textwrap
-import xmlrpclib
-import ConfigParser
+import xmlrpc.client
+import configparser
 
 _devnull = open(os.devnull, 'wb')
 
@@ -219,7 +219,7 @@ def load_patchsets():
 
         # No single patch within this directory, ignore it
         if len(patch.patches) == 0:
-            print "WARNING: No patches found in directory %s" % (directory)
+            print("WARNING: No patches found in directory %s" % (directory))
             del patch
             continue
 
@@ -228,20 +228,20 @@ def load_patchsets():
         name_to_id[name] = i
 
     # Now read the definition files in a second step
-    for i, patch in all_patches.iteritems():
+    for i, patch in all_patches.items():
         for key, val in patch.config:
             if key == "depends":
-                if not name_to_id.has_key(val):
+                if val not in name_to_id:
                     raise PatchUpdaterError("Definition file for %s references unknown dependency %s" % (patch.name, val))
                 patch.depends.add(name_to_id[val])
 
             elif key == "apply-after":
-                for j, other_patch in all_patches.iteritems():
+                for j, other_patch in all_patches.items():
                     if i != j and any([fnmatch.fnmatch(f, val) for f in other_patch.modified_files]):
                         patch.auto_depends.add(j)
 
             elif key == "apply-before":
-                for j, other_patch in all_patches.iteritems():
+                for j, other_patch in all_patches.items():
                     if i != j and any([fnmatch.fnmatch(f, val) for f in other_patch.modified_files]):
                         other_patch.auto_depends.add(i)
 
@@ -264,10 +264,10 @@ def load_patchsets():
                 patch.ifdefined = val
 
             else:
-                print "WARNING: Ignoring unknown command in definition file for %s: %s" % (patch.name, line)
+                print("WARNING: Ignoring unknown command in definition file for %s: %s" % (patch.name, line))
 
     # Filter autodepends on disabled patchsets
-    for i, patch in all_patches.iteritems():
+    for i, patch in all_patches.items():
         patch.auto_depends = set([j for j in patch.auto_depends if not all_patches[j].disabled])
 
     return all_patches
@@ -359,7 +359,7 @@ def resolve_dependencies(all_patches, index = None, depends = None, auto_deps = 
             all_patches[i].verify_resolved = 1
             resolved.append(i)
 
-    for _, patch in all_patches.iteritems():
+    for _, patch in all_patches.items():
         patch.verify_resolved = 0
 
     resolved = []
@@ -408,14 +408,14 @@ def check_bug_status(all_patches, sync_bugs=False):
     all_bugids = set()
     url_map = {}
 
-    for _, patch in all_patches.iteritems():
+    for _, patch in all_patches.items():
         url = "%s/tree/master/%s" % (config.github_url, patch.directory)
         for sync, bugid, bugname in patch.fixes:
             if sync and bugid is not None:
                 url_map[bugid] = url
                 all_bugids.add(bugid)
 
-    bugtracker  = xmlrpclib.ServerProxy(config.bugtracker_url)
+    bugtracker  = xmlrpc.client.ServerProxy(config.bugtracker_url)
     bug_list    = bugtracker.Bug.get(dict(ids=list(all_bugids)))
     staged_bugs = bugtracker.Bug.search(dict(status="STAGED"))
 
@@ -423,35 +423,35 @@ def check_bug_status(all_patches, sync_bugs=False):
     for bug in bug_list['bugs']:
         if bug['status'] != "STAGED":
             if once:
-                print ""
-                print "WARNING: The following bugs might require attention:"
-                print ""
+                print("")
+                print("WARNING: The following bugs might require attention:")
+                print("")
                 once = False
-            print " #%d - \"%s\" - %s %s - %s" % (bug['id'], bug['summary'], bug['status'],
-                                                  bug['resolution'], bug['cf_staged_patchset'])
+            print(" #%d - \"%s\" - %s %s - %s" % (bug['id'], bug['summary'], bug['status'],
+                                                  bug['resolution'], bug['cf_staged_patchset']))
             if sync_bugs:
                 sync_bug_status(bugtracker, bug, url_map[bug['id']])
         patchset = bug['cf_staged_patchset']
         if '.patch' in patchset: patchset = patchset[0:patchset.rindex('/')].replace('/blob/','/tree/')
         if bug['status'] == 'STAGED' and patchset != url_map[bug['id']]:
-            print 'Invalid staged patchset: #%d - \"%s\" - %s' %(bug['id'], bug['summary'], bug['cf_staged_patchset'])
+            print('Invalid staged patchset: #%d - \"%s\" - %s' %(bug['id'], bug['summary'], bug['cf_staged_patchset']))
 
     once = True
     for bug in staged_bugs['bugs']:
         if bug['id'] not in all_bugids:
             if once:
-                print ""
-                print "WARNING: The following bugs are incorrectly marked as STAGED:"
-                print ""
+                print("")
+                print("WARNING: The following bugs are incorrectly marked as STAGED:")
+                print("")
                 once = False
-            print " #%d - \"%s\" - %s %s" % (bug['id'], bug['summary'], bug['status'],
-                                             bug['resolution'])
+            print(" #%d - \"%s\" - %s %s" % (bug['id'], bug['summary'], bug['status'],
+                                             bug['resolution']))
 
-    print ""
+    print("")
 
 def generate_ifdefined(all_patches, skip_checks=False):
     """Update autogenerated ifdefined patches, which can be used to selectively disable features at compile time."""
-    for i, patch in all_patches.iteritems():
+    for i, patch in all_patches.items():
         if patch.ifdefined is None:
             continue
         if patch.disabled:
@@ -531,7 +531,7 @@ def generate_ifdefined(all_patches, skip_checks=False):
 
 def generate_apply_order(all_patches, skip_checks=False):
     """Resolve dependencies, and afterwards check if everything applies properly."""
-    depends     = sorted([i for i, patch in all_patches.iteritems() if not patch.disabled])
+    depends     = sorted([i for i, patch in all_patches.items() if not patch.disabled])
     resolved    = resolve_dependencies(all_patches, depends=depends)
     max_patches = max(resolved) + 1
 
@@ -556,7 +556,7 @@ def generate_apply_order(all_patches, skip_checks=False):
     dependency_cache = _load_dict(config.path_cache)
     pool = multiprocessing.pool.ThreadPool(processes=4)
     try:
-        for filename, indices in modified_files.iteritems():
+        for filename, indices in modified_files.items():
 
             # If one of patches is a binary patch, then we cannot / won't verify it - require dependencies in this case
             if contains_binary_patch(all_patches, indices, filename):
@@ -583,7 +583,7 @@ def generate_apply_order(all_patches, skip_checks=False):
 
             # Skip checks if it matches the information from the cache
             # For backwards compatibility, convert string entries to list
-            if dependency_cache.has_key(filename):
+            if filename in dependency_cache:
                 if not isinstance(dependency_cache[filename], list):
                     dependency_cache[filename] = [dependency_cache[filename]]
                 if unique_hash in dependency_cache[filename]:
@@ -639,14 +639,14 @@ def generate_apply_order(all_patches, skip_checks=False):
                     progress.update(k)
 
             # Update the dependency cache, store max 10 entries per file
-            if not dependency_cache.has_key(filename):
+            if filename not in dependency_cache:
                 dependency_cache[filename] = []
             dependency_cache[filename].append(unique_hash)
             dependency_cache[filename] = dependency_cache[filename][-10:]
 
         # Delete outdated cache information
         for filename in dependency_cache.keys():
-            if not modified_files.has_key(filename):
+            if filename not in modified_files:
                 del dependency_cache[filename]
     finally:
         pool.close()
@@ -767,13 +767,13 @@ if __name__ == "__main__":
     tools_directory = os.path.dirname(os.path.realpath(__file__))
     os.chdir(os.path.join(tools_directory, "./.."))
 
-    config_parser = ConfigParser.ConfigParser()
+    config_parser = configparser.ConfigParser()
     config_parser.read(config.path_config)
 
     try:
         config.bugtracker_user = config_parser.get('bugtracker', 'username')
         config.bugtracker_pass = config_parser.get('bugtracker', 'password')
-    except (ConfigParser.NoSectionError, ConfigParser.NoOptionError):
+    except (configparser.NoSectionError, configparser.NoOptionError):
         config.bugtracker_user = None
         config.bugtracker_pass = None
 
@@ -791,7 +791,7 @@ if __name__ == "__main__":
         generate_script(all_patches, resolved)
 
     except PatchUpdaterError as e:
-        print ""
-        print "ERROR: %s" % e
-        print ""
+        print("")
+        print("ERROR: %s" % e)
+        print("")
         exit(1)

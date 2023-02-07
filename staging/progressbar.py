@@ -104,7 +104,7 @@ class ProgressBar(object):
 if __name__ == '__main__':
     import time
 
-    print ""
+    print("")
     with ProgressBar(desc="description") as x:
         for i in xrange(100):
             x.update(i)
