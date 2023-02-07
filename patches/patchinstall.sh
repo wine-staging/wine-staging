@@ -217,6 +217,7 @@ patch_enable_all ()
 	enable_wined3d_SWVP_shaders="$1"
 	enable_wined3d_Silence_FIXMEs="$1"
 	enable_wined3d_WINED3DFMT_B8G8R8X8_UNORM="$1"
+	enable_wined3d_atomic_minmax_merge="$1"
 	enable_wined3d_bindless_texture="$1"
 	enable_wined3d_mesa_texture_download="$1"
 	enable_wined3d_rotate_WINED3D_SWAP_EFFECT_DISCARD="$1"
@@ -661,6 +662,9 @@ patch_enable ()
 			;;
 		wined3d-WINED3DFMT_B8G8R8X8_UNORM)
 			enable_wined3d_WINED3DFMT_B8G8R8X8_UNORM="$2"
+			;;
+		wined3d-atomic_minmax_merge)
+			enable_wined3d_atomic_minmax_merge="$2"
 			;;
 		wined3d-bindless-texture)
 			enable_wined3d_bindless_texture="$2"
@@ -3193,6 +3197,18 @@ fi
 # |
 if test "$enable_wined3d_WINED3DFMT_B8G8R8X8_UNORM" -eq 1; then
 	patch_apply wined3d-WINED3DFMT_B8G8R8X8_UNORM/0001-wined3d-Implement-WINED3DFMT_B8G8R8X8_UNORM-to-WINED.patch
+fi
+
+# Patchset wined3d-atomic_minmax_merge
+# |
+# | This patchset fixes the following Wine bugs:
+# |   *	[#52233] wined3d: Handle u/signed integers that same
+# |
+# | Modified files:
+# |   *	dlls/wined3d/glsl_shader.c
+# |
+if test "$enable_wined3d_atomic_minmax_merge" -eq 1; then
+	patch_apply wined3d-atomic_minmax_merge/0001-wined3d-Merged-ATOMIC_IMIN-and-ATOMIC_UMIN-together.patch
 fi
 
 # Patchset wined3d-bindless-texture
