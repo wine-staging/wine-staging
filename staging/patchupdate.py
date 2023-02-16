@@ -735,7 +735,7 @@ def generate_script(all_patches, resolved):
         template = template_fp.read()
     with open(config.path_script, "w") as fp:
         fp.write(template.format(staging_version=_staging_version(),
-                                 upstream_commit=upstream_commit,
+                                 upstream_commit=upstream_commit.decode(),
                                  patch_helpers="".join(lines_helpers).rstrip("\n"),
                                  patch_resolver="".join(lines_resolver).rstrip("\n"),
                                  patch_apply="".join(lines_apply).rstrip("\n")))
