@@ -214,7 +214,11 @@ def main():
                 print(f.read().rstrip());
             sys.exit(0)
 
-    for a in args: add_patchset(patchlist, a)
+    for a in args:
+        if a.startswith('DESTDIR='):
+            winedir = a[8:]
+        else:
+            add_patchset(patchlist, a)
 
     for p in excluded: del patchlist[p]
 
