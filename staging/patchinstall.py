@@ -82,8 +82,8 @@ def apply_patch(patch):
         return run(['git','-C',winedir,'am','-C1',patch])
     elif backend == 'patch':
         with open(patch) as f:
-            print(patchdir+'/gitapply.sh <',patch)
-            return subprocess.call([patchdir+'/gitapply.sh'],stdin=f)
+            print(patchdir+'/gitapply.sh -d', winedir, '<', patch)
+            return subprocess.call([patchdir+'/gitapply.sh','-d',winedir],stdin=f)
     elif backend == 'git-apply':
         return run(['git','-C',winedir,'apply','--index',patch])
 
