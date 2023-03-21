@@ -76,17 +76,16 @@ def parse_def_file(name, path):
     return deps
 
 def apply_patch(patch):
-    gitdir = os.path.join(winedir,'.git')
     if backend == 'git-am':
-        return run(['git','--git-dir',gitdir,'am',patch])
+        return run(['git','-C',winedir,'am',patch])
     elif backend == 'git-am-C1':
-        return run(['git','--git-dir',gitdir,'am','-C1',patch])
+        return run(['git','-C',winedir,'am','-C1',patch])
     elif backend == 'patch':
         with open(patch) as f:
             print(patchdir+'/gitapply.sh -d', winedir, '<', patch)
             return subprocess.call([patchdir+'/gitapply.sh','-d',winedir],stdin=f)
     elif backend == 'git-apply':
-        return run(['git','--git-dir',gitdir,'apply','--index',patch])
+        return run(['git','-C',winedir,'apply','--index',patch])
 
 def run_autoconf(patch):
     if not force_autoconf: return
@@ -108,8 +107,7 @@ def run_autoconf(patch):
     if need_make_requests:
         run(['./tools/make_requests'], cwd=winedir)
     if need_autoreconf or need_make_requests:
-        gitdir = os.path.join(winedir,'.git')
-        run(['git','--git-dir',gitdir,'commit','-a','--amend','--no-edit'])
+        run(['git','-C',winedir,'commit','-a','--amend','--no-edit'])
 
 def add_patch_data(patch):
     global patch_data
