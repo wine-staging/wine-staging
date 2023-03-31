@@ -1,0 +1,125 @@
+From d59b98f9fb10a3d634541d4e538ed7500a183c77 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Mon, 20 Mar 2023 11:59:14 -0600
+Subject: [PATCH 1/3] win32u: Set DEVPKEY_Device_MatchingDeviceId for GPUs.
+
+---
+ dlls/gdi32/tests/driver.c | 50 +++++++++++++++++++++++++++++++++++++++
+ dlls/win32u/sysparams.c   | 19 +++++++++++++++
+ 2 files changed, 69 insertions(+)
+
+diff --git a/dlls/gdi32/tests/driver.c b/dlls/gdi32/tests/driver.c
+index 94f93d61207..092bde0e5c1 100644
+--- a/dlls/gdi32/tests/driver.c
++++ b/dlls/gdi32/tests/driver.c
+@@ -32,6 +32,7 @@
+ #include "initguid.h"
+ #include "setupapi.h"
+ #include "ntddvdeo.h"
++#include "devpkey.h"
+ 
+ #include "wine/test.h"
+ 
+@@ -996,6 +997,54 @@ static void test_D3DKMTQueryVideoMemoryInfo(void)
+     ok(status == STATUS_SUCCESS, "Got unexpected return code %#lx.\n", status);
+ }
+ 
++static void test_gpu_device_properties_guid(const GUID *devinterface_guid)
++{
++    BYTE iface_detail_buffer[sizeof(SP_DEVICE_INTERFACE_DETAIL_DATA_W) + 256 * sizeof(WCHAR)];
++    SP_DEVINFO_DATA device_data = {sizeof(device_data)};
++    SP_DEVICE_INTERFACE_DATA iface = {sizeof(iface)};
++    SP_DEVICE_INTERFACE_DETAIL_DATA_W *iface_data;
++    WCHAR device_id[256];
++    DEVPROPTYPE type;
++    unsigned int i;
++    HDEVINFO set;
++    BOOL ret;
++
++    /* Make sure display devices are initialized. */
++    SendMessageW(GetDesktopWindow(), WM_NULL, 0, 0);
++
++    set = SetupDiGetClassDevsW(devinterface_guid, NULL, NULL, DIGCF_DEVICEINTERFACE | DIGCF_PRESENT);
++    ok(set != INVALID_HANDLE_VALUE, "SetupDiGetClassDevs failed, error %lu.\n", GetLastError());
++
++    iface_data = (SP_DEVICE_INTERFACE_DETAIL_DATA_W *)iface_detail_buffer;
++    iface_data->cbSize = sizeof(*iface_data);
++
++    i = 0;
++    while (SetupDiEnumDeviceInterfaces(set, NULL, devinterface_guid, i, &iface))
++    {
++        ret = SetupDiGetDeviceInterfaceDetailW(set, &iface, iface_data,
++                sizeof(iface_detail_buffer), NULL, &device_data );
++        ok(ret, "Got unexpected ret %d, GetLastError() %lu.\n", ret, GetLastError());
++
++        ret = SetupDiGetDevicePropertyW(set, &device_data, &DEVPKEY_Device_MatchingDeviceId, &type,
++                (BYTE *)device_id, sizeof(device_id), NULL, 0);
++        ok(ret, "Got unexpected ret %d, GetLastError() %lu.\n", ret, GetLastError());
++        ok(type == DEVPROP_TYPE_STRING, "Got type %ld.\n", type);
++
++        ++i;
++    }
++    SetupDiDestroyDeviceInfoList(set);
++}
++
++static void test_gpu_device_properties(void)
++{
++    winetest_push_context("GUID_DEVINTERFACE_DISPLAY_ADAPTER");
++    test_gpu_device_properties_guid(&GUID_DEVINTERFACE_DISPLAY_ADAPTER);
++    winetest_pop_context();
++    winetest_push_context("GUID_DISPLAY_DEVICE_ARRIVAL");
++    test_gpu_device_properties_guid(&GUID_DISPLAY_DEVICE_ARRIVAL);
++    winetest_pop_context();
++}
++
+ START_TEST(driver)
+ {
+     HMODULE gdi32 = GetModuleHandleA("gdi32.dll");
+@@ -1025,6 +1074,7 @@ START_TEST(driver)
+     test_D3DKMTCheckOcclusion();
+     test_D3DKMTOpenAdapterFromDeviceName();
+     test_D3DKMTQueryVideoMemoryInfo();
++    test_gpu_device_properties();
+ 
+     FreeLibrary(dwmapi);
+ }
+diff --git a/dlls/win32u/sysparams.c b/dlls/win32u/sysparams.c
+index 60b12321953..a02158a17a0 100644
+--- a/dlls/win32u/sysparams.c
++++ b/dlls/win32u/sysparams.c
+@@ -93,6 +93,14 @@ static const WCHAR devpropkey_gpu_luidW[] =
+     '\\','0','0','0','2'
+ };
+ 
++static const WCHAR devpkey_device_matching_device_id[] =
++{
++    'P','r','o','p','e','r','t','i','e','s',
++    '\\','{','A','8','B','8','6','5','D','D','-','2','E','3','D','-','4','0','9','4',
++    '-','A','D','9','7','-','E','5','9','3','A','7','0','C','7','5','D','6','}',
++    '\\','0','0','0','8'
++};
++
+ static const WCHAR devpropkey_device_ispresentW[] =
+ {
+     'P','r','o','p','e','r','t','i','e','s',
+@@ -1218,6 +1226,17 @@ static void add_gpu( const struct gdi_gpu *gpu, void *param )
+     bufferW[size / sizeof(WCHAR)] = 0; /* for REG_MULTI_SZ */
+     set_reg_value( hkey, hardware_idW, REG_MULTI_SZ, bufferW, size + sizeof(WCHAR) );
+ 
++    if ((subkey = reg_create_key( hkey, devpkey_device_matching_device_id,
++                                  sizeof(devpkey_device_matching_device_id), 0, NULL )))
++    {
++        if (gpu->vendor_id && gpu->device_id)
++            set_reg_value( subkey, NULL, 0xffff0000 | DEVPROP_TYPE_STRING, bufferW, size );
++        else
++            set_reg_value( subkey, NULL, 0xffff0000 | DEVPROP_TYPE_STRING, bufferW,
++                           asciiz_to_unicode( bufferW, "ROOT\\BasicRender" ));
++        NtClose( subkey );
++    }
++
+     desc = gpu->name;
+     if (!desc[0]) desc = wine_adapterW;
+     set_reg_value( hkey, device_descW, REG_SZ, desc, (lstrlenW( desc ) + 1) * sizeof(WCHAR) );
+-- 
+2.40.0
+
