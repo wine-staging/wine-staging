@@ -1,0 +1,111 @@
+From 093f14e3ce1753ef399681ec2ccdeecb4443c7a1 Mon Sep 17 00:00:00 2001
+From: Paul Gofman <pgofman@codeweavers.com>
+Date: Tue, 20 Jun 2023 12:17:36 -0600
+Subject: [PATCH 3/3] mountmgr.sys: Perform periodic registry flush instead of
+ server.
+
+---
+ dlls/mountmgr.sys/mountmgr.c | 22 ++++++++++++++++++++++
+ server/registry.c            | 26 --------------------------
+ 2 files changed, 22 insertions(+), 26 deletions(-)
+
+diff --git a/dlls/mountmgr.sys/mountmgr.c b/dlls/mountmgr.sys/mountmgr.c
+index 1850051a258..ee8d282594f 100644
+--- a/dlls/mountmgr.sys/mountmgr.c
++++ b/dlls/mountmgr.sys/mountmgr.c
+@@ -618,6 +618,27 @@ static DWORD WINAPI run_loop_thread( void *arg )
+     return MOUNTMGR_CALL( run_loop, &params );
+ }
+ 
++static DWORD WINAPI registry_flush_thread( void *arg )
++{
++    UNICODE_STRING name = RTL_CONSTANT_STRING( L"\\Registry" );
++    OBJECT_ATTRIBUTES attr;
++    HANDLE root;
++
++    InitializeObjectAttributes( &attr, &name, 0, 0, NULL );
++    if (NtOpenKeyEx( &root, MAXIMUM_ALLOWED, &attr, 0 ))
++    {
++        ERR( "Failed opening root registry key.\n" );
++        return 0;
++    }
++
++    for (;;)
++    {
++        Sleep( 30000 );
++        if (NtFlushKey( root )) ERR( "Failed flushing registry.\n" );
++    }
++
++    return 0;
++}
+ 
+ /* main entry point for the mount point manager driver */
+ NTSTATUS WINAPI DriverEntry( DRIVER_OBJECT *driver, UNICODE_STRING *path )
+@@ -661,6 +682,7 @@ NTSTATUS WINAPI DriverEntry( DRIVER_OBJECT *driver, UNICODE_STRING *path )
+ 
+     thread = CreateThread( NULL, 0, device_op_thread, NULL, 0, NULL );
+     CloseHandle( CreateThread( NULL, 0, run_loop_thread, thread, 0, NULL ));
++    CloseHandle( CreateThread( NULL, 0, registry_flush_thread, thread, 0, NULL ));
+ 
+ #ifdef _WIN64
+     /* create a symlink so that the Wine port overrides key can be edited with 32-bit reg or regedit */
+diff --git a/server/registry.c b/server/registry.c
+index f6d57c579f4..21566057fa1 100644
+--- a/server/registry.c
++++ b/server/registry.c
+@@ -125,15 +125,12 @@ static abstime_t change_timestamp_counter;
+ static struct key *root_key;
+ 
+ static const timeout_t ticks_1601_to_1970 = (timeout_t)86400 * (369 * 365 + 89) * TICKS_PER_SEC;
+-static const timeout_t save_period = 30 * -TICKS_PER_SEC;  /* delay between periodic saves */
+-static struct timeout_user *save_timeout_user;  /* saving timer */
+ static enum prefix_type prefix_type;
+ 
+ static const WCHAR wow6432node[] = {'W','o','w','6','4','3','2','N','o','d','e'};
+ static const WCHAR symlink_value[] = {'S','y','m','b','o','l','i','c','L','i','n','k','V','a','l','u','e'};
+ static const struct unicode_str symlink_str = { symlink_value, sizeof(symlink_value) };
+ 
+-static void set_periodic_save_timer(void);
+ static struct key_value *find_value( const struct key *key, const struct unicode_str *name, int *index );
+ 
+ /* information about where to save a registry branch */
+@@ -1983,9 +1980,6 @@ void init_registry(void)
+     release_object( hklm );
+     release_object( hkcu );
+ 
+-    /* start the periodic save timer */
+-    set_periodic_save_timer();
+-
+     /* create windows directories */
+ 
+     if (!mkdir( "drive_c/windows", 0777 ))
+@@ -2203,26 +2197,6 @@ done:
+     return ret;
+ }
+ 
+-/* periodic saving of the registry */
+-static void periodic_save( void *arg )
+-{
+-    int i;
+-
+-    if (fchdir( config_dir_fd ) == -1) return;
+-    save_timeout_user = NULL;
+-    for (i = 0; i < save_branch_count; i++)
+-        save_branch( save_branch_info[i].key, save_branch_info[i].path );
+-    if (fchdir( server_dir_fd ) == -1) fatal_error( "chdir to server dir: %s\n", strerror( errno ));
+-    set_periodic_save_timer();
+-}
+-
+-/* start the periodic save timer */
+-static void set_periodic_save_timer(void)
+-{
+-    if (save_timeout_user) remove_timeout_user( save_timeout_user );
+-    save_timeout_user = add_timeout_user( save_period, periodic_save, NULL );
+-}
+-
+ /* save the modified registry branches to disk */
+ void flush_registry(void)
+ {
+-- 
+2.40.1
+
