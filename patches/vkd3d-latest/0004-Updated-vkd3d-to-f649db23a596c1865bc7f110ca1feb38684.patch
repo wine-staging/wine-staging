@@ -1,0 +1,458 @@
+From 0d536e339fc3dcc3d90ef593818e2f6af63301d7 Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Fri, 4 Aug 2023 19:27:19 +1000
+Subject: [PATCH] Updated vkd3d to f649db23a596c1865bc7f110ca1feb3868451375.
+
+---
+ libs/vkd3d/include/vkd3d_shader.h             | 107 +++++++++++++++++-
+ libs/vkd3d/libs/vkd3d-shader/d3dbc.c          |   8 +-
+ libs/vkd3d/libs/vkd3d-shader/dxbc.c           |   1 +
+ libs/vkd3d/libs/vkd3d-shader/ir.c             |  73 +++++++++++-
+ libs/vkd3d/libs/vkd3d-shader/spirv.c          |  16 ++-
+ .../libs/vkd3d-shader/vkd3d_shader_main.c     |  38 +++++++
+ .../libs/vkd3d-shader/vkd3d_shader_private.h  |  11 +-
+ 7 files changed, 245 insertions(+), 9 deletions(-)
+
+diff --git a/libs/vkd3d/include/vkd3d_shader.h b/libs/vkd3d/include/vkd3d_shader.h
+index d6653d18e56..e98aad4fe95 100644
+--- a/libs/vkd3d/include/vkd3d_shader.h
++++ b/libs/vkd3d/include/vkd3d_shader.h
+@@ -90,6 +90,11 @@ enum vkd3d_shader_structure_type
+      * \since 1.9
+      */
+     VKD3D_SHADER_STRUCTURE_TYPE_SCAN_SIGNATURE_INFO,
++    /**
++     * The structure is a vkd3d_shader_next_stage_info structure.
++     * \since 1.9
++     */
++    VKD3D_SHADER_STRUCTURE_TYPE_NEXT_STAGE_INFO,
+ 
+     VKD3D_FORCE_32_BIT_ENUM(VKD3D_SHADER_STRUCTURE_TYPE),
+ };
+@@ -1676,6 +1681,76 @@ struct vkd3d_shader_scan_signature_info
+     struct vkd3d_shader_signature patch_constant;
+ };
+ 
++/**
++ * Describes the mapping of a output varying register in a shader stage,
++ * to an input varying register in the following shader stage.
++ *
++ * This structure is used in struct vkd3d_shader_next_stage_info.
++ */
++struct vkd3d_shader_varying_map
++{
++    /**
++     * The signature index (in the output signature) of the output varying.
++     * If greater than or equal to the number of elements in the output
++     * signature, signifies that the varying is consumed by the next stage but
++     * not written by this one.
++     */
++    unsigned int output_signature_index;
++    /** The register index of the input varying to map this register to. */
++    unsigned int input_register_index;
++    /** The mask consumed by the destination register. */
++    unsigned int input_mask;
++};
++
++/**
++ * A chained structure which describes the next shader in the pipeline.
++ *
++ * This structure is optional, and should only be provided if there is in fact
++ * another shader in the pipeline.
++ * However, depending on the input and output formats, this structure may be
++ * necessary in order to generate shaders which correctly match each other.
++ * If the structure or its individual fields are not provided, vkd3d-shader
++ * will generate shaders which may be correct in isolation, but are not
++ * guaranteed to correctly match each other.
++ *
++ * This structure is passed to vkd3d_shader_compile() and extends
++ * vkd3d_shader_compile_info.
++ *
++ * This structure contains only input parameters.
++ *
++ * \since 1.9
++ */
++struct vkd3d_shader_next_stage_info
++{
++    /** Must be set to VKD3D_SHADER_STRUCTURE_TYPE_NEXT_STAGE_INFO. */
++    enum vkd3d_shader_structure_type type;
++    /** Optional pointer to a structure containing further parameters. */
++    const void *next;
++
++    /**
++     * A mapping of output varyings in this shader stage to input varyings
++     * in the next shader stage.
++     *
++     * This mapping should include exactly one element for each varying
++     * consumed by the next shader stage.
++     * If this shader stage outputs a varying that is not consumed by the next
++     * shader stage, that varying should be absent from this array.
++     *
++     * If this field is absent, vkd3d-shader will map varyings from one stage
++     * to another based on their register index.
++     * For Direct3D shader model 3.0, such a default mapping will be incorrect
++     * unless the registers are allocated in the same order, and hence this
++     * field is necessary to correctly match inter-stage varyings.
++     * This mapping may also be necessary under other circumstances where the
++     * varying interface does not match exactly.
++     *
++     * This mapping may be constructed by vkd3d_shader_build_varying_map().
++     */
++    const struct vkd3d_shader_varying_map *varying_map;
++    /** The number of registers provided in \ref varying_map. */
++    unsigned int varying_count;
++};
++
+ #ifdef LIBVKD3D_SHADER_SOURCE
+ # define VKD3D_SHADER_API VKD3D_EXPORT
+ #else
+@@ -1748,13 +1823,14 @@ VKD3D_SHADER_API const enum vkd3d_shader_target_type *vkd3d_shader_get_supported
+  *
+  * Depending on the source and target types, this function may support the
+  * following chained structures:
++ * - vkd3d_shader_hlsl_source_info
+  * - vkd3d_shader_interface_info
++ * - vkd3d_shader_next_stage_info
+  * - vkd3d_shader_scan_descriptor_info
+  * - vkd3d_shader_scan_signature_info
+  * - vkd3d_shader_spirv_domain_shader_target_info
+  * - vkd3d_shader_spirv_target_info
+  * - vkd3d_shader_transform_feedback_info
+- * - vkd3d_shader_hlsl_source_info
+  *
+  * \param compile_info A chained structure containing compilation parameters.
+  *
+@@ -2188,6 +2264,35 @@ VKD3D_SHADER_API int vkd3d_shader_serialize_dxbc(size_t section_count,
+  */
+ VKD3D_SHADER_API void vkd3d_shader_free_scan_signature_info(struct vkd3d_shader_scan_signature_info *info);
+ 
++/**
++ * Build a mapping of output varyings in a shader stage to input varyings in
++ * the following shader stage.
++ *
++ * This mapping should be used in struct vkd3d_shader_next_stage_info to
++ * compile the first shader.
++ *
++ * \param output_signature The output signature of the first shader.
++ *
++ * \param input_signature The input signature of the second shader.
++ *
++ * \param count On output, contains the number of entries written into
++ * \ref varyings.
++ *
++ * \param varyings Pointer to an output array of varyings.
++ * This must point to space for N varyings, where N is the number of elements
++ * in the input signature.
++ *
++ * \remark Valid legacy Direct3D pixel shaders have at most 12 varying inputs:
++ * 10 inter-stage varyings, face, and position.
++ * Therefore, in practice, it is safe to call this function with a
++ * pre-allocated array with a fixed size of 12.
++ *
++ * \since 1.9
++ */
++VKD3D_SHADER_API void vkd3d_shader_build_varying_map(const struct vkd3d_shader_signature *output_signature,
++        const struct vkd3d_shader_signature *input_signature,
++        unsigned int *count, struct vkd3d_shader_varying_map *varyings);
++
+ #endif  /* VKD3D_SHADER_NO_PROTOTYPES */
+ 
+ /** Type of vkd3d_shader_get_version(). */
+diff --git a/libs/vkd3d/libs/vkd3d-shader/d3dbc.c b/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
+index fe739339bd1..35e5c454d57 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
++++ b/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
+@@ -524,6 +524,8 @@ static struct signature_element *find_signature_element_by_register_index(
+     return NULL;
+ }
+ 
++#define SM1_COLOR_REGISTER_OFFSET 8
++
+ static bool add_signature_element(struct vkd3d_shader_sm1_parser *sm1, bool output,
+         const char *name, unsigned int index, enum vkd3d_shader_sysval_semantic sysval,
+         unsigned int register_index, bool is_dcl, unsigned int mask)
+@@ -555,6 +557,7 @@ static bool add_signature_element(struct vkd3d_shader_sm1_parser *sm1, bool outp
+     element->sysval_semantic = sysval;
+     element->component_type = VKD3D_SHADER_COMPONENT_FLOAT;
+     element->register_index = register_index;
++    element->target_location = register_index;
+     element->register_count = 1;
+     element->mask = mask;
+     element->used_mask = is_dcl ? 0 : mask;
+@@ -606,7 +609,7 @@ static bool add_signature_element_from_register(struct vkd3d_shader_sm1_parser *
+                 return true;
+             }
+             return add_signature_element(sm1, false, "COLOR", register_index,
+-                    VKD3D_SHADER_SV_NONE, register_index, is_dcl, mask);
++                    VKD3D_SHADER_SV_NONE, SM1_COLOR_REGISTER_OFFSET + register_index, is_dcl, mask);
+ 
+         case VKD3DSPR_TEXTURE:
+             /* For vertex shaders, this is ADDR. */
+@@ -633,6 +636,9 @@ static bool add_signature_element_from_register(struct vkd3d_shader_sm1_parser *
+             /* fall through */
+ 
+         case VKD3DSPR_ATTROUT:
++            return add_signature_element(sm1, true, "COLOR", register_index,
++                    VKD3D_SHADER_SV_NONE, SM1_COLOR_REGISTER_OFFSET + register_index, is_dcl, mask);
++
+         case VKD3DSPR_COLOROUT:
+             return add_signature_element(sm1, true, "COLOR", register_index,
+                     VKD3D_SHADER_SV_NONE, register_index, is_dcl, mask);
+diff --git a/libs/vkd3d/libs/vkd3d-shader/dxbc.c b/libs/vkd3d/libs/vkd3d-shader/dxbc.c
+index 716b7bdb721..cedc3da4a83 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/dxbc.c
++++ b/libs/vkd3d/libs/vkd3d-shader/dxbc.c
+@@ -391,6 +391,7 @@ static int shader_parse_signature(const struct vkd3d_shader_dxbc_section_desc *s
+         read_dword(&ptr, &e[i].sysval_semantic);
+         read_dword(&ptr, &e[i].component_type);
+         read_dword(&ptr, &e[i].register_index);
++        e[i].target_location = e[i].register_index;
+         e[i].register_count = 1;
+         read_dword(&ptr, &mask);
+         e[i].mask = mask & 0xff;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/ir.c b/libs/vkd3d/libs/vkd3d-shader/ir.c
+index d74f81afc39..705905f7888 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/ir.c
++++ b/libs/vkd3d/libs/vkd3d-shader/ir.c
+@@ -85,6 +85,72 @@ static void shader_instruction_eliminate_phase_instance_id(struct vkd3d_shader_i
+         shader_register_eliminate_phase_addressing((struct vkd3d_shader_register *)&ins->dst[i].reg, instance_id);
+ }
+ 
++static const struct vkd3d_shader_varying_map *find_varying_map(
++        const struct vkd3d_shader_next_stage_info *next_stage, unsigned int signature_idx)
++{
++    unsigned int i;
++
++    for (i = 0; i < next_stage->varying_count; ++i)
++    {
++        if (next_stage->varying_map[i].output_signature_index == signature_idx)
++            return &next_stage->varying_map[i];
++    }
++
++    return NULL;
++}
++
++static enum vkd3d_result remap_output_signature(struct vkd3d_shader_parser *parser,
++        const struct vkd3d_shader_compile_info *compile_info)
++{
++    struct shader_signature *signature = &parser->shader_desc.output_signature;
++    const struct vkd3d_shader_next_stage_info *next_stage;
++    unsigned int i;
++
++    if (!(next_stage = vkd3d_find_struct(compile_info->next, NEXT_STAGE_INFO)))
++        return VKD3D_OK;
++
++    for (i = 0; i < signature->element_count; ++i)
++    {
++        const struct vkd3d_shader_varying_map *map = find_varying_map(next_stage, i);
++        struct signature_element *e = &signature->elements[i];
++
++        if (map)
++        {
++            unsigned int input_mask = map->input_mask;
++
++            e->target_location = map->input_register_index;
++
++            /* It is illegal in Vulkan if the next shader uses the same varying
++             * location with a different mask. */
++            if (input_mask && input_mask != e->mask)
++            {
++                vkd3d_shader_parser_error(parser, VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED,
++                        "Aborting due to not yet implemented feature: "
++                        "Output mask %#x does not match input mask %#x.",
++                        e->mask, input_mask);
++                return VKD3D_ERROR_NOT_IMPLEMENTED;
++            }
++        }
++        else
++        {
++            e->target_location = SIGNATURE_TARGET_LOCATION_UNUSED;
++        }
++    }
++
++    for (i = 0; i < next_stage->varying_count; ++i)
++    {
++        if (next_stage->varying_map[i].output_signature_index >= signature->element_count)
++        {
++            vkd3d_shader_parser_error(parser, VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED,
++                    "Aborting due to not yet implemented feature: "
++                    "The next stage consumes varyings not written by this stage.");
++            return VKD3D_ERROR_NOT_IMPLEMENTED;
++        }
++    }
++
++    return VKD3D_OK;
++}
++
+ struct hull_flattener
+ {
+     struct vkd3d_shader_instruction_array instructions;
+@@ -1194,7 +1260,8 @@ static enum vkd3d_result instruction_array_normalise_flat_constants(struct vkd3d
+     return VKD3D_OK;
+ }
+ 
+-enum vkd3d_result vkd3d_shader_normalise(struct vkd3d_shader_parser *parser)
++enum vkd3d_result vkd3d_shader_normalise(struct vkd3d_shader_parser *parser,
++        const struct vkd3d_shader_compile_info *compile_info)
+ {
+     struct vkd3d_shader_instruction_array *instructions = &parser->instructions;
+     enum vkd3d_result result = VKD3D_OK;
+@@ -1202,6 +1269,10 @@ enum vkd3d_result vkd3d_shader_normalise(struct vkd3d_shader_parser *parser)
+     if (parser->shader_desc.is_dxil)
+         return result;
+ 
++    if (parser->shader_version.type != VKD3D_SHADER_TYPE_PIXEL
++            && (result = remap_output_signature(parser, compile_info)) < 0)
++        return result;
++
+     if (parser->shader_version.type == VKD3D_SHADER_TYPE_HULL
+             && (result = instruction_array_flatten_hull_shader_phases(instructions)) >= 0)
+     {
+diff --git a/libs/vkd3d/libs/vkd3d-shader/spirv.c b/libs/vkd3d/libs/vkd3d-shader/spirv.c
+index d71f0a698d9..2725ed80cd1 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/spirv.c
++++ b/libs/vkd3d/libs/vkd3d-shader/spirv.c
+@@ -4602,7 +4602,7 @@ static uint32_t spirv_compiler_emit_input(struct spirv_compiler *compiler,
+     }
+     else
+     {
+-        unsigned int location = signature_element->register_index;
++        unsigned int location = signature_element->target_location;
+ 
+         input_id = spirv_compiler_emit_array_variable(compiler, &builder->global_stream,
+                 storage_class, component_type, input_component_count, array_sizes, 2);
+@@ -4978,9 +4978,15 @@ static void spirv_compiler_emit_output(struct spirv_compiler *compiler,
+ 
+         spirv_compiler_emit_register_execution_mode(compiler, &dst->reg);
+     }
++    else if (signature_element->target_location == SIGNATURE_TARGET_LOCATION_UNUSED)
++    {
++        storage_class = SpvStorageClassPrivate;
++        id = spirv_compiler_emit_array_variable(compiler, &builder->global_stream,
++                storage_class, component_type, output_component_count, array_sizes, 2);
++    }
+     else
+     {
+-        unsigned int location = signature_element->register_index;
++        unsigned int location = signature_element->target_location;
+ 
+         if (is_patch_constant)
+             location += shader_signature_next_location(&compiler->output_signature);
+@@ -4989,10 +4995,10 @@ static void spirv_compiler_emit_output(struct spirv_compiler *compiler,
+                 storage_class, component_type, output_component_count, array_sizes, 2);
+         vkd3d_spirv_add_iface_variable(builder, id);
+ 
+-        if (is_dual_source_blending(compiler) && signature_element->register_index < 2)
++        if (is_dual_source_blending(compiler) && location < 2)
+         {
+             vkd3d_spirv_build_op_decorate1(builder, id, SpvDecorationLocation, 0);
+-            vkd3d_spirv_build_op_decorate1(builder, id, SpvDecorationIndex, signature_element->register_index);
++            vkd3d_spirv_build_op_decorate1(builder, id, SpvDecorationIndex, location);
+         }
+         else
+         {
+@@ -9542,7 +9548,7 @@ static int spirv_compiler_generate_spirv(struct spirv_compiler *compiler,
+     compiler->location.column = 0;
+     compiler->location.line = 1;
+ 
+-    if ((result = vkd3d_shader_normalise(parser)) < 0)
++    if ((result = vkd3d_shader_normalise(parser, compile_info)) < 0)
+         return result;
+ 
+     instructions = parser->instructions;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
+index d59cd704ceb..512d9ea41e7 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
+@@ -1891,3 +1891,41 @@ void shader_instruction_array_destroy(struct vkd3d_shader_instruction_array *ins
+         vkd3d_free(instructions->icbs[i]);
+     vkd3d_free(instructions->icbs);
+ }
++
++void vkd3d_shader_build_varying_map(const struct vkd3d_shader_signature *output_signature,
++        const struct vkd3d_shader_signature *input_signature,
++        unsigned int *ret_count, struct vkd3d_shader_varying_map *varyings)
++{
++    unsigned int count = 0;
++    unsigned int i;
++
++    TRACE("output_signature %p, input_signature %p, ret_count %p, varyings %p.\n",
++            output_signature, input_signature, ret_count, varyings);
++
++    for (i = 0; i < input_signature->element_count; ++i)
++    {
++        const struct vkd3d_shader_signature_element *input_element, *output_element;
++
++        input_element = &input_signature->elements[i];
++
++        if (input_element->sysval_semantic != VKD3D_SHADER_SV_NONE)
++            continue;
++
++        varyings[count].input_register_index = input_element->register_index;
++        varyings[count].input_mask = input_element->mask;
++
++        if ((output_element = vkd3d_shader_find_signature_element(output_signature,
++                input_element->semantic_name, input_element->semantic_index, 0)))
++        {
++            varyings[count].output_signature_index = output_element - output_signature->elements;
++        }
++        else
++        {
++            varyings[count].output_signature_index = output_signature->element_count;
++        }
++
++        ++count;
++    }
++
++    *ret_count = count;
++}
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+index d35f49a63a2..dc43175d4b5 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+@@ -168,6 +168,8 @@ enum vkd3d_shader_error
+     VKD3D_SHADER_WARNING_DXIL_INVALID_BLOCK_LENGTH      = 8302,
+     VKD3D_SHADER_WARNING_DXIL_INVALID_MODULE_LENGTH     = 8303,
+     VKD3D_SHADER_WARNING_DXIL_IGNORING_OPERANDS         = 8304,
++
++    VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED             = 9000,
+ };
+ 
+ enum vkd3d_shader_opcode
+@@ -807,6 +809,8 @@ enum vkd3d_shader_input_sysval_semantic
+     VKD3D_SIV_LINE_DENSITY_TESS_FACTOR     = 22,
+ };
+ 
++#define SIGNATURE_TARGET_LOCATION_UNUSED (~0u)
++
+ struct signature_element
+ {
+     unsigned int sort_index;
+@@ -815,11 +819,15 @@ struct signature_element
+     unsigned int stream_index;
+     enum vkd3d_shader_sysval_semantic sysval_semantic;
+     enum vkd3d_shader_component_type component_type;
++    /* Register index in the source shader. */
+     unsigned int register_index;
+     unsigned int register_count;
+     unsigned int mask;
+     unsigned int used_mask;
+     enum vkd3d_shader_minimum_precision min_precision;
++    /* Register index / location in the target shader.
++     * If SIGNATURE_TARGET_LOCATION_UNUSED, this element should not be written. */
++    unsigned int target_location;
+ };
+ 
+ struct shader_signature
+@@ -1406,6 +1414,7 @@ void dxbc_writer_add_section(struct dxbc_writer *dxbc, uint32_t tag, const void
+ void dxbc_writer_init(struct dxbc_writer *dxbc);
+ int dxbc_writer_write(struct dxbc_writer *dxbc, struct vkd3d_shader_code *code);
+ 
+-enum vkd3d_result vkd3d_shader_normalise(struct vkd3d_shader_parser *parser);
++enum vkd3d_result vkd3d_shader_normalise(struct vkd3d_shader_parser *parser,
++        const struct vkd3d_shader_compile_info *compile_info);
+ 
+ #endif  /* __VKD3D_SHADER_PRIVATE_H */
+-- 
+2.40.1
+
