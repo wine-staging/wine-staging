@@ -77,15 +77,15 @@ def parse_def_file(name, path):
 
 def apply_patch(patch):
     if backend == 'git-am':
-        return run(['git','-C',winedir,'am',patch])
+        return run(['git','-C',winedir,'am','--whitespace=warn',patch])
     elif backend == 'git-am-C1':
-        return run(['git','-C',winedir,'am','-C1',patch])
+        return run(['git','-C',winedir,'am','--whitespace=warn','-C1',patch])
     elif backend == 'patch':
         with open(patch) as f:
             print(patchdir+'/gitapply.sh -d', winedir, '<', patch)
             return subprocess.call([patchdir+'/gitapply.sh','-d',winedir],stdin=f)
     elif backend == 'git-apply':
-        return run(['git','-C',winedir,'apply','--index',patch])
+        return run(['git','-C',winedir,'apply','--index','--whitespace=warn',patch])
 
 def run_autoconf(patch):
     if not force_autoconf: return
