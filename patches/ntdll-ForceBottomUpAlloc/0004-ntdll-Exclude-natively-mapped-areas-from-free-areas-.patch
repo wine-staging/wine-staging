@@ -1,35 +1,34 @@
-From bd1c2ee8168bc923e3040af04ea3bebc8c021ea5 Mon Sep 17 00:00:00 2001
+From fa77cda3f27c53e907b9dce6d15dd767be73bd85 Mon Sep 17 00:00:00 2001
 From: Paul Gofman <pgofman@codeweavers.com>
-Date: Tue, 2 Jun 2020 21:06:33 +0300
+Date: Fri, 1 Dec 2023 14:55:20 -0600
 Subject: [PATCH] ntdll: Exclude natively mapped areas from free areas list.
 
 ---
- dlls/ntdll/unix/virtual.c | 126 ++++++++++++++++++++++++++++++++------
- 1 file changed, 107 insertions(+), 19 deletions(-)
+ dlls/ntdll/unix/virtual.c | 104 ++++++++++++++++++++++++++++++++++----
+ 1 file changed, 95 insertions(+), 9 deletions(-)
 
 diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
-index b189ded181b..00569e5e24c 100644
+index fe6dc86c80b..c0698e15eb6 100644
 --- a/dlls/ntdll/unix/virtual.c
 +++ b/dlls/ntdll/unix/virtual.c
-@@ -130,6 +130,7 @@ C_ASSERT( offsetof( struct file_view, entry ) == 0 );
- #define VPROT_SYSTEM     0x0200  /* system view (underlying mmap not under our control) */
+@@ -127,6 +127,7 @@ struct file_view
+ #define VPROT_SYSTEM           0x0200  /* system view (underlying mmap not under our control) */
  #define VPROT_PLACEHOLDER      0x0400
  #define VPROT_FREE_PLACEHOLDER 0x0800
-+#define VPROT_NATIVE     0x1000
++#define VPROT_NATIVE           0x1000
  
  /* Conversion from VPROT_* to Win32 flags */
  static const BYTE VIRTUAL_Win32Flags[16] =
-@@ -184,6 +185,9 @@ static void *working_set_limit   = (void *)0x7fff0000;
+@@ -180,6 +181,8 @@ static void *working_set_limit   = (void *)0x7fff0000;
+ #endif
  
- static UINT64 *arm64ec_map;
- 
+ static struct file_view *arm64ec_view;
 +static const ptrdiff_t max_try_map_step = 0x40000000;
 +static BOOL increase_try_map_step = TRUE;
-+
- struct _KUSER_SHARED_DATA *user_shared_data = (void *)0x7ffe0000;
  
- /* TEB allocation blocks */
-@@ -1164,7 +1168,9 @@ static void dump_view( struct file_view *view )
+ ULONG_PTR user_space_wow_limit = 0;
+ struct _KUSER_SHARED_DATA *user_shared_data = (void *)0x7ffe0000;
+@@ -1134,7 +1137,9 @@ static void dump_view( struct file_view *view )
      BYTE prot = get_page_vprot( addr );
  
      TRACE( "View: %p - %p", addr, addr + view->size - 1 );
@@ -40,7 +39,7 @@ index b189ded181b..00569e5e24c 100644
          TRACE( " (builtin image)\n" );
      else if (view->protect & VPROT_FREE_PLACEHOLDER)
          TRACE( " (placeholder)\n" );
-@@ -1283,6 +1289,8 @@ struct alloc_area
+@@ -1254,6 +1259,8 @@ struct alloc_area
      int unix_prot;
      BOOL top_down;
      UINT_PTR align_mask;
@@ -49,7 +48,7 @@ index b189ded181b..00569e5e24c 100644
  };
  
  /***********************************************************************
-@@ -1291,27 +1299,35 @@ struct alloc_area
+@@ -1262,9 +1269,12 @@ struct alloc_area
   * Try mmaping some expected free memory region, eventually stepping and
   * retrying inside it, and return where it actually succeeded, or NULL.
   */
@@ -58,20 +57,14 @@ index b189ded181b..00569e5e24c 100644
 +static void* try_map_free_area( struct alloc_area *area, void *base, void *end, void *start )
  {
 +    ptrdiff_t step = area->step;
-+    UINT_PTR abs_step = step > 0 ? step : -step;
++    size_t abs_step = step > 0 ? step : -step;
++    size_t size = area->size;
++    int unix_prot = area->unix_prot;
      void *ptr;
  
--    while (start && base <= start && (char*)start + size <= (char*)end)
-+    while (start && base <= start && (char*)start + area->size <= (char*)end)
-     {
--        if ((ptr = anon_mmap_tryfixed( start, size, unix_prot, 0 )) != MAP_FAILED) return start;
-+        if ((ptr = anon_mmap_tryfixed( start, area->size, area->unix_prot, 0 ))  != MAP_FAILED) return start;
-         TRACE( "Found free area is already mapped, start %p.\n", start );
-         if (errno != EEXIST)
-         {
-             ERR( "mmap() error %s, range %p-%p, unix_prot %#x.\n",
--                 strerror(errno), start, (char *)start + size, unix_prot );
-+                 strerror(errno), start, (char *)start + area->size, area->unix_prot );
+     while (start && base <= start && (char*)start + size <= (char*)end)
+@@ -1277,12 +1287,19 @@ static void* try_map_free_area( void *base, void *end, ptrdiff_t step,
+                  strerror(errno), start, (char *)start + size, unix_prot );
              return NULL;
          }
 +        if (!area->native_mapped && step && abs_step < (granularity_mask + 1) * 2)
@@ -91,63 +84,36 @@ index b189ded181b..00569e5e24c 100644
      }
  
      return NULL;
-@@ -1807,9 +1823,9 @@ static int alloc_area_in_reserved_or_between_callback( void *start, SIZE_T size,
-         assert(intersect_start <= intersect_end);
-         if (area->map_area_end - intersect_end >= area->size)
-         {
--            alloc_start = ROUND_ADDR( (char *)area->map_area_end - size, align_mask );
--            if ((area->result = try_map_free_area( intersect_end, alloc_start + size, area->step,
--                    alloc_start, area->size, area->unix_prot )))
-+            alloc_start = ROUND_ADDR( (char *)area->map_area_end - area->size, align_mask );
-+            if ((area->result = try_map_free_area( area, intersect_end,
-+                    alloc_start + size, alloc_start )))
-                 return 1;
-         }
- 
-@@ -1848,8 +1864,8 @@ static int alloc_area_in_reserved_or_between_callback( void *start, SIZE_T size,
-         if (intersect_start - area->map_area_start >= area->size)
-         {
-             alloc_start = ROUND_ADDR( area->map_area_start + align_mask, align_mask );
--            if ((area->result = try_map_free_area( area->map_area_start, intersect_start, area->step,
--                    alloc_start, area->size, area->unix_prot )))
-+            if ((area->result = try_map_free_area( area, area->map_area_start,
-+                    intersect_start, alloc_start )))
-                 return 1;
-         }
- 
-@@ -1910,8 +1926,7 @@ static void *alloc_free_area_in_range( struct alloc_area *area, char *base, char
-         if (start >= area->map_area_end || start < area->map_area_start)
-             return NULL;
- 
--        return try_map_free_area( area->map_area_start, start + area->size, area->step,
--                start, area->size, area->unix_prot );
-+        return try_map_free_area( area, area->map_area_start, start + area->size, start );
-     }
-     else
+@@ -1707,11 +1724,11 @@ static void *try_map_free_area_range( struct alloc_area *area, char *start, char
      {
-@@ -1921,8 +1936,7 @@ static void *alloc_free_area_in_range( struct alloc_area *area, char *base, char
-                 || area->map_area_end - start < area->size)
-             return NULL;
- 
--        return try_map_free_area( start, area->map_area_end, area->step,
--                start, area->size, area->unix_prot );
-+        return try_map_free_area( area, start, area->map_area_end, start );
+         if (end - start < area->size) return NULL;
+         alloc_start = ROUND_ADDR( end - area->size, area->align_mask );
+-        return try_map_free_area( start, alloc_start + area->size, area->step, alloc_start, area->size, area->unix_prot );
++        return try_map_free_area( area, start, alloc_start + area->size, alloc_start );
      }
+ 
+     alloc_start = ROUND_ADDR( start + area->align_mask, area->align_mask );
+-    return try_map_free_area( start, end, area->step, alloc_start, area->size, area->unix_prot );
++    return try_map_free_area( area, start, end, alloc_start );
  }
  
-@@ -1933,6 +1947,7 @@ static void *alloc_free_area( void *limit, size_t size, BOOL top_down, int unix_
+ static void *alloc_free_area_in_range( struct alloc_area *area, char *base, char *end )
+@@ -1801,9 +1818,10 @@ static void *alloc_free_area( char *limit_low, char *limit_high, size_t size, BO
+     struct range_entry *range, *ranges_start, *ranges_end;
+     char *reserve_start, *reserve_end;
      struct alloc_area area;
+-    void *result = NULL;
++    char *result = NULL;
      char *base, *end;
      int ranges_inc;
 +    UINT status;
  
-     TRACE("limit %p, size %p, top_down %#x.\n", limit, (void *)size, top_down);
+     TRACE("limit %p-%p, size %p, top_down %#x.\n", limit_low, limit_high, (void *)size, top_down);
  
-@@ -2001,7 +2016,58 @@ static void *alloc_free_area( void *limit, size_t size, BOOL top_down, int unix_
-         if ((area.result = alloc_free_area_in_range( &area, base, end )))
+@@ -1868,6 +1886,50 @@ static void *alloc_free_area( char *limit_low, char *limit_high, size_t size, BO
+         if ((result = alloc_free_area_in_range( &area, base, end )))
              break;
      }
--    return NULL;
 +
 +    if (area.native_mapped)
 +    {
@@ -157,10 +123,10 @@ index b189ded181b..00569e5e24c 100644
 +                area.native_mapped, (char *)area.native_mapped + area.native_mapped_size );
 +
 +        native_mapped_start = ROUND_ADDR(area.native_mapped, granularity_mask);
-+        native_mapped_end = ROUND_ADDR((char *)area.native_mapped + area.native_mapped_size + granularity_mask,
++        native_mapped_end = ROUND_ADDR(area.native_mapped + area.native_mapped_size + granularity_mask,
 +                granularity_mask);
 +
-+        if (area.result >= native_mapped_end || area.result + size < native_mapped_start)
++        if (result >= native_mapped_end || result + size < native_mapped_start)
 +        /* In case of top down allocation try_map_free_area() result area can overlap the
 +         * area previously marked as native if the latter was unmapped behind our back. */
 +        {
@@ -172,14 +138,8 @@ index b189ded181b..00569e5e24c 100644
 +                next = prev;
 +                prev = WINE_RB_ENTRY_VALUE( rb_prev( &next->entry ), struct file_view, entry );
 +            }
-+            else if (prev)
-+            {
-+                next = WINE_RB_ENTRY_VALUE( rb_next( &prev->entry ), struct file_view, entry );
-+            }
-+            else
-+            {
-+                next = NULL;
-+            }
++            else if (prev) next = WINE_RB_ENTRY_VALUE( rb_next( &prev->entry ), struct file_view, entry );
++            else           next = NULL;
 +
 +            if (prev && prev->protect & VPROT_NATIVE && (char *)prev->base + prev->size >= native_mapped_start)
 +            {
@@ -198,13 +158,11 @@ index b189ded181b..00569e5e24c 100644
 +                ERR("Could not create view for natively mapped area, status %#x.\n", status);
 +        }
 +    }
-+
-+    return area.result;
+     return result;
  }
  
- /***********************************************************************
-@@ -2055,6 +2121,17 @@ static NTSTATUS map_fixed_area( void *base, size_t size, unsigned int vprot )
-     return STATUS_SUCCESS;
+@@ -1927,6 +1989,17 @@ failed:
+     return status;
  }
  
 +static void clear_native_views(void)
@@ -221,22 +179,24 @@ index b189ded181b..00569e5e24c 100644
  /***********************************************************************
   *           map_view
   *
-@@ -2114,7 +2191,13 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
-     }
-     else if (!(ptr = alloc_free_area( (void *)limit, size, top_down, get_unix_prot( vprot ), align_mask )))
-     {
--        return STATUS_NO_MEMORY;
-+        WARN( "Allocation failed, clearing native views.\n" );
+@@ -1976,7 +2049,15 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
+         if (!align_mask) align_mask = granularity_mask;
+ 
+         if (!(ptr = alloc_free_area( (void *)limit_low, (void *)limit_high, size, top_down, get_unix_prot( vprot ), align_mask )))
+-            return STATUS_NO_MEMORY;
++        {
++            WARN("Allocation failed, clearing native views.\n");
 +
-+        clear_native_views();
-+        if (!is_win64) increase_try_map_step = FALSE;
-+        ptr = alloc_free_area( (void *)limit, size, top_down, get_unix_prot( vprot ), align_mask );
-+        if (!is_win64) increase_try_map_step = TRUE;
-+        if (!ptr) return STATUS_NO_MEMORY;
++            clear_native_views();
++            if (!is_win64) increase_try_map_step = FALSE;
++            ptr = alloc_free_area( (void *)limit_low, (void *)limit_high, size, top_down, get_unix_prot( vprot ), align_mask );
++            if (!is_win64) increase_try_map_step = TRUE;
++            if (!ptr) return STATUS_NO_MEMORY;
++        }
      }
      status = create_view( view_ret, ptr, size, vprot );
      if (status != STATUS_SUCCESS) unmap_area( ptr, size );
-@@ -4106,7 +4189,12 @@ void virtual_set_force_exec( BOOL enable )
+@@ -4256,7 +4337,12 @@ void virtual_set_force_exec( BOOL enable )
          WINE_RB_FOR_EACH_ENTRY( view, &views_tree, struct file_view, entry )
          {
              /* file mappings are always accessible */
@@ -251,5 +211,5 @@ index b189ded181b..00569e5e24c 100644
              mprotect_range( view->base, view->size, commit, 0 );
          }
 -- 
-2.40.1
+2.43.0
 
