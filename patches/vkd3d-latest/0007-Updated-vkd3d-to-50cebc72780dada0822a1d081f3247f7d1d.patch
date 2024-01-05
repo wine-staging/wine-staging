@@ -1,0 +1,433 @@
+From 7fb898ef917d76fc44c94a90abb2aa747b8693ef Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Fri, 5 Jan 2024 11:03:00 +1100
+Subject: [PATCH] Updated vkd3d to 50cebc72780dada0822a1d081f3247f7d1dbc728.
+
+---
+ libs/vkd3d/libs/vkd3d-shader/d3dbc.c          |  24 +++-
+ libs/vkd3d/libs/vkd3d-shader/dxil.c           |   1 +
+ libs/vkd3d/libs/vkd3d-shader/ir.c             | 136 ++++++++++++++----
+ libs/vkd3d/libs/vkd3d-shader/spirv.c          |   9 +-
+ libs/vkd3d/libs/vkd3d-shader/tpf.c            |   2 +-
+ .../libs/vkd3d-shader/vkd3d_shader_private.h  |  11 +-
+ libs/vkd3d/libs/vkd3d/utils.c                 |  12 +-
+ 7 files changed, 149 insertions(+), 46 deletions(-)
+
+diff --git a/libs/vkd3d/libs/vkd3d-shader/d3dbc.c b/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
+index ca6e3b72de9..8fec1e6371a 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
++++ b/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
+@@ -482,9 +482,23 @@ static void shader_sm1_parse_dst_param(uint32_t param, const struct vkd3d_shader
+         dst->reg.dimension = VSIR_DIMENSION_SCALAR;
+     else
+         dst->reg.dimension = VSIR_DIMENSION_VEC4;
+-    dst->write_mask = (param & VKD3D_SM1_WRITEMASK_MASK) >> VKD3D_SM1_WRITEMASK_SHIFT;
+     dst->modifiers = (param & VKD3D_SM1_DST_MODIFIER_MASK) >> VKD3D_SM1_DST_MODIFIER_SHIFT;
+     dst->shift = (param & VKD3D_SM1_DSTSHIFT_MASK) >> VKD3D_SM1_DSTSHIFT_SHIFT;
++
++    switch (dst->reg.dimension)
++    {
++        case VSIR_DIMENSION_SCALAR:
++            dst->write_mask = VKD3DSP_WRITEMASK_0;
++            break;
++
++        case VSIR_DIMENSION_VEC4:
++            dst->write_mask = (param & VKD3D_SM1_WRITEMASK_MASK) >> VKD3D_SM1_WRITEMASK_SHIFT;
++            break;
++
++        default:
++            dst->write_mask = 0;
++            break;
++    }
+ }
+ 
+ static struct signature_element *find_signature_element(const struct shader_signature *signature,
+@@ -518,8 +532,6 @@ static struct signature_element *find_signature_element_by_register_index(
+     return NULL;
+ }
+ 
+-#define SM1_COLOR_REGISTER_OFFSET 8
+-
+ static bool add_signature_element(struct vkd3d_shader_sm1_parser *sm1, bool output,
+         const char *name, unsigned int index, enum vkd3d_shader_sysval_semantic sysval,
+         unsigned int register_index, bool is_dcl, unsigned int mask)
+@@ -647,15 +659,15 @@ static bool add_signature_element_from_register(struct vkd3d_shader_sm1_parser *
+             {
+                 case 0:
+                     return add_signature_element(sm1, true, "POSITION", 0,
+-                            VKD3D_SHADER_SV_POSITION, register_index, is_dcl, mask);
++                            VKD3D_SHADER_SV_POSITION, SM1_RASTOUT_REGISTER_OFFSET + register_index, is_dcl, mask);
+ 
+                 case 1:
+                     return add_signature_element(sm1, true, "FOG", 0,
+-                            VKD3D_SHADER_SV_NONE, register_index, is_dcl, 0x1);
++                            VKD3D_SHADER_SV_NONE, SM1_RASTOUT_REGISTER_OFFSET + register_index, is_dcl, 0x1);
+ 
+                 case 2:
+                     return add_signature_element(sm1, true, "PSIZE", 0,
+-                            VKD3D_SHADER_SV_NONE, register_index, is_dcl, 0x1);
++                            VKD3D_SHADER_SV_NONE, SM1_RASTOUT_REGISTER_OFFSET + register_index, is_dcl, 0x1);
+ 
+                 default:
+                     vkd3d_shader_parser_error(&sm1->p, VKD3D_SHADER_ERROR_D3DBC_INVALID_REGISTER_INDEX,
+diff --git a/libs/vkd3d/libs/vkd3d-shader/dxil.c b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+index 2424b176068..c744dfcedf0 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/dxil.c
++++ b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+@@ -3432,6 +3432,7 @@ static void sm6_parser_emit_dx_create_handle(struct sm6_parser *sm6, struct sm6_
+     /* Set idx_count to 3 for use with load instructions.
+      * TODO: set register type from resource type when other types are supported. */
+     vsir_register_init(reg, VKD3DSPR_CONSTBUFFER, VKD3D_DATA_FLOAT, 3);
++    reg->dimension = VSIR_DIMENSION_VEC4;
+     reg->idx[0].offset = id;
+     register_index_address_init(&reg->idx[1], operands[2], sm6);
+     reg->non_uniform = !!sm6_value_get_constant_uint(operands[3]);
+diff --git a/libs/vkd3d/libs/vkd3d-shader/ir.c b/libs/vkd3d/libs/vkd3d-shader/ir.c
+index d38b3c39712..bac4269198b 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/ir.c
++++ b/libs/vkd3d/libs/vkd3d-shader/ir.c
+@@ -533,6 +533,7 @@ struct io_normaliser
+ {
+     struct vkd3d_shader_instruction_array instructions;
+     enum vkd3d_shader_type shader_type;
++    uint8_t major;
+     struct shader_signature *input_signature;
+     struct shader_signature *output_signature;
+     struct shader_signature *patch_constant_signature;
+@@ -867,34 +868,65 @@ static bool shader_dst_param_io_normalise(struct vkd3d_shader_dst_param *dst_par
+     const struct shader_signature *signature;
+     const struct signature_element *e;
+ 
+-    if ((reg->type == VKD3DSPR_OUTPUT && io_normaliser_is_in_fork_or_join_phase(normaliser))
+-            || reg->type == VKD3DSPR_PATCHCONST)
+-    {
+-        signature = normaliser->patch_constant_signature;
+-        /* Convert patch constant outputs to the patch constant register type to avoid the need
+-         * to convert compiler symbols when accessed as inputs in a later stage. */
+-        reg->type = VKD3DSPR_PATCHCONST;
+-        dcl_params = normaliser->pc_dcl_params;
+-    }
+-    else if (reg->type == VKD3DSPR_OUTPUT || dst_param->reg.type == VKD3DSPR_COLOROUT)
+-    {
+-        signature = normaliser->output_signature;
+-        reg->type = VKD3DSPR_OUTPUT;
+-        dcl_params = normaliser->output_dcl_params;
+-    }
+-    else if (dst_param->reg.type == VKD3DSPR_INCONTROLPOINT || dst_param->reg.type == VKD3DSPR_INPUT)
+-    {
+-        signature = normaliser->input_signature;
+-        reg->type = VKD3DSPR_INPUT;
+-        dcl_params = normaliser->input_dcl_params;
+-    }
+-    else
++    switch (reg->type)
+     {
+-        return true;
++        case VKD3DSPR_OUTPUT:
++            reg_idx = reg->idx[reg->idx_count - 1].offset;
++            if (io_normaliser_is_in_fork_or_join_phase(normaliser))
++            {
++                signature = normaliser->patch_constant_signature;
++                /* Convert patch constant outputs to the patch constant register type to avoid the need
++                 * to convert compiler symbols when accessed as inputs in a later stage. */
++                reg->type = VKD3DSPR_PATCHCONST;
++                dcl_params = normaliser->pc_dcl_params;
++            }
++            else
++            {
++                signature = normaliser->output_signature;
++                dcl_params = normaliser->output_dcl_params;
++            }
++            break;
++
++        case VKD3DSPR_PATCHCONST:
++            reg_idx = reg->idx[reg->idx_count - 1].offset;
++            signature = normaliser->patch_constant_signature;
++            dcl_params = normaliser->pc_dcl_params;
++            break;
++
++        case VKD3DSPR_COLOROUT:
++            reg_idx = reg->idx[0].offset;
++            signature = normaliser->output_signature;
++            reg->type = VKD3DSPR_OUTPUT;
++            dcl_params = normaliser->output_dcl_params;
++            break;
++
++        case VKD3DSPR_INCONTROLPOINT:
++        case VKD3DSPR_INPUT:
++            reg_idx = reg->idx[reg->idx_count - 1].offset;
++            signature = normaliser->input_signature;
++            reg->type = VKD3DSPR_INPUT;
++            dcl_params = normaliser->input_dcl_params;
++            break;
++
++        case VKD3DSPR_ATTROUT:
++            reg_idx = SM1_COLOR_REGISTER_OFFSET + reg->idx[0].offset;
++            signature = normaliser->output_signature;
++            reg->type = VKD3DSPR_OUTPUT;
++            dcl_params = normaliser->output_dcl_params;
++            break;
++
++        case VKD3DSPR_RASTOUT:
++            reg_idx = SM1_RASTOUT_REGISTER_OFFSET + reg->idx[0].offset;
++            signature = normaliser->output_signature;
++            reg->type = VKD3DSPR_OUTPUT;
++            dcl_params = normaliser->output_dcl_params;
++            break;
++
++        default:
++            return true;
+     }
+ 
+     id_idx = reg->idx_count - 1;
+-    reg_idx = reg->idx[id_idx].offset;
+     write_mask = dst_param->write_mask;
+     element_idx = shader_signature_find_element_for_reg(signature, reg_idx, write_mask);
+     e = &signature->elements[element_idx];
+@@ -982,26 +1014,42 @@ static void shader_src_param_io_normalise(struct vkd3d_shader_src_param *src_par
+     switch (reg->type)
+     {
+         case VKD3DSPR_PATCHCONST:
++            reg_idx = reg->idx[reg->idx_count - 1].offset;
+             signature = normaliser->patch_constant_signature;
+             break;
++
+         case VKD3DSPR_INCONTROLPOINT:
+             reg->type = VKD3DSPR_INPUT;
+             /* fall through */
+         case VKD3DSPR_INPUT:
++            if (normaliser->major < 3 && normaliser->shader_type == VKD3D_SHADER_TYPE_PIXEL)
++                reg_idx = SM1_COLOR_REGISTER_OFFSET + reg->idx[0].offset;
++            else
++                reg_idx = reg->idx[reg->idx_count - 1].offset;
+             signature = normaliser->input_signature;
+             break;
++
+         case VKD3DSPR_OUTCONTROLPOINT:
+             reg->type = VKD3DSPR_OUTPUT;
+             /* fall through */
+         case VKD3DSPR_OUTPUT:
++            reg_idx = reg->idx[reg->idx_count - 1].offset;
+             signature = normaliser->output_signature;
+             break;
++
++        case VKD3DSPR_TEXTURE:
++            if (normaliser->shader_type != VKD3D_SHADER_TYPE_PIXEL)
++                return;
++            reg->type = VKD3DSPR_INPUT;
++            reg_idx = reg->idx[0].offset;
++            signature = normaliser->input_signature;
++            break;
++
+         default:
+             return;
+     }
+ 
+     id_idx = reg->idx_count - 1;
+-    reg_idx = reg->idx[id_idx].offset;
+     write_mask = VKD3DSP_WRITEMASK_0 << vsir_swizzle_get_component(src_param->swizzle, 0);
+     element_idx = shader_signature_find_element_for_reg(signature, reg_idx, write_mask);
+ 
+@@ -1084,6 +1132,7 @@ static enum vkd3d_result shader_normalise_io_registers(struct vkd3d_shader_parse
+ 
+     normaliser.phase = VKD3DSIH_INVALID;
+     normaliser.shader_type = parser->shader_version.type;
++    normaliser.major = parser->shader_version.major;
+     normaliser.input_signature = &parser->shader_desc.input_signature;
+     normaliser.output_signature = &parser->shader_desc.output_signature;
+     normaliser.patch_constant_signature = &parser->shader_desc.patch_constant_signature;
+@@ -1555,6 +1604,19 @@ static void vsir_validate_register(struct validation_context *ctx,
+                         reg->idx[0].offset, temp_count);
+             break;
+ 
++        case VKD3DSPR_SSA:
++            if (reg->idx_count != 1)
++                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_INDEX_COUNT, "Invalid index count %u for a SSA register.",
++                        reg->idx_count);
++
++            if (reg->idx_count >= 1 && reg->idx[0].rel_addr)
++                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_INDEX, "Non-NULL relative address for a SSA register.");
++
++            if (reg->idx_count >= 1 && reg->idx[0].offset >= ctx->parser->shader_desc.ssa_count)
++                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_INDEX, "SSA register index %u exceeds the maximum count %u.",
++                        reg->idx[0].offset, ctx->parser->shader_desc.ssa_count);
++            break;
++
+         case VKD3DSPR_NULL:
+             if (reg->idx_count != 0)
+                 validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_INDEX_COUNT, "Invalid index count %u for a NULL register.",
+@@ -1587,6 +1649,26 @@ static void vsir_validate_dst_param(struct validation_context *ctx,
+         validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_WRITE_MASK, "Destination has invalid write mask %#x.",
+                 dst->write_mask);
+ 
++    switch (dst->reg.dimension)
++    {
++        case VSIR_DIMENSION_SCALAR:
++            if (dst->write_mask != VKD3DSP_WRITEMASK_0)
++                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_WRITE_MASK, "Scalar destination has invalid write mask %#x.",
++                    dst->write_mask);
++            break;
++
++        case VSIR_DIMENSION_VEC4:
++            if (dst->write_mask == 0)
++                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_WRITE_MASK, "Vec4 destination has empty write mask.");
++            break;
++
++        default:
++            if (dst->write_mask != 0)
++                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_WRITE_MASK, "Destination of dimension %u has invalid write mask %#x.",
++                    dst->reg.dimension, dst->write_mask);
++            break;
++    }
++
+     if (dst->modifiers & ~VKD3DSPDM_MASK)
+         validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_MODIFIERS, "Destination has invalid modifiers %#x.",
+                 dst->modifiers);
+@@ -1617,6 +1699,10 @@ static void vsir_validate_src_param(struct validation_context *ctx,
+         validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_SWIZZLE, "Source has invalid swizzle %#x.",
+                 src->swizzle);
+ 
++    if (src->reg.dimension != VSIR_DIMENSION_VEC4 && src->swizzle != 0)
++        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_SWIZZLE, "Source of dimension %u has invalid swizzle %#x.",
++                src->reg.dimension, src->swizzle);
++
+     if (src->modifiers >= VKD3DSPSM_COUNT)
+         validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_MODIFIERS, "Source has invalid modifiers %#x.",
+                 src->modifiers);
+diff --git a/libs/vkd3d/libs/vkd3d-shader/spirv.c b/libs/vkd3d/libs/vkd3d-shader/spirv.c
+index 387784f2358..a5565d552c0 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/spirv.c
++++ b/libs/vkd3d/libs/vkd3d-shader/spirv.c
+@@ -3600,8 +3600,7 @@ static uint32_t spirv_compiler_get_register_id(struct spirv_compiler *compiler,
+             SpvStorageClassPrivate, VKD3D_SHADER_COMPONENT_FLOAT, VKD3D_VEC4_SIZE);
+ }
+ 
+-static bool vkd3d_swizzle_is_equal(unsigned int dst_write_mask,
+-        unsigned int swizzle, unsigned int write_mask)
++static bool vkd3d_swizzle_is_equal(uint32_t dst_write_mask, uint32_t swizzle, uint32_t write_mask)
+ {
+     return vkd3d_compact_swizzle(VKD3D_SHADER_NO_SWIZZLE, dst_write_mask) == vkd3d_compact_swizzle(swizzle, write_mask);
+ }
+@@ -3913,7 +3912,7 @@ static uint32_t spirv_compiler_emit_load_ssa_reg(struct spirv_compiler *compiler
+ }
+ 
+ static uint32_t spirv_compiler_emit_load_reg(struct spirv_compiler *compiler,
+-        const struct vkd3d_shader_register *reg, DWORD swizzle, uint32_t write_mask)
++        const struct vkd3d_shader_register *reg, uint32_t swizzle, uint32_t write_mask)
+ {
+     struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
+     enum vkd3d_shader_component_type component_type;
+@@ -4209,7 +4208,7 @@ static void spirv_compiler_emit_store_dst(struct spirv_compiler *compiler,
+ 
+ static void spirv_compiler_emit_store_dst_swizzled(struct spirv_compiler *compiler,
+         const struct vkd3d_shader_dst_param *dst, uint32_t val_id,
+-        enum vkd3d_shader_component_type component_type, DWORD swizzle)
++        enum vkd3d_shader_component_type component_type, uint32_t swizzle)
+ {
+     struct vkd3d_shader_dst_param typed_dst = *dst;
+     val_id = spirv_compiler_emit_swizzle(compiler,
+@@ -9420,9 +9419,9 @@ static void spirv_compiler_emit_sync(struct spirv_compiler *compiler,
+         const struct vkd3d_shader_instruction *instruction)
+ {
+     unsigned int memory_semantics = SpvMemorySemanticsAcquireReleaseMask;
+-    unsigned int flags = instruction->flags;
+     SpvScope execution_scope = SpvScopeMax;
+     SpvScope memory_scope = SpvScopeDevice;
++    uint32_t flags = instruction->flags;
+ 
+     if (flags & VKD3DSSF_GROUP_SHARED_MEMORY)
+     {
+diff --git a/libs/vkd3d/libs/vkd3d-shader/tpf.c b/libs/vkd3d/libs/vkd3d-shader/tpf.c
+index f859e758d8e..2cc56663efe 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/tpf.c
++++ b/libs/vkd3d/libs/vkd3d-shader/tpf.c
+@@ -5488,7 +5488,7 @@ static void write_sm4_loop(const struct tpf_writer *tpf, const struct hlsl_ir_lo
+ 
+ static void write_sm4_gather(const struct tpf_writer *tpf, const struct hlsl_ir_node *dst,
+         const struct hlsl_deref *resource, const struct hlsl_deref *sampler,
+-        const struct hlsl_ir_node *coords, DWORD swizzle, const struct hlsl_ir_node *texel_offset)
++        const struct hlsl_ir_node *coords, uint32_t swizzle, const struct hlsl_ir_node *texel_offset)
+ {
+     struct vkd3d_shader_src_param *src;
+     struct sm4_instruction instr;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+index 47b245bd7ee..224d27f4e1b 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+@@ -871,14 +871,14 @@ struct vkd3d_shader_dst_param
+ {
+     struct vkd3d_shader_register reg;
+     uint32_t write_mask;
+-    DWORD modifiers;
+-    DWORD shift;
++    uint32_t modifiers;
++    unsigned int shift;
+ };
+ 
+ struct vkd3d_shader_src_param
+ {
+     struct vkd3d_shader_register reg;
+-    DWORD swizzle;
++    uint32_t swizzle;
+     enum vkd3d_shader_src_modifier modifiers;
+ };
+ 
+@@ -955,6 +955,9 @@ enum vkd3d_shader_input_sysval_semantic
+     VKD3D_SIV_LINE_DENSITY_TESS_FACTOR     = 22,
+ };
+ 
++#define SM1_COLOR_REGISTER_OFFSET 8
++#define SM1_RASTOUT_REGISTER_OFFSET 10
++
+ #define SIGNATURE_TARGET_LOCATION_UNUSED (~0u)
+ 
+ struct signature_element
+@@ -1120,7 +1123,7 @@ struct vkd3d_shader_instruction
+ {
+     struct vkd3d_shader_location location;
+     enum vkd3d_shader_opcode handler_idx;
+-    DWORD flags;
++    uint32_t flags;
+     unsigned int dst_count;
+     unsigned int src_count;
+     const struct vkd3d_shader_dst_param *dst;
+diff --git a/libs/vkd3d/libs/vkd3d/utils.c b/libs/vkd3d/libs/vkd3d/utils.c
+index 5ebe1b63e99..751971220e7 100644
+--- a/libs/vkd3d/libs/vkd3d/utils.c
++++ b/libs/vkd3d/libs/vkd3d/utils.c
+@@ -683,7 +683,7 @@ const char *debug_vk_extent_3d(VkExtent3D extent)
+ 
+ const char *debug_vk_queue_flags(VkQueueFlags flags)
+ {
+-    char buffer[120];
++    char buffer[159];
+ 
+     buffer[0] = '\0';
+ #define FLAG_TO_STR(f) if (flags & f) { strcat(buffer, " | "#f); flags &= ~f; }
+@@ -691,6 +691,10 @@ const char *debug_vk_queue_flags(VkQueueFlags flags)
+     FLAG_TO_STR(VK_QUEUE_COMPUTE_BIT)
+     FLAG_TO_STR(VK_QUEUE_TRANSFER_BIT)
+     FLAG_TO_STR(VK_QUEUE_SPARSE_BINDING_BIT)
++    FLAG_TO_STR(VK_QUEUE_PROTECTED_BIT)
++#undef FLAG_TO_STR
++#define FLAG_TO_STR(f, n) if (flags & f) { strcat(buffer, " | "#n); flags &= ~f; }
++    FLAG_TO_STR(0x20, VK_QUEUE_VIDEO_DECODE_BIT_KHR)
+ #undef FLAG_TO_STR
+     if (flags)
+         FIXME("Unrecognized flag(s) %#x.\n", flags);
+@@ -729,10 +733,8 @@ const char *debug_vk_memory_property_flags(VkMemoryPropertyFlags flags)
+     FLAG_TO_STR(VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
+     FLAG_TO_STR(VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT)
+     FLAG_TO_STR(VK_MEMORY_PROPERTY_PROTECTED_BIT)
+-#undef FLAG_TO_STR
+-#define FLAG_TO_STR(f, n) if (flags & f) { strcat(buffer, " | "#n); flags &= ~f; }
+-    FLAG_TO_STR(0x40, VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD)
+-    FLAG_TO_STR(0x80, VK_MEMORY_PROPERTY_DEVICE_UNCACHED_BIT_AMD)
++    FLAG_TO_STR(VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD)
++    FLAG_TO_STR(VK_MEMORY_PROPERTY_DEVICE_UNCACHED_BIT_AMD)
+ #undef FLAG_TO_STR
+     if (flags)
+         FIXME("Unrecognized flag(s) %#x.\n", flags);
+-- 
+2.43.0
+
