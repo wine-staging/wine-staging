@@ -1,0 +1,2252 @@
+From 8b637cc107807cf7a7179fc5c015c7d08c8d4f8f Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Thu, 18 Jan 2024 11:50:14 +1100
+Subject: [PATCH] Updated vkd3d to cd77b2a9be23b9a34d2d6a5cb566ac3873ff29b5.
+
+---
+ libs/vkd3d/include/private/vkd3d_common.h     |  20 +-
+ libs/vkd3d/include/private/vkd3d_debug.h      |  23 +
+ libs/vkd3d/libs/vkd3d-shader/d3d_asm.c        |   2 +
+ libs/vkd3d/libs/vkd3d-shader/dxbc.c           |   5 +
+ libs/vkd3d/libs/vkd3d-shader/dxil.c           |  23 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl.c           |   1 -
+ libs/vkd3d/libs/vkd3d-shader/hlsl.y           |  59 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c   |   6 +
+ libs/vkd3d/libs/vkd3d-shader/ir.c             | 758 +++++++++++++++++-
+ libs/vkd3d/libs/vkd3d-shader/spirv.c          | 648 +++++----------
+ libs/vkd3d/libs/vkd3d-shader/tpf.c            |  26 +-
+ .../libs/vkd3d-shader/vkd3d_shader_private.h  |  14 +
+ libs/vkd3d/libs/vkd3d/resource.c              |   4 +-
+ libs/vkd3d/libs/vkd3d/vkd3d_private.h         |   2 +-
+ 14 files changed, 1092 insertions(+), 499 deletions(-)
+
+diff --git a/libs/vkd3d/include/private/vkd3d_common.h b/libs/vkd3d/include/private/vkd3d_common.h
+index 4c97fa06e32..63e21c22067 100644
+--- a/libs/vkd3d/include/private/vkd3d_common.h
++++ b/libs/vkd3d/include/private/vkd3d_common.h
+@@ -267,16 +267,28 @@ static inline int ascii_strcasecmp(const char *a, const char *b)
+     return c_a - c_b;
+ }
+ 
++static inline uint64_t vkd3d_atomic_add_fetch_u64(uint64_t volatile *x, uint64_t val)
++{
++#if HAVE_SYNC_ADD_AND_FETCH
++    return __sync_add_and_fetch(x, val);
++#elif defined(_WIN32)
++    return InterlockedAdd64((LONG64 *)x, val);
++#else
++# error "vkd3d_atomic_add_fetch_u64() not implemented for this platform"
++#endif
++}
++
++static inline uint64_t vkd3d_atomic_increment_u64(uint64_t volatile *x)
++{
++    return vkd3d_atomic_add_fetch_u64(x, 1);
++}
++
+ #ifndef _WIN32
+ # if HAVE_SYNC_ADD_AND_FETCH
+ static inline LONG InterlockedIncrement(LONG volatile *x)
+ {
+     return __sync_add_and_fetch(x, 1);
+ }
+-static inline LONG64 InterlockedIncrement64(LONG64 volatile *x)
+-{
+-    return __sync_add_and_fetch(x, 1);
+-}
+ # else
+ #  error "InterlockedIncrement() not implemented for this platform"
+ # endif  /* HAVE_SYNC_ADD_AND_FETCH */
+diff --git a/libs/vkd3d/include/private/vkd3d_debug.h b/libs/vkd3d/include/private/vkd3d_debug.h
+index 6708cad344f..663fc311adf 100644
+--- a/libs/vkd3d/include/private/vkd3d_debug.h
++++ b/libs/vkd3d/include/private/vkd3d_debug.h
+@@ -104,6 +104,29 @@ static inline const char *debugstr_guid(const GUID *guid)
+             guid->Data4[5], guid->Data4[6], guid->Data4[7]);
+ }
+ 
++static inline const char *debugstr_hresult(HRESULT hr)
++{
++    switch (hr)
++    {
++#define TO_STR(u) case u: return #u;
++        TO_STR(S_OK)
++        TO_STR(S_FALSE)
++        TO_STR(E_NOTIMPL)
++        TO_STR(E_NOINTERFACE)
++        TO_STR(E_POINTER)
++        TO_STR(E_ABORT)
++        TO_STR(E_FAIL)
++        TO_STR(E_OUTOFMEMORY)
++        TO_STR(E_INVALIDARG)
++        TO_STR(DXGI_ERROR_NOT_FOUND)
++        TO_STR(DXGI_ERROR_MORE_DATA)
++        TO_STR(DXGI_ERROR_UNSUPPORTED)
++#undef TO_STR
++        default:
++            return vkd3d_dbg_sprintf("%#x", (int)hr);
++    }
++}
++
+ unsigned int vkd3d_env_var_as_uint(const char *name, unsigned int default_value);
+ 
+ struct vkd3d_debug_option
+diff --git a/libs/vkd3d/libs/vkd3d-shader/d3d_asm.c b/libs/vkd3d/libs/vkd3d-shader/d3d_asm.c
+index 4829956cecf..5685fe4d4a4 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/d3d_asm.c
++++ b/libs/vkd3d/libs/vkd3d-shader/d3d_asm.c
+@@ -44,6 +44,7 @@ static const char * const shader_opcode_names[] =
+     [VKD3DSIH_BEM                             ] = "bem",
+     [VKD3DSIH_BFI                             ] = "bfi",
+     [VKD3DSIH_BFREV                           ] = "bfrev",
++    [VKD3DSIH_BRANCH                          ] = "branch",
+     [VKD3DSIH_BREAK                           ] = "break",
+     [VKD3DSIH_BREAKC                          ] = "breakc",
+     [VKD3DSIH_BREAKP                          ] = "breakp",
+@@ -278,6 +279,7 @@ static const char * const shader_opcode_names[] =
+     [VKD3DSIH_SUB                             ] = "sub",
+     [VKD3DSIH_SWAPC                           ] = "swapc",
+     [VKD3DSIH_SWITCH                          ] = "switch",
++    [VKD3DSIH_SWITCH_MONOLITHIC               ] = "switch",
+     [VKD3DSIH_SYNC                            ] = "sync",
+     [VKD3DSIH_TEX                             ] = "texld",
+     [VKD3DSIH_TEXBEM                          ] = "texbem",
+diff --git a/libs/vkd3d/libs/vkd3d-shader/dxbc.c b/libs/vkd3d/libs/vkd3d-shader/dxbc.c
+index 37ebc73c099..edb65d2e92f 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/dxbc.c
++++ b/libs/vkd3d/libs/vkd3d-shader/dxbc.c
+@@ -552,9 +552,14 @@ static int shdr_handler(const struct vkd3d_shader_dxbc_section_desc *section,
+ 
+ void free_shader_desc(struct vkd3d_shader_desc *desc)
+ {
++    size_t i;
++
+     shader_signature_cleanup(&desc->input_signature);
+     shader_signature_cleanup(&desc->output_signature);
+     shader_signature_cleanup(&desc->patch_constant_signature);
++    for (i = 0; i < desc->block_name_count; ++i)
++        vkd3d_free((void *)desc->block_names[i]);
++    vkd3d_free(desc->block_names);
+ }
+ 
+ int shader_extract_from_dxbc(const struct vkd3d_shader_code *dxbc,
+diff --git a/libs/vkd3d/libs/vkd3d-shader/dxil.c b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+index b39ec204bff..78c1a052539 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/dxil.c
++++ b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+@@ -2691,8 +2691,8 @@ static void sm6_parser_declare_icb(struct sm6_parser *sm6, const struct sm6_type
+ }
+ 
+ static void sm6_parser_declare_indexable_temp(struct sm6_parser *sm6, const struct sm6_type *elem_type,
+-        unsigned int count, unsigned int alignment, unsigned int init, struct vkd3d_shader_instruction *ins,
+-        struct sm6_value *dst)
++        unsigned int count, unsigned int alignment, bool has_function_scope, unsigned int init,
++        struct vkd3d_shader_instruction *ins, struct sm6_value *dst)
+ {
+     enum vkd3d_data_type data_type = vkd3d_data_type_from_sm6_type(elem_type);
+ 
+@@ -2705,6 +2705,7 @@ static void sm6_parser_declare_indexable_temp(struct sm6_parser *sm6, const stru
+     ins->declaration.indexable_temp.alignment = alignment;
+     ins->declaration.indexable_temp.data_type = data_type;
+     ins->declaration.indexable_temp.component_count = 1;
++    ins->declaration.indexable_temp.has_function_scope = has_function_scope;
+     /* The initialiser value index will be resolved later so forward references can be handled. */
+     ins->declaration.indexable_temp.initialiser = (void *)(uintptr_t)init;
+ 
+@@ -2832,7 +2833,7 @@ static bool sm6_parser_declare_global(struct sm6_parser *sm6, const struct dxil_
+         if (is_constant)
+             sm6_parser_declare_icb(sm6, scalar_type, count, alignment, init, dst);
+         else
+-            sm6_parser_declare_indexable_temp(sm6, scalar_type, count, alignment, init, NULL, dst);
++            sm6_parser_declare_indexable_temp(sm6, scalar_type, count, alignment, false, init, NULL, dst);
+     }
+     else if (address_space == ADDRESS_SPACE_GROUPSHARED)
+     {
+@@ -3103,7 +3104,7 @@ static void sm6_parser_emit_alloca(struct sm6_parser *sm6, const struct dxil_rec
+     if (packed_operands)
+         WARN("Ignoring flags %#"PRIx64".\n", packed_operands);
+ 
+-    sm6_parser_declare_indexable_temp(sm6, elem_type, type[0]->u.array.count, alignment, 0, ins, dst);
++    sm6_parser_declare_indexable_temp(sm6, elem_type, type[0]->u.array.count, alignment, true, 0, ins, dst);
+ }
+ 
+ static enum vkd3d_shader_opcode map_binary_op(uint64_t code, const struct sm6_type *type_a,
+@@ -4868,6 +4869,18 @@ static enum vkd3d_result sm6_parser_module_init(struct sm6_parser *sm6, const st
+     return VKD3D_OK;
+ }
+ 
++static void sm6_parser_emit_label(struct sm6_parser *sm6, unsigned int label_id)
++{
++    struct vkd3d_shader_src_param *src_param;
++    struct vkd3d_shader_instruction *ins;
++
++    ins = sm6_parser_add_instruction(sm6, VKD3DSIH_LABEL);
++
++    if (!(src_param = instruction_src_params_alloc(ins, 1, sm6)))
++        return;
++    vsir_src_param_init_label(src_param, label_id);
++}
++
+ static bool sm6_parser_allocate_named_metadata(struct sm6_parser *sm6)
+ {
+     struct dxil_block *block;
+@@ -6216,6 +6229,7 @@ static enum vkd3d_result sm6_parser_init(struct sm6_parser *sm6, const uint32_t
+     }
+ 
+     sm6->p.shader_desc.ssa_count = sm6->ssa_next_id;
++    sm6->p.shader_desc.block_count = 1;
+ 
+     if (!(fn = sm6_parser_get_function(sm6, sm6->entry_point)))
+     {
+@@ -6226,6 +6240,7 @@ static enum vkd3d_result sm6_parser_init(struct sm6_parser *sm6, const uint32_t
+     }
+ 
+     assert(sm6->function_count == 1);
++    sm6_parser_emit_label(sm6, 1);
+     if (!sm6_block_emit_instructions(fn->blocks[0], sm6))
+     {
+         vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_OUT_OF_MEMORY,
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.c b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+index 1e247445119..6a5a6d0e3c1 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+@@ -3363,7 +3363,6 @@ static void declare_predefined_types(struct hlsl_ctx *ctx)
+     effect_types[] =
+     {
+         {"dword",           HLSL_CLASS_SCALAR, HLSL_TYPE_UINT,          1, 1},
+-        {"float",           HLSL_CLASS_SCALAR, HLSL_TYPE_FLOAT,         1, 1},
+         {"vector",          HLSL_CLASS_VECTOR, HLSL_TYPE_FLOAT,         4, 1},
+         {"matrix",          HLSL_CLASS_MATRIX, HLSL_TYPE_FLOAT,         4, 4},
+         {"fxgroup",         HLSL_CLASS_OBJECT, HLSL_TYPE_EFFECT_GROUP,  1, 1},
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.y b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+index b11cbde26f1..e30b3dc5f55 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.y
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+@@ -4085,6 +4085,49 @@ static struct hlsl_block *add_constructor(struct hlsl_ctx *ctx, struct hlsl_type
+     return params->instrs;
+ }
+ 
++static bool add_ternary(struct hlsl_ctx *ctx, struct hlsl_block *block,
++        struct hlsl_ir_node *cond, struct hlsl_ir_node *first, struct hlsl_ir_node *second)
++{
++    struct hlsl_ir_node *args[HLSL_MAX_OPERANDS] = {0};
++    struct hlsl_type *common_type;
++
++    if (first->data_type->class <= HLSL_CLASS_LAST_NUMERIC
++            && second->data_type->class <= HLSL_CLASS_LAST_NUMERIC)
++    {
++        if (!(common_type = get_common_numeric_type(ctx, first, second, &first->loc)))
++            return false;
++
++        if (!(first = add_implicit_conversion(ctx, block, first, common_type, &first->loc)))
++            return false;
++
++        if (!(second = add_implicit_conversion(ctx, block, second, common_type, &second->loc)))
++            return false;
++    }
++    else
++    {
++        struct vkd3d_string_buffer *first_string, *second_string;
++
++        if (!hlsl_types_are_equal(first->data_type, second->data_type))
++        {
++            first_string = hlsl_type_to_string(ctx, first->data_type);
++            second_string = hlsl_type_to_string(ctx, second->data_type);
++            if (first_string && second_string)
++                hlsl_error(ctx, &first->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
++                        "Ternary argument types '%s' and '%s' do not match.",
++                        first_string->buffer, second_string->buffer);
++            hlsl_release_string_buffer(ctx, first_string);
++            hlsl_release_string_buffer(ctx, second_string);
++        }
++
++        common_type = first->data_type;
++    }
++
++    args[0] = cond;
++    args[1] = first;
++    args[2] = second;
++    return add_expr(ctx, block, HLSL_OP3_TERNARY, args, common_type, &first->loc);
++}
++
+ static unsigned int hlsl_offset_dim_count(enum hlsl_sampler_dim dim)
+ {
+     switch (dim)
+@@ -7202,27 +7245,13 @@ conditional_expr:
+             struct hlsl_ir_node *cond = node_from_block($1);
+             struct hlsl_ir_node *first = node_from_block($3);
+             struct hlsl_ir_node *second = node_from_block($5);
+-            struct hlsl_ir_node *args[HLSL_MAX_OPERANDS] = { 0 };
+-            struct hlsl_type *common_type;
+ 
+             hlsl_block_add_block($1, $3);
+             hlsl_block_add_block($1, $5);
+             destroy_block($3);
+             destroy_block($5);
+ 
+-            if (!(common_type = get_common_numeric_type(ctx, first, second, &@3)))
+-                YYABORT;
+-
+-            if (!(first = add_implicit_conversion(ctx, $1, first, common_type, &@3)))
+-                YYABORT;
+-
+-            if (!(second = add_implicit_conversion(ctx, $1, second, common_type, &@5)))
+-                YYABORT;
+-
+-            args[0] = cond;
+-            args[1] = first;
+-            args[2] = second;
+-            if (!add_expr(ctx, $1, HLSL_OP3_TERNARY, args, common_type, &@1))
++            if (!add_ternary(ctx, $1, cond, first, second))
+                 YYABORT;
+             $$ = $1;
+         }
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+index d37bef15cce..1fe141a346a 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+@@ -2890,6 +2890,12 @@ static bool lower_ternary(struct hlsl_ctx *ctx, struct hlsl_ir_node *instr, stru
+     first = expr->operands[1].node;
+     second = expr->operands[2].node;
+ 
++    if (cond->data_type->class > HLSL_CLASS_VECTOR || instr->data_type->class > HLSL_CLASS_VECTOR)
++    {
++        hlsl_fixme(ctx, &instr->loc, "Lower ternary of type other than scalar or vector.\n");
++        return false;
++    }
++
+     if (ctx->profile->major_version < 4 && ctx->profile->type == VKD3D_SHADER_TYPE_PIXEL)
+     {
+         struct hlsl_ir_node *abs, *neg;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/ir.c b/libs/vkd3d/libs/vkd3d-shader/ir.c
+index 28c7d158452..d6978171beb 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/ir.c
++++ b/libs/vkd3d/libs/vkd3d-shader/ir.c
+@@ -312,6 +312,21 @@ void vsir_register_init(struct vkd3d_shader_register *reg, enum vkd3d_shader_reg
+     reg->alignment = 0;
+ }
+ 
++static void vsir_src_param_init(struct vkd3d_shader_src_param *param, enum vkd3d_shader_register_type reg_type,
++        enum vkd3d_data_type data_type, unsigned int idx_count)
++{
++    vsir_register_init(&param->reg, reg_type, data_type, idx_count);
++    param->swizzle = 0;
++    param->modifiers = VKD3DSPSM_NONE;
++}
++
++void vsir_src_param_init_label(struct vkd3d_shader_src_param *param, unsigned int label_id)
++{
++    vsir_src_param_init(param, VKD3DSPR_LABEL, VKD3D_DATA_UINT, 1);
++    param->reg.dimension = VSIR_DIMENSION_NONE;
++    param->reg.idx[0].offset = label_id;
++}
++
+ void vsir_instruction_init(struct vkd3d_shader_instruction *ins, const struct vkd3d_shader_location *location,
+         enum vkd3d_shader_opcode handler_idx)
+ {
+@@ -320,6 +335,23 @@ void vsir_instruction_init(struct vkd3d_shader_instruction *ins, const struct vk
+     ins->handler_idx = handler_idx;
+ }
+ 
++static bool vsir_instruction_init_label(struct vkd3d_shader_instruction *ins, const struct vkd3d_shader_location *location,
++        unsigned int label_id, void *parser)
++{
++    struct vkd3d_shader_src_param *src_param;
++
++    if (!(src_param = shader_parser_get_src_params(parser, 1)))
++        return false;
++
++    vsir_src_param_init_label(src_param, label_id);
++
++    vsir_instruction_init(ins, location, VKD3DSIH_LABEL);
++    ins->src = src_param;
++    ins->src_count = 1;
++
++    return true;
++}
++
+ static enum vkd3d_result instruction_array_flatten_hull_shader_phases(struct vkd3d_shader_instruction_array *src_instructions)
+ {
+     struct hull_flattener flattener = {*src_instructions};
+@@ -571,7 +603,7 @@ static bool io_normaliser_is_in_control_point_phase(const struct io_normaliser *
+ static unsigned int shader_signature_find_element_for_reg(const struct shader_signature *signature,
+         unsigned int reg_idx, unsigned int write_mask)
+ {
+-    unsigned int i;
++    unsigned int i, base_write_mask;
+ 
+     for (i = 0; i < signature->element_count; ++i)
+     {
+@@ -583,7 +615,14 @@ static unsigned int shader_signature_find_element_for_reg(const struct shader_si
+         }
+     }
+ 
+-    /* Validated in the TPF reader. */
++    /* Validated in the TPF reader, but failure in signature_element_range_expand_mask()
++     * can land us here on an unmatched vector mask. */
++    FIXME("Failed to find signature element for register index %u, mask %#x; using scalar mask.\n",
++            reg_idx, write_mask);
++    base_write_mask = 1u << vsir_write_mask_get_component_idx(write_mask);
++    if (base_write_mask != write_mask)
++        return shader_signature_find_element_for_reg(signature, reg_idx, base_write_mask);
++
+     vkd3d_unreachable();
+ }
+ 
+@@ -750,6 +789,51 @@ static int signature_element_index_compare(const void *a, const void *b)
+     return vkd3d_u32_compare(e->sort_index, f->sort_index);
+ }
+ 
++static unsigned int signature_element_range_expand_mask(struct signature_element *e, unsigned int register_count,
++        uint8_t range_map[][VKD3D_VEC4_SIZE])
++{
++    unsigned int i, j, component_idx, component_count, merged_write_mask = e->mask;
++
++    /* dcl_indexrange instructions can declare a subset of the full mask, and the masks of
++     * the elements within the range may differ. TPF's handling of arrayed inputs with
++     * dcl_indexrange is really just a hack. Here we create a mask which covers all element
++     * masks, and check for collisions with other ranges. */
++
++    for (i = 1; i < register_count; ++i)
++        merged_write_mask |= e[i].mask;
++
++    if (merged_write_mask == e->mask)
++        return merged_write_mask;
++
++    /* Reaching this point is very rare to begin with, and collisions are even rarer or
++     * impossible. If the latter shows up, the fallback in shader_signature_find_element_for_reg()
++     * may be sufficient. */
++
++    component_idx = vsir_write_mask_get_component_idx(e->mask);
++    component_count = vsir_write_mask_component_count(e->mask);
++
++    for (i = e->register_index; i < e->register_index + register_count; ++i)
++    {
++        for (j = 0; j < component_idx; ++j)
++            if (range_map[i][j])
++                break;
++        for (j = component_idx + component_count; j < VKD3D_VEC4_SIZE; ++j)
++            if (range_map[i][j])
++                break;
++    }
++
++    if (i == register_count)
++    {
++        WARN("Expanding mask %#x to %#x for %s, base reg %u, count %u.\n", e->mask, merged_write_mask,
++                e->semantic_name, e->register_index, register_count);
++        return merged_write_mask;
++    }
++
++    WARN("Cannot expand mask %#x to %#x for %s, base reg %u, count %u.\n", e->mask, merged_write_mask,
++            e->semantic_name, e->register_index, register_count);
++    return e->mask;
++}
++
+ static bool shader_signature_merge(struct shader_signature *s, uint8_t range_map[][VKD3D_VEC4_SIZE],
+         bool is_patch_constant)
+ {
+@@ -820,6 +904,7 @@ static bool shader_signature_merge(struct shader_signature *s, uint8_t range_map
+         {
+             TRACE("Merging %s, base reg %u, count %u.\n", e->semantic_name, e->register_index, register_count);
+             e->register_count = register_count;
++            e->mask = signature_element_range_expand_mask(e, register_count, range_map);
+         }
+     }
+     element_count = new_count;
+@@ -844,6 +929,13 @@ static unsigned int shader_register_normalise_arrayed_addressing(struct vkd3d_sh
+         reg->idx[id_idx + 1].rel_addr = NULL;
+         reg->idx[id_idx + 1].offset = reg->idx[id_idx].offset;
+         reg->idx[id_idx].offset -= register_index;
++        if (id_idx)
++        {
++            /* idx[id_idx] now contains the array index, which must be moved below the control point id. */
++            struct vkd3d_shader_register_index tmp = reg->idx[id_idx];
++            reg->idx[id_idx] = reg->idx[id_idx - 1];
++            reg->idx[id_idx - 1] = tmp;
++        }
+         ++id_idx;
+     }
+     /* Otherwise we have no address for the arrayed register, so insert one. This happens e.g. where
+@@ -1476,6 +1568,665 @@ static enum vkd3d_result normalise_combined_samplers(struct vkd3d_shader_parser
+     return VKD3D_OK;
+ }
+ 
++struct cf_flattener_if_info
++{
++    struct vkd3d_shader_src_param *false_param;
++    unsigned int id;
++    uint32_t merge_block_id;
++    unsigned int else_block_id;
++};
++
++struct cf_flattener_loop_info
++{
++    unsigned int header_block_id;
++    unsigned int continue_block_id;
++    uint32_t merge_block_id;
++};
++
++struct cf_flattener_switch_case
++{
++    unsigned int value;
++    unsigned int block_id;
++};
++
++struct cf_flattener_switch_info
++{
++    size_t ins_location;
++    const struct vkd3d_shader_src_param *condition;
++    unsigned int id;
++    unsigned int merge_block_id;
++    unsigned int default_block_id;
++    struct cf_flattener_switch_case *cases;
++    size_t cases_size;
++    unsigned int cases_count;
++};
++
++struct cf_flattener_info
++{
++    union
++    {
++        struct cf_flattener_if_info if_;
++        struct cf_flattener_loop_info loop;
++        struct cf_flattener_switch_info switch_;
++    } u;
++
++    enum
++    {
++        VKD3D_BLOCK_IF,
++        VKD3D_BLOCK_LOOP,
++        VKD3D_BLOCK_SWITCH,
++    } current_block;
++    bool inside_block;
++};
++
++struct cf_flattener
++{
++    struct vkd3d_shader_parser *parser;
++
++    struct vkd3d_shader_location location;
++    bool allocation_failed;
++
++    struct vkd3d_shader_instruction *instructions;
++    size_t instruction_capacity;
++    size_t instruction_count;
++
++    unsigned int block_id;
++    const char **block_names;
++    size_t block_name_capacity;
++    size_t block_name_count;
++
++    unsigned int branch_id;
++    unsigned int loop_id;
++    unsigned int switch_id;
++
++    unsigned int control_flow_depth;
++    struct cf_flattener_info *control_flow_info;
++    size_t control_flow_info_size;
++};
++
++static struct vkd3d_shader_instruction *cf_flattener_require_space(struct cf_flattener *flattener, size_t count)
++{
++    if (!vkd3d_array_reserve((void **)&flattener->instructions, &flattener->instruction_capacity,
++            flattener->instruction_count + count, sizeof(*flattener->instructions)))
++    {
++        ERR("Failed to allocate instructions.\n");
++        flattener->allocation_failed = true;
++        return NULL;
++    }
++    return &flattener->instructions[flattener->instruction_count];
++}
++
++static bool cf_flattener_copy_instruction(struct cf_flattener *flattener,
++        const struct vkd3d_shader_instruction *instruction)
++{
++    struct vkd3d_shader_instruction *dst_ins;
++
++    if (instruction->handler_idx == VKD3DSIH_NOP)
++        return true;
++
++    if (!(dst_ins = cf_flattener_require_space(flattener, 1)))
++        return false;
++
++    *dst_ins = *instruction;
++    ++flattener->instruction_count;
++    return true;
++}
++
++static unsigned int cf_flattener_alloc_block_id(struct cf_flattener *flattener)
++{
++    return ++flattener->block_id;
++}
++
++static struct vkd3d_shader_src_param *instruction_src_params_alloc(struct vkd3d_shader_instruction *ins,
++        unsigned int count, struct cf_flattener *flattener)
++{
++    struct vkd3d_shader_src_param *params = shader_parser_get_src_params(flattener->parser, count);
++    if (!params)
++    {
++        flattener->allocation_failed = true;
++        return NULL;
++    }
++    ins->src = params;
++    ins->src_count = count;
++    return params;
++}
++
++static void cf_flattener_emit_label(struct cf_flattener *flattener, unsigned int label_id)
++{
++    struct vkd3d_shader_instruction *ins;
++
++    if (!(ins = cf_flattener_require_space(flattener, 1)))
++        return;
++    if (vsir_instruction_init_label(ins, &flattener->location, label_id, flattener->parser))
++        ++flattener->instruction_count;
++    else
++        flattener->allocation_failed = true;
++}
++
++/* For conditional branches, this returns the false target branch parameter. */
++static struct vkd3d_shader_src_param *cf_flattener_emit_branch(struct cf_flattener *flattener,
++        unsigned int merge_block_id, unsigned int continue_block_id,
++        const struct vkd3d_shader_src_param *condition, unsigned int true_id, unsigned int false_id,
++        unsigned int flags)
++{
++    struct vkd3d_shader_src_param *src_params, *false_branch_param;
++    struct vkd3d_shader_instruction *ins;
++
++    if (!(ins = cf_flattener_require_space(flattener, 1)))
++        return NULL;
++    vsir_instruction_init(ins, &flattener->location, VKD3DSIH_BRANCH);
++
++    if (condition)
++    {
++        if (!(src_params = instruction_src_params_alloc(ins, 4 + !!continue_block_id, flattener)))
++            return NULL;
++        src_params[0] = *condition;
++        if (flags == VKD3D_SHADER_CONDITIONAL_OP_Z)
++        {
++            vsir_src_param_init_label(&src_params[1], false_id);
++            vsir_src_param_init_label(&src_params[2], true_id);
++            false_branch_param = &src_params[1];
++        }
++        else
++        {
++            vsir_src_param_init_label(&src_params[1], true_id);
++            vsir_src_param_init_label(&src_params[2], false_id);
++            false_branch_param = &src_params[2];
++        }
++        vsir_src_param_init_label(&src_params[3], merge_block_id);
++        if (continue_block_id)
++            vsir_src_param_init_label(&src_params[4], continue_block_id);
++    }
++    else
++    {
++        if (!(src_params = instruction_src_params_alloc(ins, merge_block_id ? 3 : 1, flattener)))
++            return NULL;
++        vsir_src_param_init_label(&src_params[0], true_id);
++        if (merge_block_id)
++        {
++            /* An unconditional branch may only have merge information for a loop, which
++             * must have both a merge block and continue block. */
++            vsir_src_param_init_label(&src_params[1], merge_block_id);
++            vsir_src_param_init_label(&src_params[2], continue_block_id);
++        }
++        false_branch_param = NULL;
++    }
++
++    ++flattener->instruction_count;
++
++    return false_branch_param;
++}
++
++static void cf_flattener_emit_conditional_branch_and_merge(struct cf_flattener *flattener,
++        const struct vkd3d_shader_src_param *condition, unsigned int true_id, unsigned int flags)
++{
++    unsigned int merge_block_id;
++
++    merge_block_id = cf_flattener_alloc_block_id(flattener);
++    cf_flattener_emit_branch(flattener, merge_block_id, 0, condition, true_id, merge_block_id, flags);
++    cf_flattener_emit_label(flattener, merge_block_id);
++}
++
++static void cf_flattener_emit_unconditional_branch(struct cf_flattener *flattener, unsigned int target_block_id)
++{
++    cf_flattener_emit_branch(flattener, 0, 0, NULL, target_block_id, 0, 0);
++}
++
++static struct cf_flattener_info *cf_flattener_push_control_flow_level(struct cf_flattener *flattener)
++{
++    if (!vkd3d_array_reserve((void **)&flattener->control_flow_info, &flattener->control_flow_info_size,
++            flattener->control_flow_depth + 1, sizeof(*flattener->control_flow_info)))
++    {
++        ERR("Failed to allocate control flow info structure.\n");
++        flattener->allocation_failed = true;
++        return NULL;
++    }
++
++    return &flattener->control_flow_info[flattener->control_flow_depth++];
++}
++
++static void cf_flattener_pop_control_flow_level(struct cf_flattener *flattener)
++{
++    struct cf_flattener_info *cf_info;
++
++    cf_info = &flattener->control_flow_info[--flattener->control_flow_depth];
++    memset(cf_info, 0, sizeof(*cf_info));
++}
++
++static struct cf_flattener_info *cf_flattener_find_innermost_loop(struct cf_flattener *flattener)
++{
++    int depth;
++
++    for (depth = flattener->control_flow_depth - 1; depth >= 0; --depth)
++    {
++        if (flattener->control_flow_info[depth].current_block == VKD3D_BLOCK_LOOP)
++            return &flattener->control_flow_info[depth];
++    }
++
++    return NULL;
++}
++
++static struct cf_flattener_info *cf_flattener_find_innermost_breakable_cf_construct(struct cf_flattener *flattener)
++{
++    int depth;
++
++    for (depth = flattener->control_flow_depth - 1; depth >= 0; --depth)
++    {
++        if (flattener->control_flow_info[depth].current_block == VKD3D_BLOCK_LOOP
++                || flattener->control_flow_info[depth].current_block == VKD3D_BLOCK_SWITCH)
++            return &flattener->control_flow_info[depth];
++    }
++
++    return NULL;
++}
++
++static void VKD3D_PRINTF_FUNC(3, 4) cf_flattener_create_block_name(struct cf_flattener *flattener,
++        unsigned int block_id, const char *fmt, ...)
++{
++    struct vkd3d_string_buffer buffer;
++    size_t block_name_count;
++    va_list args;
++
++    --block_id;
++
++    block_name_count = max(flattener->block_name_count, block_id + 1);
++    if (!vkd3d_array_reserve((void **)&flattener->block_names, &flattener->block_name_capacity,
++            block_name_count, sizeof(*flattener->block_names)))
++        return;
++    memset(&flattener->block_names[flattener->block_name_count], 0,
++            (block_name_count - flattener->block_name_count) * sizeof(*flattener->block_names));
++    flattener->block_name_count = block_name_count;
++
++    vkd3d_string_buffer_init(&buffer);
++    va_start(args, fmt);
++    vkd3d_string_buffer_vprintf(&buffer, fmt, args);
++    va_end(args);
++
++    flattener->block_names[block_id] = buffer.buffer;
++}
++
++static bool vsir_instruction_is_dcl(const struct vkd3d_shader_instruction *instruction)
++{
++    enum vkd3d_shader_opcode handler_idx = instruction->handler_idx;
++    return (VKD3DSIH_DCL <= handler_idx && handler_idx <= VKD3DSIH_DCL_VERTICES_OUT)
++            || handler_idx == VKD3DSIH_HS_DECLS;
++}
++
++static enum vkd3d_result cf_flattener_iterate_instruction_array(struct cf_flattener *flattener)
++{
++    bool main_block_open, is_hull_shader, after_declarations_section;
++    struct vkd3d_shader_parser *parser = flattener->parser;
++    struct vkd3d_shader_instruction_array *instructions;
++    struct vkd3d_shader_instruction *dst_ins;
++    size_t i;
++
++    instructions = &parser->instructions;
++    is_hull_shader = parser->shader_version.type == VKD3D_SHADER_TYPE_HULL;
++    main_block_open = !is_hull_shader;
++    after_declarations_section = is_hull_shader;
++
++    if (!cf_flattener_require_space(flattener, instructions->count + 1))
++        return VKD3D_ERROR_OUT_OF_MEMORY;
++
++    for (i = 0; i < instructions->count; ++i)
++    {
++        unsigned int loop_header_block_id, loop_body_block_id, continue_block_id, merge_block_id, true_block_id;
++        const struct vkd3d_shader_instruction *instruction = &instructions->elements[i];
++        const struct vkd3d_shader_src_param *src = instruction->src;
++        struct cf_flattener_info *cf_info;
++
++        flattener->location = instruction->location;
++
++        /* Declarations should occur before the first code block, which in hull shaders is marked by the first
++         * phase instruction, and in all other shader types begins with the first label instruction. */
++        if (!after_declarations_section && !vsir_instruction_is_dcl(instruction)
++                && instruction->handler_idx != VKD3DSIH_NOP)
++        {
++            after_declarations_section = true;
++            cf_flattener_emit_label(flattener, cf_flattener_alloc_block_id(flattener));
++        }
++
++        cf_info = flattener->control_flow_depth
++                ? &flattener->control_flow_info[flattener->control_flow_depth - 1] : NULL;
++
++        switch (instruction->handler_idx)
++        {
++            case VKD3DSIH_HS_CONTROL_POINT_PHASE:
++            case VKD3DSIH_HS_FORK_PHASE:
++            case VKD3DSIH_HS_JOIN_PHASE:
++                if (!cf_flattener_copy_instruction(flattener, instruction))
++                    return VKD3D_ERROR_OUT_OF_MEMORY;
++                if (instruction->handler_idx != VKD3DSIH_HS_CONTROL_POINT_PHASE || !instruction->flags)
++                    after_declarations_section = false;
++                break;
++
++            case VKD3DSIH_LABEL:
++                vkd3d_shader_parser_error(parser, VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED,
++                        "Aborting due to not yet implemented feature: Label instruction.");
++                return VKD3D_ERROR_NOT_IMPLEMENTED;
++
++            case VKD3DSIH_IF:
++                if (!(cf_info = cf_flattener_push_control_flow_level(flattener)))
++                    return VKD3D_ERROR_OUT_OF_MEMORY;
++
++                true_block_id = cf_flattener_alloc_block_id(flattener);
++                merge_block_id = cf_flattener_alloc_block_id(flattener);
++                cf_info->u.if_.false_param = cf_flattener_emit_branch(flattener, merge_block_id, 0,
++                        src, true_block_id, merge_block_id, instruction->flags);
++                if (!cf_info->u.if_.false_param)
++                    return VKD3D_ERROR_OUT_OF_MEMORY;
++
++                cf_flattener_emit_label(flattener, true_block_id);
++
++                cf_info->u.if_.id = flattener->branch_id;
++                cf_info->u.if_.merge_block_id = merge_block_id;
++                cf_info->u.if_.else_block_id = 0;
++                cf_info->inside_block = true;
++                cf_info->current_block = VKD3D_BLOCK_IF;
++
++                cf_flattener_create_block_name(flattener, merge_block_id, "branch%u_merge", flattener->branch_id);
++                cf_flattener_create_block_name(flattener, true_block_id, "branch%u_true", flattener->branch_id);
++                ++flattener->branch_id;
++                break;
++
++            case VKD3DSIH_ELSE:
++                if (cf_info->inside_block)
++                    cf_flattener_emit_unconditional_branch(flattener, cf_info->u.if_.merge_block_id);
++
++                cf_info->u.if_.else_block_id = cf_flattener_alloc_block_id(flattener);
++                cf_info->u.if_.false_param->reg.idx[0].offset = cf_info->u.if_.else_block_id;
++
++                cf_flattener_create_block_name(flattener,
++                        cf_info->u.if_.else_block_id, "branch%u_false", cf_info->u.if_.id);
++                cf_flattener_emit_label(flattener, cf_info->u.if_.else_block_id);
++
++                cf_info->inside_block = true;
++                break;
++
++            case VKD3DSIH_ENDIF:
++                if (cf_info->inside_block)
++                    cf_flattener_emit_unconditional_branch(flattener, cf_info->u.if_.merge_block_id);
++
++                cf_flattener_emit_label(flattener, cf_info->u.if_.merge_block_id);
++
++                cf_flattener_pop_control_flow_level(flattener);
++                break;
++
++            case VKD3DSIH_LOOP:
++                if (!(cf_info = cf_flattener_push_control_flow_level(flattener)))
++                    return VKD3D_ERROR_OUT_OF_MEMORY;
++
++                loop_header_block_id = cf_flattener_alloc_block_id(flattener);
++                loop_body_block_id = cf_flattener_alloc_block_id(flattener);
++                continue_block_id = cf_flattener_alloc_block_id(flattener);
++                merge_block_id = cf_flattener_alloc_block_id(flattener);
++
++                cf_flattener_emit_unconditional_branch(flattener, loop_header_block_id);
++                cf_flattener_emit_label(flattener, loop_header_block_id);
++                cf_flattener_emit_branch(flattener, merge_block_id, continue_block_id,
++                        NULL, loop_body_block_id, 0, 0);
++
++                cf_flattener_emit_label(flattener, loop_body_block_id);
++
++                cf_info->u.loop.header_block_id = loop_header_block_id;
++                cf_info->u.loop.continue_block_id = continue_block_id;
++                cf_info->u.loop.merge_block_id = merge_block_id;
++                cf_info->current_block = VKD3D_BLOCK_LOOP;
++                cf_info->inside_block = true;
++
++                cf_flattener_create_block_name(flattener, loop_header_block_id, "loop%u_header", flattener->loop_id);
++                cf_flattener_create_block_name(flattener, loop_body_block_id, "loop%u_body", flattener->loop_id);
++                cf_flattener_create_block_name(flattener, continue_block_id, "loop%u_continue", flattener->loop_id);
++                cf_flattener_create_block_name(flattener, merge_block_id, "loop%u_merge", flattener->loop_id);
++                ++flattener->loop_id;
++                break;
++
++            case VKD3DSIH_ENDLOOP:
++                if (cf_info->inside_block)
++                    cf_flattener_emit_unconditional_branch(flattener, cf_info->u.loop.continue_block_id);
++
++                cf_flattener_emit_label(flattener, cf_info->u.loop.continue_block_id);
++                cf_flattener_emit_unconditional_branch(flattener, cf_info->u.loop.header_block_id);
++                cf_flattener_emit_label(flattener, cf_info->u.loop.merge_block_id);
++
++                cf_flattener_pop_control_flow_level(flattener);
++                break;
++
++            case VKD3DSIH_SWITCH:
++                if (!(cf_info = cf_flattener_push_control_flow_level(flattener)))
++                    return VKD3D_ERROR_OUT_OF_MEMORY;
++
++                merge_block_id = cf_flattener_alloc_block_id(flattener);
++
++                cf_info->u.switch_.ins_location = flattener->instruction_count;
++                cf_info->u.switch_.condition = src;
++
++                if (!(dst_ins = cf_flattener_require_space(flattener, 1)))
++                    return VKD3D_ERROR_OUT_OF_MEMORY;
++                vsir_instruction_init(dst_ins, &instruction->location, VKD3DSIH_SWITCH_MONOLITHIC);
++                ++flattener->instruction_count;
++
++                cf_info->u.switch_.id = flattener->switch_id;
++                cf_info->u.switch_.merge_block_id = merge_block_id;
++                cf_info->u.switch_.cases = NULL;
++                cf_info->u.switch_.cases_size = 0;
++                cf_info->u.switch_.cases_count = 0;
++                cf_info->u.switch_.default_block_id = 0;
++                cf_info->inside_block = false;
++                cf_info->current_block = VKD3D_BLOCK_SWITCH;
++
++                cf_flattener_create_block_name(flattener, merge_block_id, "switch%u_merge", flattener->switch_id);
++                ++flattener->switch_id;
++
++                if (!vkd3d_array_reserve((void **)&cf_info->u.switch_.cases, &cf_info->u.switch_.cases_size,
++                        10, sizeof(*cf_info->u.switch_.cases)))
++                    return VKD3D_ERROR_OUT_OF_MEMORY;
++
++                break;
++
++            case VKD3DSIH_ENDSWITCH:
++            {
++                struct vkd3d_shader_src_param *src_params;
++                unsigned int j;
++
++                if (!cf_info->u.switch_.default_block_id)
++                    cf_info->u.switch_.default_block_id = cf_info->u.switch_.merge_block_id;
++
++                cf_flattener_emit_label(flattener, cf_info->u.switch_.merge_block_id);
++
++                /* The SWITCH instruction is completed when the endswitch
++                 * instruction is processed because we do not know the number
++                 * of case statements or the default block id in advance.*/
++                dst_ins = &flattener->instructions[cf_info->u.switch_.ins_location];
++                if (!(src_params = instruction_src_params_alloc(dst_ins, cf_info->u.switch_.cases_count * 2 + 3, flattener)))
++                {
++                    vkd3d_free(cf_info->u.switch_.cases);
++                    return VKD3D_ERROR_OUT_OF_MEMORY;
++                }
++                src_params[0] = *cf_info->u.switch_.condition;
++                vsir_src_param_init_label(&src_params[1], cf_info->u.switch_.default_block_id);
++                vsir_src_param_init_label(&src_params[2], cf_info->u.switch_.merge_block_id);
++                for (j = 0; j < cf_info->u.switch_.cases_count; ++j)
++                {
++                    unsigned int index = j * 2 + 3;
++                    vsir_src_param_init(&src_params[index], VKD3DSPR_IMMCONST, VKD3D_DATA_UINT, 0);
++                    src_params[index].reg.u.immconst_u32[0] = cf_info->u.switch_.cases[j].value;
++                    vsir_src_param_init_label(&src_params[index + 1], cf_info->u.switch_.cases[j].block_id);
++                }
++                vkd3d_free(cf_info->u.switch_.cases);
++
++                cf_flattener_pop_control_flow_level(flattener);
++                break;
++            }
++
++            case VKD3DSIH_CASE:
++            {
++                unsigned int label_id, value;
++
++                if (src->swizzle != VKD3D_SHADER_SWIZZLE(X, X, X, X))
++                {
++                    WARN("Unexpected src swizzle %#x.\n", src->swizzle);
++                    vkd3d_shader_parser_error(parser, VKD3D_SHADER_ERROR_VSIR_INVALID_SWIZZLE,
++                            "The swizzle for a switch case value is not scalar X.");
++                }
++                value = *src->reg.u.immconst_u32;
++
++                if (!vkd3d_array_reserve((void **)&cf_info->u.switch_.cases, &cf_info->u.switch_.cases_size,
++                        cf_info->u.switch_.cases_count + 1, sizeof(*cf_info->u.switch_.cases)))
++                    return VKD3D_ERROR_OUT_OF_MEMORY;
++
++                label_id = cf_flattener_alloc_block_id(flattener);
++                if (cf_info->inside_block) /* fall-through */
++                    cf_flattener_emit_unconditional_branch(flattener, label_id);
++
++                cf_info->u.switch_.cases[cf_info->u.switch_.cases_count].value = value;
++                cf_info->u.switch_.cases[cf_info->u.switch_.cases_count].block_id = label_id;
++                ++cf_info->u.switch_.cases_count;
++
++                cf_flattener_emit_label(flattener, label_id);
++                cf_flattener_create_block_name(flattener, label_id, "switch%u_case%u", cf_info->u.switch_.id, value);
++                cf_info->inside_block = true;
++                break;
++            }
++
++            case VKD3DSIH_DEFAULT:
++                cf_info->u.switch_.default_block_id = cf_flattener_alloc_block_id(flattener);
++                if (cf_info->inside_block) /* fall-through */
++                    cf_flattener_emit_unconditional_branch(flattener, cf_info->u.switch_.default_block_id);
++
++                cf_flattener_emit_label(flattener, cf_info->u.switch_.default_block_id);
++
++                cf_flattener_create_block_name(flattener, cf_info->u.switch_.default_block_id,
++                        "switch%u_default", cf_info->u.switch_.id);
++                cf_info->inside_block = true;
++                break;
++
++            case VKD3DSIH_BREAK:
++            {
++                struct cf_flattener_info *breakable_cf_info;
++
++                if (!(breakable_cf_info = cf_flattener_find_innermost_breakable_cf_construct(flattener)))
++                {
++                    FIXME("Unhandled break instruction.\n");
++                    return VKD3D_ERROR_INVALID_SHADER;
++                }
++
++                if (breakable_cf_info->current_block == VKD3D_BLOCK_LOOP)
++                {
++                    cf_flattener_emit_unconditional_branch(flattener, breakable_cf_info->u.loop.merge_block_id);
++                }
++                else if (breakable_cf_info->current_block == VKD3D_BLOCK_SWITCH)
++                {
++                    cf_flattener_emit_unconditional_branch(flattener, breakable_cf_info->u.switch_.merge_block_id);
++                }
++
++                cf_info->inside_block = false;
++                break;
++            }
++
++            case VKD3DSIH_BREAKP:
++            {
++                struct cf_flattener_info *loop_cf_info;
++
++                if (!(loop_cf_info = cf_flattener_find_innermost_loop(flattener)))
++                {
++                    ERR("Invalid 'breakc' instruction outside loop.\n");
++                    return VKD3D_ERROR_INVALID_SHADER;
++                }
++
++                cf_flattener_emit_conditional_branch_and_merge(flattener,
++                        src, loop_cf_info->u.loop.merge_block_id, instruction->flags);
++                break;
++            }
++
++            case VKD3DSIH_CONTINUE:
++            {
++                struct cf_flattener_info *loop_cf_info;
++
++                if (!(loop_cf_info = cf_flattener_find_innermost_loop(flattener)))
++                {
++                    ERR("Invalid 'continue' instruction outside loop.\n");
++                    return VKD3D_ERROR_INVALID_SHADER;
++                }
++
++                cf_flattener_emit_unconditional_branch(flattener, loop_cf_info->u.loop.continue_block_id);
++
++                cf_info->inside_block = false;
++                break;
++            }
++
++            case VKD3DSIH_CONTINUEP:
++            {
++                struct cf_flattener_info *loop_cf_info;
++
++                if (!(loop_cf_info = cf_flattener_find_innermost_loop(flattener)))
++                {
++                    ERR("Invalid 'continuec' instruction outside loop.\n");
++                    return VKD3D_ERROR_INVALID_SHADER;
++                }
++
++                cf_flattener_emit_conditional_branch_and_merge(flattener,
++                        src, loop_cf_info->u.loop.continue_block_id, instruction->flags);
++                break;
++            }
++
++            case VKD3DSIH_RET:
++                if (!cf_flattener_copy_instruction(flattener, instruction))
++                    return VKD3D_ERROR_OUT_OF_MEMORY;
++
++                if (cf_info)
++                    cf_info->inside_block = false;
++                else
++                    main_block_open = false;
++                break;
++
++            default:
++                if (!cf_flattener_copy_instruction(flattener, instruction))
++                    return VKD3D_ERROR_OUT_OF_MEMORY;
++                break;
++        }
++    }
++
++    if (main_block_open)
++    {
++        if (!(dst_ins = cf_flattener_require_space(flattener, 1)))
++            return VKD3D_ERROR_OUT_OF_MEMORY;
++        vsir_instruction_init(dst_ins, &flattener->location, VKD3DSIH_RET);
++        ++flattener->instruction_count;
++    }
++
++    return flattener->allocation_failed ? VKD3D_ERROR_OUT_OF_MEMORY : VKD3D_OK;
++}
++
++static enum vkd3d_result flatten_control_flow_constructs(struct vkd3d_shader_parser *parser)
++{
++    struct cf_flattener flattener = {0};
++    enum vkd3d_result result;
++
++    flattener.parser = parser;
++    result = cf_flattener_iterate_instruction_array(&flattener);
++
++    if (result >= 0)
++    {
++        vkd3d_free(parser->instructions.elements);
++        parser->instructions.elements = flattener.instructions;
++        parser->instructions.capacity = flattener.instruction_capacity;
++        parser->instructions.count = flattener.instruction_count;
++        parser->shader_desc.block_count = flattener.block_id;
++    }
++    else
++    {
++        vkd3d_free(flattener.instructions);
++    }
++
++    vkd3d_free(flattener.control_flow_info);
++    /* Simpler to always free these in free_shader_desc(). */
++    parser->shader_desc.block_names = flattener.block_names;
++    parser->shader_desc.block_name_count = flattener.block_name_count;
++
++    return result;
++}
++
+ enum vkd3d_result vkd3d_shader_normalise(struct vkd3d_shader_parser *parser,
+         const struct vkd3d_shader_compile_info *compile_info)
+ {
+@@ -1504,6 +2255,9 @@ enum vkd3d_result vkd3d_shader_normalise(struct vkd3d_shader_parser *parser,
+     if (result >= 0)
+         remove_dead_code(parser);
+ 
++    if (result >= 0)
++        result = flatten_control_flow_constructs(parser);
++
+     if (result >= 0)
+         result = normalise_combined_samplers(parser);
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/spirv.c b/libs/vkd3d/libs/vkd3d-shader/spirv.c
+index 7743319bed5..0eeb04bfe59 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/spirv.c
++++ b/libs/vkd3d/libs/vkd3d-shader/spirv.c
+@@ -855,20 +855,6 @@ static void vkd3d_spirv_end_function_stream_insertion(struct vkd3d_spirv_builder
+     builder->insertion_location = ~(size_t)0;
+ }
+ 
+-struct vkd3d_spirv_op_branch_conditional
+-{
+-    uint32_t opcode;
+-    uint32_t condition_id;
+-    uint32_t true_label;
+-    uint32_t false_label;
+-};
+-
+-static struct vkd3d_spirv_op_branch_conditional *vkd3d_spirv_as_op_branch_conditional(
+-        struct vkd3d_spirv_stream *stream, size_t location)
+-{
+-    return (struct vkd3d_spirv_op_branch_conditional *)&stream->words[location];
+-}
+-
+ static void vkd3d_spirv_build_op_capability(struct vkd3d_spirv_stream *stream,
+         SpvCapability cap)
+ {
+@@ -1885,8 +1871,6 @@ static void vkd3d_spirv_builder_begin_main_function(struct vkd3d_spirv_builder *
+ 
+     vkd3d_spirv_build_op_function(builder, void_id,
+             builder->main_function_id, SpvFunctionControlMaskNone, function_type_id);
+-    vkd3d_spirv_build_op_label(builder, vkd3d_spirv_alloc_id(builder));
+-    builder->main_function_location = vkd3d_spirv_stream_current_location(&builder->function_stream);
+ }
+ 
+ static void vkd3d_spirv_builder_free(struct vkd3d_spirv_builder *builder)
+@@ -2267,51 +2251,6 @@ static const char *debug_vkd3d_symbol(const struct vkd3d_symbol *symbol)
+     }
+ }
+ 
+-struct vkd3d_if_cf_info
+-{
+-    size_t stream_location;
+-    unsigned int id;
+-    uint32_t merge_block_id;
+-    uint32_t else_block_id;
+-};
+-
+-struct vkd3d_loop_cf_info
+-{
+-    uint32_t header_block_id;
+-    uint32_t continue_block_id;
+-    uint32_t merge_block_id;
+-};
+-
+-struct vkd3d_switch_cf_info
+-{
+-    size_t stream_location;
+-    unsigned int id;
+-    uint32_t selector_id;
+-    uint32_t merge_block_id;
+-    uint32_t default_block_id;
+-    uint32_t *case_blocks;
+-    size_t case_blocks_size;
+-    unsigned int case_block_count;
+-};
+-
+-struct vkd3d_control_flow_info
+-{
+-    union
+-    {
+-        struct vkd3d_if_cf_info if_;
+-        struct vkd3d_loop_cf_info loop;
+-        struct vkd3d_switch_cf_info switch_;
+-    } u;
+-
+-    enum
+-    {
+-        VKD3D_BLOCK_IF,
+-        VKD3D_BLOCK_LOOP,
+-        VKD3D_BLOCK_SWITCH,
+-    } current_block;
+-    bool inside_block;
+-};
+-
+ struct vkd3d_push_constant_buffer_binding
+ {
+     struct vkd3d_shader_register reg;
+@@ -2365,13 +2304,6 @@ struct spirv_compiler
+ 
+     enum vkd3d_shader_type shader_type;
+ 
+-    unsigned int branch_id;
+-    unsigned int loop_id;
+-    unsigned int switch_id;
+-    unsigned int control_flow_depth;
+-    struct vkd3d_control_flow_info *control_flow_info;
+-    size_t control_flow_info_size;
+-
+     struct vkd3d_shader_interface_info shader_interface;
+     struct vkd3d_shader_descriptor_offset_info offset_info;
+     uint32_t descriptor_offsets_member_id;
+@@ -2380,8 +2312,7 @@ struct spirv_compiler
+     struct vkd3d_push_constant_buffer_binding *push_constants;
+     const struct vkd3d_shader_spirv_target_info *spirv_target_info;
+ 
+-    bool main_block_open;
+-    bool after_declarations_section;
++    bool prolog_emitted;
+     struct shader_signature input_signature;
+     struct shader_signature output_signature;
+     struct shader_signature patch_constant_signature;
+@@ -2401,7 +2332,9 @@ struct spirv_compiler
+     const struct vkd3d_shader_scan_descriptor_info1 *scan_descriptor_info;
+     unsigned int input_control_point_count;
+     unsigned int output_control_point_count;
++
+     bool use_vocp;
++    bool emit_point_size;
+ 
+     enum vkd3d_shader_opcode phase;
+     bool emit_default_control_point_phase;
+@@ -2422,6 +2355,11 @@ struct spirv_compiler
+     unsigned int ssa_register_count;
+ 
+     uint64_t config_flags;
++
++    uint32_t *block_label_ids;
++    unsigned int block_count;
++    const char **block_names;
++    size_t block_name_count;
+ };
+ 
+ static bool is_in_default_phase(const struct spirv_compiler *compiler)
+@@ -2440,6 +2378,9 @@ static bool is_in_fork_or_join_phase(const struct spirv_compiler *compiler)
+ }
+ 
+ static void spirv_compiler_emit_initial_declarations(struct spirv_compiler *compiler);
++static size_t spirv_compiler_get_current_function_location(struct spirv_compiler *compiler);
++static void spirv_compiler_emit_main_prolog(struct spirv_compiler *compiler);
++static void spirv_compiler_emit_io_declarations(struct spirv_compiler *compiler);
+ 
+ static const char *spirv_compiler_get_entry_point_name(const struct spirv_compiler *compiler)
+ {
+@@ -2450,8 +2391,6 @@ static const char *spirv_compiler_get_entry_point_name(const struct spirv_compil
+ 
+ static void spirv_compiler_destroy(struct spirv_compiler *compiler)
+ {
+-    vkd3d_free(compiler->control_flow_info);
+-
+     vkd3d_free(compiler->output_info);
+ 
+     vkd3d_free(compiler->push_constants);
+@@ -2470,6 +2409,7 @@ static void spirv_compiler_destroy(struct spirv_compiler *compiler)
+     shader_signature_cleanup(&compiler->patch_constant_signature);
+ 
+     vkd3d_free(compiler->ssa_register_info);
++    vkd3d_free(compiler->block_label_ids);
+ 
+     vkd3d_free(compiler);
+ }
+@@ -2592,6 +2532,8 @@ static struct spirv_compiler *spirv_compiler_create(const struct vkd3d_shader_ve
+     if ((shader_interface = vkd3d_find_struct(compile_info->next, INTERFACE_INFO)))
+     {
+         compiler->xfb_info = vkd3d_find_struct(compile_info->next, TRANSFORM_FEEDBACK_INFO);
++        compiler->emit_point_size = compiler->xfb_info && compiler->xfb_info->element_count
++                && compiler->shader_type != VKD3D_SHADER_TYPE_GEOMETRY;
+ 
+         compiler->shader_interface = *shader_interface;
+         if (shader_interface->push_constant_buffer_count)
+@@ -2805,6 +2747,14 @@ static struct vkd3d_string_buffer *vkd3d_shader_register_range_string(struct spi
+     return buffer;
+ }
+ 
++static uint32_t spirv_compiler_get_label_id(struct spirv_compiler *compiler, unsigned int block_id)
++{
++    --block_id;
++    if (!compiler->block_label_ids[block_id])
++        compiler->block_label_ids[block_id] = vkd3d_spirv_alloc_id(&compiler->spirv_builder);
++    return compiler->block_label_ids[block_id];
++}
++
+ static struct vkd3d_shader_descriptor_binding spirv_compiler_get_descriptor_binding(
+         struct spirv_compiler *compiler, const struct vkd3d_shader_register *reg,
+         const struct vkd3d_shader_register_range *range, enum vkd3d_shader_resource_type resource_type,
+@@ -3520,11 +3470,13 @@ static uint32_t spirv_compiler_get_descriptor_index(struct spirv_compiler *compi
+             index_ids[0] = compiler->descriptor_offsets_member_id;
+             index_ids[1] = spirv_compiler_get_constant_uint(compiler, push_constant_index);
+             ptr_type_id = vkd3d_spirv_get_op_type_pointer(builder, SpvStorageClassPushConstant, type_id);
++            vkd3d_spirv_begin_function_stream_insertion(builder,
++                    spirv_compiler_get_current_function_location(compiler));
+             ptr_id = vkd3d_spirv_build_op_in_bounds_access_chain(builder, ptr_type_id,
+                     compiler->push_constants_var_id, index_ids, 2);
+             offset_id = vkd3d_spirv_build_op_load(builder, type_id, ptr_id, SpvMemoryAccessMaskNone);
+-            if (!compiler->control_flow_depth)
+-                compiler->descriptor_offset_ids[push_constant_index] = offset_id;
++            vkd3d_spirv_end_function_stream_insertion(builder);
++            compiler->descriptor_offset_ids[push_constant_index] = offset_id;
+         }
+         index_id = vkd3d_spirv_build_op_iadd(builder, type_id, index_id, offset_id);
+     }
+@@ -4770,7 +4722,7 @@ static uint32_t spirv_compiler_emit_builtin_variable_v(struct spirv_compiler *co
+     assert(size_count <= ARRAY_SIZE(sizes));
+     memcpy(sizes, array_sizes, size_count * sizeof(sizes[0]));
+     array_sizes = sizes;
+-    sizes[size_count - 1] = max(sizes[size_count - 1], builtin->spirv_array_size);
++    sizes[0] = max(sizes[0], builtin->spirv_array_size);
+ 
+     id = spirv_compiler_emit_array_variable(compiler, &builder->global_stream, storage_class,
+             builtin->component_type, builtin->component_count, array_sizes, size_count);
+@@ -4841,12 +4793,12 @@ static uint32_t spirv_compiler_emit_input(struct spirv_compiler *compiler,
+ 
+     builtin = get_spirv_builtin_for_sysval(compiler, sysval);
+ 
+-    array_sizes[0] = (reg_type == VKD3DSPR_PATCHCONST ? 0 : compiler->input_control_point_count);
+-    array_sizes[1] = signature_element->register_count;
+-    if (array_sizes[1] == 1 && !vsir_sysval_semantic_is_tess_factor(signature_element->sysval_semantic)
+-            && (!vsir_sysval_semantic_is_clip_cull(signature_element->sysval_semantic) || array_sizes[0]))
++    array_sizes[0] = signature_element->register_count;
++    array_sizes[1] = (reg_type == VKD3DSPR_PATCHCONST ? 0 : compiler->input_control_point_count);
++    if (array_sizes[0] == 1 && !vsir_sysval_semantic_is_tess_factor(signature_element->sysval_semantic)
++            && (!vsir_sysval_semantic_is_clip_cull(signature_element->sysval_semantic) || array_sizes[1]))
+     {
+-        array_sizes[1] = 0;
++        array_sizes[0] = 0;
+     }
+ 
+     write_mask = signature_element->mask;
+@@ -5183,10 +5135,10 @@ static void spirv_compiler_emit_output(struct spirv_compiler *compiler,
+     /* Don't use builtins for TCS -> TES varyings. See spirv_compiler_emit_input(). */
+     if (compiler->shader_type == VKD3D_SHADER_TYPE_HULL && !is_patch_constant)
+         sysval = VKD3D_SHADER_SV_NONE;
+-    array_sizes[0] = (reg_type == VKD3DSPR_PATCHCONST ? 0 : compiler->output_control_point_count);
+-    array_sizes[1] = signature_element->register_count;
+-    if (array_sizes[1] == 1 && !vsir_sysval_semantic_is_tess_factor(signature_element->sysval_semantic))
+-        array_sizes[1] = 0;
++    array_sizes[0] = signature_element->register_count;
++    array_sizes[1] = (reg_type == VKD3DSPR_PATCHCONST ? 0 : compiler->output_control_point_count);
++    if (array_sizes[0] == 1 && !vsir_sysval_semantic_is_tess_factor(signature_element->sysval_semantic))
++        array_sizes[0] = 0;
+ 
+     builtin = vkd3d_get_spirv_builtin(compiler, reg_type, sysval);
+ 
+@@ -5547,7 +5499,6 @@ static void spirv_compiler_emit_initial_declarations(struct spirv_compiler *comp
+     if (compiler->shader_type != VKD3D_SHADER_TYPE_HULL)
+     {
+         vkd3d_spirv_builder_begin_main_function(builder);
+-        compiler->main_block_open = true;
+     }
+ }
+ 
+@@ -5650,7 +5601,10 @@ static void spirv_compiler_emit_dcl_indexable_temp(struct spirv_compiler *compil
+     SpvStorageClass storage_class;
+     size_t function_location;
+ 
+-    storage_class = SpvStorageClassFunction;
++    /* Indexable temps may be used by more than one function in hull shaders, and
++     * declarations generally should not occur within VSIR code blocks unless function
++     * scope is specified, e.g. DXIL alloca. */
++    storage_class = temp->has_function_scope ? SpvStorageClassFunction : SpvStorageClassPrivate;
+ 
+     vsir_register_init(&reg, VKD3DSPR_IDXTEMP, VKD3D_DATA_FLOAT, 1);
+     reg.idx[0].offset = temp->register_idx;
+@@ -6382,7 +6336,7 @@ static void spirv_compiler_emit_dcl_output_topology(struct spirv_compiler *compi
+     {
+         case VKD3D_PT_POINTLIST:
+             mode = SpvExecutionModeOutputPoints;
+-            spirv_compiler_emit_point_size(compiler);
++            compiler->emit_point_size = true;
+             break;
+         case VKD3D_PT_LINESTRIP:
+             mode = SpvExecutionModeOutputLineStrip;
+@@ -6544,20 +6498,45 @@ static void spirv_compiler_enter_shader_phase(struct spirv_compiler *compiler,
+     vkd3d_spirv_build_op_function(builder, void_id, function_id,
+             SpvFunctionControlMaskNone, function_type_id);
+ 
+-    vkd3d_spirv_build_op_label(builder, vkd3d_spirv_alloc_id(builder));
+-
+     compiler->phase = instruction->handler_idx;
+     spirv_compiler_emit_shader_phase_name(compiler, function_id, NULL);
+ 
+     phase = (instruction->handler_idx == VKD3DSIH_HS_CONTROL_POINT_PHASE)
+         ? &compiler->control_point_phase : &compiler->patch_constant_phase;
+     phase->function_id = function_id;
+-    phase->function_location = vkd3d_spirv_stream_current_location(&builder->function_stream);
++    /* The insertion location must be set after the label is emitted. */
++    phase->function_location = 0;
+ 
+     if (instruction->handler_idx == VKD3DSIH_HS_CONTROL_POINT_PHASE)
+         compiler->emit_default_control_point_phase = instruction->flags;
+ }
+ 
++static void spirv_compiler_initialise_block(struct spirv_compiler *compiler)
++{
++    struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
++
++    /* Insertion locations must point immediately after the function's initial label. */
++    if (compiler->shader_type == VKD3D_SHADER_TYPE_HULL)
++    {
++        struct vkd3d_shader_phase *phase = (compiler->phase == VKD3DSIH_HS_CONTROL_POINT_PHASE)
++            ? &compiler->control_point_phase : &compiler->patch_constant_phase;
++        if (!phase->function_location)
++            phase->function_location = vkd3d_spirv_stream_current_location(&builder->function_stream);
++    }
++    else if (!builder->main_function_location)
++    {
++        builder->main_function_location = vkd3d_spirv_stream_current_location(&builder->function_stream);
++    }
++
++    /* I/O declarations can result in emission of fixups, which must occur after the initial label. */
++    if (!compiler->prolog_emitted)
++    {
++        spirv_compiler_emit_main_prolog(compiler);
++        spirv_compiler_emit_io_declarations(compiler);
++        compiler->prolog_emitted = true;
++    }
++}
++
+ static void spirv_compiler_emit_default_control_point_phase(struct spirv_compiler *compiler)
+ {
+     const struct shader_signature *output_signature = &compiler->output_signature;
+@@ -6570,6 +6549,8 @@ static void spirv_compiler_emit_default_control_point_phase(struct spirv_compile
+     unsigned int component_count;
+     unsigned int i;
+ 
++    vkd3d_spirv_build_op_label(builder, vkd3d_spirv_alloc_id(builder));
++    spirv_compiler_initialise_block(compiler);
+     invocation_id = spirv_compiler_emit_load_invocation_id(compiler);
+ 
+     memset(&invocation, 0, sizeof(invocation));
+@@ -6664,7 +6645,11 @@ static void spirv_compiler_emit_hull_shader_main(struct spirv_compiler *compiler
+     struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
+     uint32_t void_id;
+ 
++    /* If a patch constant function used descriptor indexing the offsets must be reloaded. */
++    memset(compiler->descriptor_offset_ids, 0, compiler->offset_info.descriptor_table_count
++            * sizeof(*compiler->descriptor_offset_ids));
+     vkd3d_spirv_builder_begin_main_function(builder);
++    vkd3d_spirv_build_op_label(builder, vkd3d_spirv_alloc_id(builder));
+ 
+     void_id = vkd3d_spirv_get_op_type_void(builder);
+ 
+@@ -7608,379 +7593,129 @@ static void spirv_compiler_emit_kill(struct spirv_compiler *compiler,
+     vkd3d_spirv_build_op_label(builder, merge_block_id);
+ }
+ 
+-static struct vkd3d_control_flow_info *spirv_compiler_push_control_flow_level(
+-        struct spirv_compiler *compiler)
++static bool spirv_compiler_init_blocks(struct spirv_compiler *compiler, unsigned int block_count)
+ {
+-    if (!vkd3d_array_reserve((void **)&compiler->control_flow_info, &compiler->control_flow_info_size,
+-            compiler->control_flow_depth + 1, sizeof(*compiler->control_flow_info)))
+-    {
+-        ERR("Failed to allocate control flow info structure.\n");
+-        return NULL;
+-    }
++    compiler->block_count = block_count;
++
++    if (!(compiler->block_label_ids = vkd3d_calloc(block_count, sizeof(*compiler->block_label_ids))))
++        return false;
+ 
+-    return &compiler->control_flow_info[compiler->control_flow_depth++];
++    return true;
+ }
+ 
+-static void spirv_compiler_pop_control_flow_level(struct spirv_compiler *compiler)
++static void spirv_compiler_emit_label(struct spirv_compiler *compiler,
++        const struct vkd3d_shader_instruction *instruction)
+ {
+-    struct vkd3d_control_flow_info *cf_info;
++    struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
++    const struct vkd3d_shader_src_param *src = instruction->src;
++    unsigned int block_id = src->reg.idx[0].offset;
++    uint32_t label_id;
++
++    label_id = spirv_compiler_get_label_id(compiler, block_id);
++    vkd3d_spirv_build_op_label(builder, label_id);
+ 
+-    assert(compiler->control_flow_depth);
++    --block_id;
++    if (block_id < compiler->block_name_count && compiler->block_names[block_id])
++        vkd3d_spirv_build_op_name(builder, label_id, compiler->block_names[block_id]);
+ 
+-    cf_info = &compiler->control_flow_info[--compiler->control_flow_depth];
+-    memset(cf_info, 0, sizeof(*cf_info));
++    spirv_compiler_initialise_block(compiler);
+ }
+ 
+-static struct vkd3d_control_flow_info *spirv_compiler_find_innermost_loop(
+-        struct spirv_compiler *compiler)
++static void spirv_compiler_emit_merge(struct spirv_compiler *compiler,
++        uint32_t merge_block_id, uint32_t continue_block_id)
+ {
+-    int depth;
++    struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
+ 
+-    for (depth = compiler->control_flow_depth - 1; depth >= 0; --depth)
++    if (!merge_block_id)
++        return;
++
++    merge_block_id = spirv_compiler_get_label_id(compiler, merge_block_id);
++    if (!continue_block_id)
+     {
+-        if (compiler->control_flow_info[depth].current_block == VKD3D_BLOCK_LOOP)
+-            return &compiler->control_flow_info[depth];
++        vkd3d_spirv_build_op_selection_merge(builder, merge_block_id, SpvSelectionControlMaskNone);
+     }
+-
+-    return NULL;
+-}
+-
+-static struct vkd3d_control_flow_info *spirv_compiler_find_innermost_breakable_cf_construct(
+-        struct spirv_compiler *compiler)
+-{
+-    int depth;
+-
+-    for (depth = compiler->control_flow_depth - 1; depth >= 0; --depth)
++    else
+     {
+-        if (compiler->control_flow_info[depth].current_block == VKD3D_BLOCK_LOOP
+-                || compiler->control_flow_info[depth].current_block == VKD3D_BLOCK_SWITCH)
+-            return &compiler->control_flow_info[depth];
++        continue_block_id = spirv_compiler_get_label_id(compiler, continue_block_id);
++        vkd3d_spirv_build_op_loop_merge(builder, merge_block_id, continue_block_id, SpvLoopControlMaskNone);
+     }
+-
+-    return NULL;
+ }
+ 
+-static int spirv_compiler_emit_control_flow_instruction(struct spirv_compiler *compiler,
++static void spirv_compiler_emit_branch(struct spirv_compiler *compiler,
+         const struct vkd3d_shader_instruction *instruction)
+ {
+-    uint32_t loop_header_block_id, loop_body_block_id, continue_block_id;
+     struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
+     const struct vkd3d_shader_src_param *src = instruction->src;
+-    uint32_t merge_block_id, val_id, condition_id, true_label;
+-    struct vkd3d_control_flow_info *cf_info;
+-
+-    cf_info = compiler->control_flow_depth
+-            ? &compiler->control_flow_info[compiler->control_flow_depth - 1] : NULL;
++    uint32_t condition_id;
+ 
+-    switch (instruction->handler_idx)
++    if (vsir_register_is_label(&src[0].reg))
+     {
+-        case VKD3DSIH_IF:
+-            if (!(cf_info = spirv_compiler_push_control_flow_level(compiler)))
+-                return VKD3D_ERROR_OUT_OF_MEMORY;
+-
+-            val_id = spirv_compiler_emit_load_src(compiler, src, VKD3DSP_WRITEMASK_0);
+-            condition_id = spirv_compiler_emit_int_to_bool(compiler, instruction->flags, src->reg.data_type, 1, val_id);
+-
+-            true_label = vkd3d_spirv_alloc_id(builder);
+-            merge_block_id = vkd3d_spirv_alloc_id(builder);
+-            vkd3d_spirv_build_op_selection_merge(builder, merge_block_id, SpvSelectionControlMaskNone);
+-            cf_info->u.if_.stream_location = vkd3d_spirv_stream_current_location(&builder->function_stream);
+-            vkd3d_spirv_build_op_branch_conditional(builder, condition_id, true_label, merge_block_id);
+-
+-            vkd3d_spirv_build_op_label(builder, true_label);
+-
+-            cf_info->u.if_.id = compiler->branch_id;
+-            cf_info->u.if_.merge_block_id = merge_block_id;
+-            cf_info->u.if_.else_block_id = 0;
+-            cf_info->inside_block = true;
+-            cf_info->current_block = VKD3D_BLOCK_IF;
+-
+-            vkd3d_spirv_build_op_name(builder, merge_block_id, "branch%u_merge", compiler->branch_id);
+-            vkd3d_spirv_build_op_name(builder, true_label, "branch%u_true", compiler->branch_id);
+-            ++compiler->branch_id;
+-            break;
+-
+-        case VKD3DSIH_ELSE:
+-            assert(compiler->control_flow_depth);
+-            assert(cf_info->current_block == VKD3D_BLOCK_IF);
+-
+-            if (cf_info->inside_block)
+-                vkd3d_spirv_build_op_branch(builder, cf_info->u.if_.merge_block_id);
+-
+-            cf_info->u.if_.else_block_id = vkd3d_spirv_alloc_id(builder);
+-            vkd3d_spirv_as_op_branch_conditional(&builder->function_stream,
+-                    cf_info->u.if_.stream_location)->false_label = cf_info->u.if_.else_block_id;
+-            vkd3d_spirv_build_op_name(builder,
+-                    cf_info->u.if_.else_block_id, "branch%u_false", cf_info->u.if_.id);
+-            vkd3d_spirv_build_op_label(builder, cf_info->u.if_.else_block_id);
+-            cf_info->inside_block = true;
+-            break;
+-
+-        case VKD3DSIH_ENDIF:
+-            assert(compiler->control_flow_depth);
+-            assert(cf_info->current_block == VKD3D_BLOCK_IF);
+-
+-            if (cf_info->inside_block)
+-                vkd3d_spirv_build_op_branch(builder, cf_info->u.if_.merge_block_id);
+-
+-            vkd3d_spirv_build_op_label(builder, cf_info->u.if_.merge_block_id);
+-
+-            spirv_compiler_pop_control_flow_level(compiler);
+-            break;
+-
+-        case VKD3DSIH_LOOP:
+-            if (!(cf_info = spirv_compiler_push_control_flow_level(compiler)))
+-                return VKD3D_ERROR_OUT_OF_MEMORY;
+-
+-            loop_header_block_id = vkd3d_spirv_alloc_id(builder);
+-            loop_body_block_id = vkd3d_spirv_alloc_id(builder);
+-            continue_block_id = vkd3d_spirv_alloc_id(builder);
+-            merge_block_id = vkd3d_spirv_alloc_id(builder);
+-
+-            vkd3d_spirv_build_op_branch(builder, loop_header_block_id);
+-            vkd3d_spirv_build_op_label(builder, loop_header_block_id);
+-            vkd3d_spirv_build_op_loop_merge(builder, merge_block_id, continue_block_id, SpvLoopControlMaskNone);
+-            vkd3d_spirv_build_op_branch(builder, loop_body_block_id);
+-
+-            vkd3d_spirv_build_op_label(builder, loop_body_block_id);
+-
+-            cf_info->u.loop.header_block_id = loop_header_block_id;
+-            cf_info->u.loop.continue_block_id = continue_block_id;
+-            cf_info->u.loop.merge_block_id = merge_block_id;
+-            cf_info->current_block = VKD3D_BLOCK_LOOP;
+-            cf_info->inside_block = true;
+-
+-            vkd3d_spirv_build_op_name(builder, loop_header_block_id, "loop%u_header", compiler->loop_id);
+-            vkd3d_spirv_build_op_name(builder, loop_body_block_id, "loop%u_body", compiler->loop_id);
+-            vkd3d_spirv_build_op_name(builder, continue_block_id, "loop%u_continue", compiler->loop_id);
+-            vkd3d_spirv_build_op_name(builder, merge_block_id, "loop%u_merge", compiler->loop_id);
+-            ++compiler->loop_id;
+-            break;
+-
+-        case VKD3DSIH_ENDLOOP:
+-            assert(compiler->control_flow_depth);
+-            assert(cf_info->current_block == VKD3D_BLOCK_LOOP);
+-
+-            /* The loop block may have already been ended by an unconditional
+-             * break instruction right before the end of the loop. */
+-            if (cf_info->inside_block)
+-                vkd3d_spirv_build_op_branch(builder, cf_info->u.loop.continue_block_id);
+-
+-            vkd3d_spirv_build_op_label(builder, cf_info->u.loop.continue_block_id);
+-            vkd3d_spirv_build_op_branch(builder, cf_info->u.loop.header_block_id);
+-            vkd3d_spirv_build_op_label(builder, cf_info->u.loop.merge_block_id);
+-
+-            spirv_compiler_pop_control_flow_level(compiler);
+-            break;
+-
+-        case VKD3DSIH_SWITCH:
+-            if (!(cf_info = spirv_compiler_push_control_flow_level(compiler)))
+-                return VKD3D_ERROR_OUT_OF_MEMORY;
+-
+-            merge_block_id = vkd3d_spirv_alloc_id(builder);
+-
+-            assert(src->reg.data_type == VKD3D_DATA_INT);
+-            val_id = spirv_compiler_emit_load_src(compiler, src, VKD3DSP_WRITEMASK_0);
+-
+-            vkd3d_spirv_build_op_selection_merge(builder, merge_block_id, SpvSelectionControlMaskNone);
+-
+-            cf_info->u.switch_.id = compiler->switch_id;
+-            cf_info->u.switch_.merge_block_id = merge_block_id;
+-            cf_info->u.switch_.stream_location = vkd3d_spirv_stream_current_location(&builder->function_stream);
+-            cf_info->u.switch_.selector_id = val_id;
+-            cf_info->u.switch_.case_blocks = NULL;
+-            cf_info->u.switch_.case_blocks_size = 0;
+-            cf_info->u.switch_.case_block_count = 0;
+-            cf_info->u.switch_.default_block_id = 0;
+-            cf_info->inside_block = false;
+-            cf_info->current_block = VKD3D_BLOCK_SWITCH;
+-
+-            vkd3d_spirv_build_op_name(builder, merge_block_id, "switch%u_merge", compiler->switch_id);
+-
+-            ++compiler->switch_id;
+-
+-            if (!vkd3d_array_reserve((void **)&cf_info->u.switch_.case_blocks, &cf_info->u.switch_.case_blocks_size,
+-                    10, sizeof(*cf_info->u.switch_.case_blocks)))
+-                return VKD3D_ERROR_OUT_OF_MEMORY;
+-
+-            break;
+-
+-        case VKD3DSIH_ENDSWITCH:
+-            assert(compiler->control_flow_depth);
+-            assert(cf_info->current_block == VKD3D_BLOCK_SWITCH);
+-            assert(!cf_info->inside_block);
+-
+-            if (!cf_info->u.switch_.default_block_id)
+-                cf_info->u.switch_.default_block_id = cf_info->u.switch_.merge_block_id;
+-
+-            vkd3d_spirv_build_op_label(builder, cf_info->u.switch_.merge_block_id);
+-
+-            /* The OpSwitch instruction is inserted when the endswitch
+-             * instruction is processed because we do not know the number
+-             * of case statements in advance.*/
+-            vkd3d_spirv_begin_function_stream_insertion(builder, cf_info->u.switch_.stream_location);
+-            vkd3d_spirv_build_op_switch(builder, cf_info->u.switch_.selector_id,
+-                    cf_info->u.switch_.default_block_id, cf_info->u.switch_.case_blocks,
+-                    cf_info->u.switch_.case_block_count);
+-            vkd3d_spirv_end_function_stream_insertion(builder);
+-
+-            vkd3d_free(cf_info->u.switch_.case_blocks);
+-            spirv_compiler_pop_control_flow_level(compiler);
+-            break;
+-
+-        case VKD3DSIH_CASE:
+-        {
+-            uint32_t label_id, value;
+-
+-            assert(compiler->control_flow_depth);
+-            assert(cf_info->current_block == VKD3D_BLOCK_SWITCH);
+-
+-            if (src->swizzle != VKD3D_SHADER_SWIZZLE(X, X, X, X))
+-            {
+-                WARN("Unexpected src swizzle %#x.\n", src->swizzle);
+-                spirv_compiler_warning(compiler, VKD3D_SHADER_WARNING_SPV_INVALID_SWIZZLE,
+-                        "The swizzle for a switch case value is not scalar.");
+-            }
+-            assert(src->reg.type == VKD3DSPR_IMMCONST);
+-            value = *src->reg.u.immconst_u32;
+-
+-            if (!vkd3d_array_reserve((void **)&cf_info->u.switch_.case_blocks, &cf_info->u.switch_.case_blocks_size,
+-                    2 * (cf_info->u.switch_.case_block_count + 1), sizeof(*cf_info->u.switch_.case_blocks)))
+-                return VKD3D_ERROR_OUT_OF_MEMORY;
+-
+-            label_id = vkd3d_spirv_alloc_id(builder);
+-            if (cf_info->inside_block) /* fall-through */
+-                vkd3d_spirv_build_op_branch(builder, label_id);
+-
+-            cf_info->u.switch_.case_blocks[2 * cf_info->u.switch_.case_block_count + 0] = value;
+-            cf_info->u.switch_.case_blocks[2 * cf_info->u.switch_.case_block_count + 1] = label_id;
+-            ++cf_info->u.switch_.case_block_count;
+-
+-            vkd3d_spirv_build_op_label(builder, label_id);
+-            cf_info->inside_block = true;
+-            vkd3d_spirv_build_op_name(builder, label_id, "switch%u_case%u", cf_info->u.switch_.id, value);
+-            break;
+-        }
+-
+-        case VKD3DSIH_DEFAULT:
+-            assert(compiler->control_flow_depth);
+-            assert(cf_info->current_block == VKD3D_BLOCK_SWITCH);
+-            assert(!cf_info->u.switch_.default_block_id);
+-
+-            cf_info->u.switch_.default_block_id = vkd3d_spirv_alloc_id(builder);
+-            if (cf_info->inside_block) /* fall-through */
+-                vkd3d_spirv_build_op_branch(builder, cf_info->u.switch_.default_block_id);
+-
+-            vkd3d_spirv_build_op_label(builder, cf_info->u.switch_.default_block_id);
+-            vkd3d_spirv_build_op_name(builder, cf_info->u.switch_.default_block_id,
+-                    "switch%u_default", cf_info->u.switch_.id);
+-            cf_info->inside_block = true;
+-            break;
+-
+-        case VKD3DSIH_BREAK:
+-        {
+-            struct vkd3d_control_flow_info *breakable_cf_info;
+-
+-            assert(compiler->control_flow_depth);
+-
+-            if (!(breakable_cf_info = spirv_compiler_find_innermost_breakable_cf_construct(compiler)))
+-            {
+-                FIXME("Unhandled break instruction.\n");
+-                return VKD3D_ERROR_INVALID_SHADER;
+-            }
+-
+-            if (breakable_cf_info->current_block == VKD3D_BLOCK_LOOP)
+-            {
+-                vkd3d_spirv_build_op_branch(builder, breakable_cf_info->u.loop.merge_block_id);
+-            }
+-            else if (breakable_cf_info->current_block == VKD3D_BLOCK_SWITCH)
+-            {
+-                /* The current case block may have already been ended by an
+-                 * unconditional continue instruction. */
+-                if (breakable_cf_info->inside_block)
+-                    vkd3d_spirv_build_op_branch(builder, breakable_cf_info->u.switch_.merge_block_id);
+-            }
+-
+-            cf_info->inside_block = false;
+-            break;
+-        }
+-
+-        case VKD3DSIH_BREAKP:
++        if (instruction->src_count > 1)
+         {
+-            struct vkd3d_control_flow_info *loop_cf_info;
+-
+-            assert(compiler->control_flow_depth);
+-
+-            if (!(loop_cf_info = spirv_compiler_find_innermost_loop(compiler)))
+-            {
+-                ERR("Invalid 'breakc' instruction outside loop.\n");
+-                return VKD3D_ERROR_INVALID_SHADER;
+-            }
+-
+-            merge_block_id = spirv_compiler_emit_conditional_branch(compiler,
+-                    instruction, loop_cf_info->u.loop.merge_block_id);
+-            vkd3d_spirv_build_op_label(builder, merge_block_id);
+-            break;
+-        }
+-
+-        case VKD3DSIH_CONTINUE:
+-        {
+-            struct vkd3d_control_flow_info *loop_cf_info;
+-
+-            assert(compiler->control_flow_depth);
+-
+-            if (!(loop_cf_info = spirv_compiler_find_innermost_loop(compiler)))
+-            {
+-                ERR("Invalid 'continue' instruction outside loop.\n");
+-                return VKD3D_ERROR_INVALID_SHADER;
+-            }
+-
+-            vkd3d_spirv_build_op_branch(builder, loop_cf_info->u.loop.continue_block_id);
+-
+-            cf_info->inside_block = false;
+-            break;
++            /* Loop merge only. Must have a merge block and a continue block. */
++            spirv_compiler_emit_merge(compiler, src[1].reg.idx[0].offset, src[2].reg.idx[0].offset);
+         }
++        vkd3d_spirv_build_op_branch(builder, spirv_compiler_get_label_id(compiler, src[0].reg.idx[0].offset));
++        return;
++    }
+ 
+-        case VKD3DSIH_CONTINUEP:
+-        {
+-            struct vkd3d_control_flow_info *loop_cf_info;
+-
+-            if (!(loop_cf_info = spirv_compiler_find_innermost_loop(compiler)))
+-            {
+-                ERR("Invalid 'continuec' instruction outside loop.\n");
+-                return VKD3D_ERROR_INVALID_SHADER;
+-            }
++    if (!vkd3d_swizzle_is_scalar(src->swizzle))
++    {
++        WARN("Unexpected src swizzle %#x.\n", src->swizzle);
++        spirv_compiler_warning(compiler, VKD3D_SHADER_WARNING_SPV_INVALID_SWIZZLE,
++                "The swizzle for a branch condition value is not scalar.");
++    }
+ 
+-            merge_block_id = spirv_compiler_emit_conditional_branch(compiler,
+-                    instruction, loop_cf_info->u.loop.continue_block_id);
+-            vkd3d_spirv_build_op_label(builder, merge_block_id);
+-            break;
+-        }
++    condition_id = spirv_compiler_emit_load_src(compiler, &src[0], VKD3DSP_WRITEMASK_0);
++    condition_id = spirv_compiler_emit_int_to_bool(compiler,
++            VKD3D_SHADER_CONDITIONAL_OP_NZ, src[0].reg.data_type, 1, condition_id);
++    /* Emit the merge immediately before the branch instruction. */
++    spirv_compiler_emit_merge(compiler, src[3].reg.idx[0].offset,
++            (instruction->src_count > 4) ? src[4].reg.idx[0].offset : 0);
++    vkd3d_spirv_build_op_branch_conditional(builder, condition_id,
++            spirv_compiler_get_label_id(compiler, src[1].reg.idx[0].offset),
++            spirv_compiler_get_label_id(compiler, src[2].reg.idx[0].offset));
++}
+ 
+-        case VKD3DSIH_RET:
+-            spirv_compiler_emit_return(compiler, instruction);
++static void spirv_compiler_emit_switch(struct spirv_compiler *compiler,
++        const struct vkd3d_shader_instruction *instruction)
++{
++    struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
++    const struct vkd3d_shader_src_param *src = instruction->src;
++    uint32_t val_id, default_id;
++    unsigned int i, word_count;
++    uint32_t *cases;
+ 
+-            if (cf_info)
+-                cf_info->inside_block = false;
+-            else
+-                compiler->main_block_open = false;
+-            break;
++    if (!vkd3d_swizzle_is_scalar(src[0].swizzle))
++    {
++        WARN("Unexpected src swizzle %#x.\n", src[0].swizzle);
++        spirv_compiler_warning(compiler, VKD3D_SHADER_WARNING_SPV_INVALID_SWIZZLE,
++                "The swizzle for a switch value is not scalar.");
++    }
+ 
+-        case VKD3DSIH_RETP:
+-            spirv_compiler_emit_retc(compiler, instruction);
+-            break;
++    word_count = instruction->src_count - 3;
++    if (!(cases = vkd3d_calloc(word_count, sizeof(*cases))))
++    {
++        spirv_compiler_error(compiler, VKD3D_SHADER_ERROR_SPV_OUT_OF_MEMORY,
++                "Failed to allocate %u words for switch cases.", word_count);
++        return;
++    }
+ 
+-        case VKD3DSIH_DISCARD:
+-        case VKD3DSIH_TEXKILL:
+-            spirv_compiler_emit_kill(compiler, instruction);
+-            break;
++    val_id = spirv_compiler_emit_load_src(compiler, &src[0], VKD3DSP_WRITEMASK_0);
++    default_id = spirv_compiler_get_label_id(compiler, src[1].reg.idx[0].offset);
++    /* No instructions may occur between the merge and the switch. */
++    spirv_compiler_emit_merge(compiler, src[2].reg.idx[0].offset, 0);
+ 
+-        default:
+-            ERR("Unexpected instruction %#x.\n", instruction->handler_idx);
+-            break;
++    src = &src[3];
++    for (i = 0; i < word_count; i += 2)
++    {
++        cases[i] = src[i].reg.u.immconst_u32[0];
++        cases[i + 1] = spirv_compiler_get_label_id(compiler, src[i + 1].reg.idx[0].offset);
+     }
+ 
+-    return VKD3D_OK;
++    vkd3d_spirv_build_op_switch(builder, val_id, default_id, cases, word_count / 2u);
++
++    vkd3d_free(cases);
+ }
+ 
+ static void spirv_compiler_emit_deriv_instruction(struct spirv_compiler *compiler,
+@@ -9519,28 +9254,15 @@ static void spirv_compiler_emit_main_prolog(struct spirv_compiler *compiler)
+ {
+     spirv_compiler_emit_push_constant_buffers(compiler);
+ 
+-    if (compiler->xfb_info && compiler->xfb_info->element_count
+-            && compiler->shader_type != VKD3D_SHADER_TYPE_GEOMETRY)
++    if (compiler->emit_point_size)
+         spirv_compiler_emit_point_size(compiler);
+ }
+ 
+-static bool is_dcl_instruction(enum vkd3d_shader_opcode handler_idx)
+-{
+-    return (VKD3DSIH_DCL <= handler_idx && handler_idx <= VKD3DSIH_DCL_VERTICES_OUT)
+-            || handler_idx == VKD3DSIH_HS_DECLS;
+-}
+-
+ static int spirv_compiler_handle_instruction(struct spirv_compiler *compiler,
+         const struct vkd3d_shader_instruction *instruction)
+ {
+     int ret = VKD3D_OK;
+ 
+-    if (!is_dcl_instruction(instruction->handler_idx) && !compiler->after_declarations_section)
+-    {
+-        compiler->after_declarations_section = true;
+-        spirv_compiler_emit_main_prolog(compiler);
+-    }
+-
+     switch (instruction->handler_idx)
+     {
+         case VKD3DSIH_DCL_GLOBAL_FLAGS:
+@@ -9727,24 +9449,24 @@ static int spirv_compiler_handle_instruction(struct spirv_compiler *compiler,
+         case VKD3DSIH_F32TOF16:
+             spirv_compiler_emit_f32tof16(compiler, instruction);
+             break;
+-        case VKD3DSIH_BREAK:
+-        case VKD3DSIH_BREAKP:
+-        case VKD3DSIH_CASE:
+-        case VKD3DSIH_CONTINUE:
+-        case VKD3DSIH_CONTINUEP:
+-        case VKD3DSIH_DEFAULT:
+-        case VKD3DSIH_DISCARD:
+-        case VKD3DSIH_ELSE:
+-        case VKD3DSIH_ENDIF:
+-        case VKD3DSIH_ENDLOOP:
+-        case VKD3DSIH_ENDSWITCH:
+-        case VKD3DSIH_IF:
+-        case VKD3DSIH_LOOP:
+         case VKD3DSIH_RET:
++            spirv_compiler_emit_return(compiler, instruction);
++            break;
+         case VKD3DSIH_RETP:
+-        case VKD3DSIH_SWITCH:
++            spirv_compiler_emit_retc(compiler, instruction);
++            break;
++        case VKD3DSIH_DISCARD:
+         case VKD3DSIH_TEXKILL:
+-            ret = spirv_compiler_emit_control_flow_instruction(compiler, instruction);
++            spirv_compiler_emit_kill(compiler, instruction);
++            break;
++        case VKD3DSIH_LABEL:
++            spirv_compiler_emit_label(compiler, instruction);
++            break;
++        case VKD3DSIH_BRANCH:
++            spirv_compiler_emit_branch(compiler, instruction);
++            break;
++        case VKD3DSIH_SWITCH_MONOLITHIC:
++            spirv_compiler_emit_switch(compiler, instruction);
+             break;
+         case VKD3DSIH_DSX:
+         case VKD3DSIH_DSX_COARSE:
+@@ -9966,6 +9688,9 @@ static int spirv_compiler_generate_spirv(struct spirv_compiler *compiler,
+     if ((result = vkd3d_shader_normalise(parser, compile_info)) < 0)
+         return result;
+ 
++    if (parser->shader_desc.block_count && !spirv_compiler_init_blocks(compiler, parser->shader_desc.block_count))
++        return VKD3D_ERROR_OUT_OF_MEMORY;
++
+     instructions = parser->instructions;
+     memset(&parser->instructions, 0, sizeof(parser->instructions));
+ 
+@@ -9976,6 +9701,8 @@ static int spirv_compiler_generate_spirv(struct spirv_compiler *compiler,
+     memset(&shader_desc->output_signature, 0, sizeof(shader_desc->output_signature));
+     memset(&shader_desc->patch_constant_signature, 0, sizeof(shader_desc->patch_constant_signature));
+     compiler->use_vocp = parser->shader_desc.use_vocp;
++    compiler->block_names = parser->shader_desc.block_names;
++    compiler->block_name_count = parser->shader_desc.block_name_count;
+ 
+     compiler->input_control_point_count = shader_desc->input_control_point_count;
+     compiler->output_control_point_count = shader_desc->output_control_point_count;
+@@ -9983,8 +9710,6 @@ static int spirv_compiler_generate_spirv(struct spirv_compiler *compiler,
+     if (compiler->shader_type != VKD3D_SHADER_TYPE_HULL)
+         spirv_compiler_emit_shader_signature_outputs(compiler);
+ 
+-    spirv_compiler_emit_io_declarations(compiler);
+-
+     for (i = 0; i < instructions.count && result >= 0; ++i)
+     {
+         compiler->location.line = i + 1;
+@@ -9996,9 +9721,6 @@ static int spirv_compiler_generate_spirv(struct spirv_compiler *compiler,
+     if (result < 0)
+         return result;
+ 
+-    if (compiler->main_block_open)
+-        vkd3d_spirv_build_op_return(builder);
+-
+     if (!is_in_default_phase(compiler))
+         spirv_compiler_leave_shader_phase(compiler);
+     else
+diff --git a/libs/vkd3d/libs/vkd3d-shader/tpf.c b/libs/vkd3d/libs/vkd3d-shader/tpf.c
+index 1f1944bc0da..e4dfb5235ec 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/tpf.c
++++ b/libs/vkd3d/libs/vkd3d-shader/tpf.c
+@@ -919,6 +919,7 @@ static void shader_sm4_read_dcl_index_range(struct vkd3d_shader_instruction *ins
+ {
+     struct vkd3d_shader_index_range *index_range = &ins->declaration.index_range;
+     unsigned int i, register_idx, register_count;
++    const struct shader_signature *signature;
+     enum vkd3d_shader_register_type type;
+     struct sm4_index_range_array *ranges;
+     unsigned int *io_masks;
+@@ -932,40 +933,38 @@ static void shader_sm4_read_dcl_index_range(struct vkd3d_shader_instruction *ins
+     register_count = index_range->register_count;
+     write_mask = index_range->dst.write_mask;
+ 
+-    if (vsir_write_mask_component_count(write_mask) != 1)
+-    {
+-        WARN("Unhandled write mask %#x.\n", write_mask);
+-        vkd3d_shader_parser_warning(&priv->p, VKD3D_SHADER_WARNING_TPF_UNHANDLED_INDEX_RANGE_MASK,
+-                "Index range mask %#x is not scalar.", write_mask);
+-    }
+-
+     switch ((type = index_range->dst.reg.type))
+     {
+         case VKD3DSPR_INPUT:
+         case VKD3DSPR_INCONTROLPOINT:
+             io_masks = priv->input_register_masks;
+             ranges = &priv->input_index_ranges;
++            signature = &priv->p.shader_desc.input_signature;
+             break;
+         case VKD3DSPR_OUTPUT:
+             if (sm4_parser_is_in_fork_or_join_phase(priv))
+             {
+                 io_masks = priv->patch_constant_register_masks;
+                 ranges = &priv->patch_constant_index_ranges;
++                signature = &priv->p.shader_desc.patch_constant_signature;
+             }
+             else
+             {
+                 io_masks = priv->output_register_masks;
+                 ranges = &priv->output_index_ranges;
++                signature = &priv->p.shader_desc.output_signature;
+             }
+             break;
+         case VKD3DSPR_COLOROUT:
+         case VKD3DSPR_OUTCONTROLPOINT:
+             io_masks = priv->output_register_masks;
+             ranges = &priv->output_index_ranges;
++            signature = &priv->p.shader_desc.output_signature;
+             break;
+         case VKD3DSPR_PATCHCONST:
+             io_masks = priv->patch_constant_register_masks;
+             ranges = &priv->patch_constant_index_ranges;
++            signature = &priv->p.shader_desc.patch_constant_signature;
+             break;
+ 
+         default:
+@@ -1003,6 +1002,18 @@ static void shader_sm4_read_dcl_index_range(struct vkd3d_shader_instruction *ins
+ 
+     for (i = 0; i < register_count; ++i)
+     {
++        const struct signature_element *e = vsir_signature_find_element_for_reg(signature, register_idx + i, write_mask);
++        /* Index ranges should not contain non-arrayed sysvals. FXC tries to forbid this but it is buggy,
++         * and can emit a range containing a sysval if the sysval is not actually accessed. */
++        if (e && e->sysval_semantic && register_count > 1 && !vsir_sysval_semantic_is_tess_factor(e->sysval_semantic)
++                && !vsir_sysval_semantic_is_clip_cull(e->sysval_semantic))
++        {
++            WARN("Sysval %u included in an index range declaration.\n", e->sysval_semantic);
++            vkd3d_shader_parser_error(&priv->p, VKD3D_SHADER_ERROR_TPF_INVALID_INDEX_RANGE_DCL,
++                    "Index range base %u, count %u, mask %#x contains sysval %u.",
++                    register_idx, register_count, write_mask, e->sysval_semantic);
++            return;
++        }
+         if ((io_masks[register_idx + i] & write_mask) != write_mask)
+         {
+             WARN("No matching declaration for index range base %u, count %u, mask %#x.\n",
+@@ -1117,6 +1128,7 @@ static void shader_sm4_read_dcl_indexable_temp(struct vkd3d_shader_instruction *
+     ins->declaration.indexable_temp.alignment = 0;
+     ins->declaration.indexable_temp.data_type = VKD3D_DATA_FLOAT;
+     ins->declaration.indexable_temp.component_count = *tokens;
++    ins->declaration.indexable_temp.has_function_scope = false;
+ }
+ 
+ static void shader_sm4_read_dcl_global_flags(struct vkd3d_shader_instruction *ins, uint32_t opcode,
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+index 0af7ea0d266..ace58161e6b 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+@@ -238,6 +238,7 @@ enum vkd3d_shader_opcode
+     VKD3DSIH_BEM,
+     VKD3DSIH_BFI,
+     VKD3DSIH_BFREV,
++    VKD3DSIH_BRANCH,
+     VKD3DSIH_BREAK,
+     VKD3DSIH_BREAKC,
+     VKD3DSIH_BREAKP,
+@@ -472,6 +473,7 @@ enum vkd3d_shader_opcode
+     VKD3DSIH_SUB,
+     VKD3DSIH_SWAPC,
+     VKD3DSIH_SWITCH,
++    VKD3DSIH_SWITCH_MONOLITHIC,
+     VKD3DSIH_SYNC,
+     VKD3DSIH_TEX,
+     VKD3DSIH_TEXBEM,
+@@ -818,6 +820,7 @@ struct vkd3d_shader_indexable_temp
+     unsigned int alignment;
+     enum vkd3d_data_type data_type;
+     unsigned int component_count;
++    bool has_function_scope;
+     const struct vkd3d_shader_immediate_constant_buffer *initialiser;
+ };
+ 
+@@ -883,6 +886,8 @@ struct vkd3d_shader_src_param
+     enum vkd3d_shader_src_modifier modifiers;
+ };
+ 
++void vsir_src_param_init_label(struct vkd3d_shader_src_param *param, unsigned int label_id);
++
+ struct vkd3d_shader_index_range
+ {
+     struct vkd3d_shader_dst_param dst;
+@@ -1016,6 +1021,7 @@ struct vkd3d_shader_desc
+ 
+     uint32_t temp_count;
+     unsigned int ssa_count;
++    unsigned int block_count;
+ 
+     struct
+     {
+@@ -1023,6 +1029,9 @@ struct vkd3d_shader_desc
+     } flat_constant_count[3];
+ 
+     bool use_vocp;
++
++    const char **block_names;
++    size_t block_name_count;
+ };
+ 
+ struct vkd3d_shader_register_semantic
+@@ -1185,6 +1194,11 @@ static inline bool register_is_constant(const struct vkd3d_shader_register *reg)
+     return (reg->type == VKD3DSPR_IMMCONST || reg->type == VKD3DSPR_IMMCONST64);
+ }
+ 
++static inline bool vsir_register_is_label(const struct vkd3d_shader_register *reg)
++{
++    return reg->type == VKD3DSPR_LABEL;
++}
++
+ struct vkd3d_shader_param_node
+ {
+     struct vkd3d_shader_param_node *next;
+diff --git a/libs/vkd3d/libs/vkd3d/resource.c b/libs/vkd3d/libs/vkd3d/resource.c
+index 163dd6ce210..f9e50335fa8 100644
+--- a/libs/vkd3d/libs/vkd3d/resource.c
++++ b/libs/vkd3d/libs/vkd3d/resource.c
+@@ -22,7 +22,7 @@
+ #define VKD3D_NULL_BUFFER_SIZE 16
+ #define VKD3D_NULL_VIEW_FORMAT DXGI_FORMAT_R8G8B8A8_UNORM
+ 
+-LONG64 object_global_serial_id;
++uint64_t object_global_serial_id;
+ 
+ static inline bool is_cpu_accessible_heap(const D3D12_HEAP_PROPERTIES *properties)
+ {
+@@ -4314,7 +4314,7 @@ static HRESULT d3d12_descriptor_heap_init(struct d3d12_descriptor_heap *descript
+ 
+     descriptor_heap->ID3D12DescriptorHeap_iface.lpVtbl = &d3d12_descriptor_heap_vtbl;
+     descriptor_heap->refcount = 1;
+-    descriptor_heap->serial_id = InterlockedIncrement64(&object_global_serial_id);
++    descriptor_heap->serial_id = vkd3d_atomic_increment_u64(&object_global_serial_id);
+ 
+     descriptor_heap->desc = *desc;
+ 
+diff --git a/libs/vkd3d/libs/vkd3d/vkd3d_private.h b/libs/vkd3d/libs/vkd3d/vkd3d_private.h
+index 9bf4575d46a..4abe7df3a95 100644
+--- a/libs/vkd3d/libs/vkd3d/vkd3d_private.h
++++ b/libs/vkd3d/libs/vkd3d/vkd3d_private.h
+@@ -67,7 +67,7 @@
+  * this number to prevent excessive pool memory use. */
+ #define VKD3D_MAX_VIRTUAL_HEAP_DESCRIPTORS_PER_TYPE (16 * 1024u)
+ 
+-extern LONG64 object_global_serial_id;
++extern uint64_t object_global_serial_id;
+ 
+ struct d3d12_command_list;
+ struct d3d12_device;
+-- 
+2.43.0
+
