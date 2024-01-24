@@ -1,0 +1,131 @@
+From 870d98b28ca3ff52c21feedfb3b1e5f3d6ade7b9 Mon Sep 17 00:00:00 2001
+From: Robert Wilhelm <robert.wilhelm@gmx.net>
+Date: Wed, 29 Jun 2022 17:40:58 +0200
+Subject: [PATCH] scrrun: Support wildcards in MoveFolder().
+
+Signed-off-by: Robert Wilhelm <robert.wilhelm@gmx.net>
+---
+ dlls/scrrun/filesystem.c       | 49 ++++++++++++++++++++++++++--------
+ dlls/scrrun/tests/filesystem.c | 27 ++++++++++++++++++-
+ 2 files changed, 64 insertions(+), 12 deletions(-)
+
+diff --git a/dlls/scrrun/filesystem.c b/dlls/scrrun/filesystem.c
+index 2c364ec6e08..749a06739c7 100644
+--- a/dlls/scrrun/filesystem.c
++++ b/dlls/scrrun/filesystem.c
+@@ -3820,9 +3820,12 @@ static inline HRESULT create_movefolder_error(DWORD err)
+ 
+ static HRESULT WINAPI filesys_MoveFolder(IFileSystem3 *iface, BSTR source, BSTR destination)
+ {
+-    int src_len, dst_len;
++    int src_len, dst_len, name_len;
+     WCHAR src_path[MAX_PATH], dst_path[MAX_PATH];
+     WCHAR *filename;
++    WIN32_FIND_DATAW ffd;
++    HANDLE f;
++    BOOL wildcard = FALSE, separator = FALSE;
+ 
+     TRACE("%p %s %s\n", iface, debugstr_w(source), debugstr_w(destination));
+ 
+@@ -3832,19 +3835,43 @@ static HRESULT WINAPI filesys_MoveFolder(IFileSystem3 *iface, BSTR source, BSTR
+     if (!GetFullPathNameW(source, MAX_PATH, src_path, &filename))
+         return E_FAIL;
+ 
+-    src_len = SysStringLen(src_path);
+-    if (src_path[src_len-1] != '\\' && src_path[src_len-1] != '/')
+-        wcscat(src_path, L"\\");
++    if (wcspbrk(filename,L"*?"))
++        wildcard = TRUE;
+ 
+     dst_len = lstrlenW(destination);
+-    if (destination[dst_len-1] == '\\' || destination[dst_len-1] == '/') {
+-        lstrcpyW(dst_path, destination);
+-        lstrcatW(dst_path, filename);
+-        TRACE("move %s to %s\n",  debugstr_w(src_path), debugstr_w(dst_path));
+-        return MoveFileW(src_path, dst_path) ? S_OK : create_movefolder_error(GetLastError());
++    if (destination[dst_len-1] == '\\' || destination[dst_len-1] == '/')
++        separator = TRUE;
++
++    if (!wildcard && !separator) {
++        src_len = SysStringLen(src_path);
++        if (src_path[src_len-1] != '\\' && src_path[src_len-1] != '/')
++            wcscat(src_path, L"\\");
++        TRACE("move %s to %s\n",  debugstr_w(src_path), debugstr_w(destination));
++        return MoveFileW(src_path, destination) ? S_OK : create_movefolder_error(GetLastError());
+     }
+-    TRACE("move %s to %s\n",  debugstr_w(src_path), debugstr_w(destination));
+-    return MoveFileW(src_path, destination) ? S_OK : create_movefolder_error(GetLastError());
++
++    memcpy(dst_path, destination, dst_len*sizeof(WCHAR));
++    if (!separator)
++        dst_path[dst_len++] = '\\';
++    src_len = filename - src_path;
++    f = FindFirstFileW(source, &ffd);
++    if(f == INVALID_HANDLE_VALUE)
++        return create_error(GetLastError());
++
++    do {
++        name_len = lstrlenW(ffd.cFileName);
++        if(src_len+name_len+1 >= MAX_PATH || dst_len+name_len+1 >= MAX_PATH) {
++            FindClose(f);
++            return E_FAIL;
++        }
++        memcpy(filename, ffd.cFileName, (name_len+1)*sizeof(WCHAR));
++        memcpy(dst_path + dst_len, ffd.cFileName, (name_len+1)*sizeof(WCHAR));
++        TRACE("move %s to %s\n",  debugstr_w(src_path), debugstr_w(dst_path));
++        if (!MoveFileW(src_path, dst_path)) return create_error(GetLastError());
++    } while(FindNextFileW(f, &ffd));
++    FindClose(f);
++
++    return S_OK;
+ }
+ 
+ static inline HRESULT copy_file(const WCHAR *source, DWORD source_len,
+diff --git a/dlls/scrrun/tests/filesystem.c b/dlls/scrrun/tests/filesystem.c
+index d237e21e9a6..4f5f1b0a7b8 100644
+--- a/dlls/scrrun/tests/filesystem.c
++++ b/dlls/scrrun/tests/filesystem.c
+@@ -2642,7 +2642,7 @@ static void test_MoveFile(void)
+ static void test_MoveFolder(void)
+ {
+     BSTR src, dst, str, empty;
+-    WCHAR buffW1[MAX_PATH],buffW2[MAX_PATH],pathW[MAX_PATH];
++    WCHAR buffW1[MAX_PATH], buffW2[MAX_PATH], pathW[MAX_PATH], srcW[MAX_PATH];
+     HRESULT hr;
+     HANDLE file;
+ 
+@@ -2737,6 +2737,31 @@ static void test_MoveFolder(void)
+     lstrcatW(pathW,L"foo");
+     ok(RemoveDirectoryW(pathW), "can't remove %s directory\n", wine_dbgstr_w(pathW));
+     ok(RemoveDirectoryW(buffW2), "can't remove %s directory\n", wine_dbgstr_w(buffW2));
++
++    GetTempPathW(MAX_PATH, buffW1);
++    lstrcatW(buffW1,L"foo1");
++    GetTempPathW(MAX_PATH, buffW2);
++    lstrcatW(buffW2,L"foo2");
++    GetTempPathW(MAX_PATH, srcW);
++    lstrcatW(srcW,L"foo?");
++    GetTempPathW(MAX_PATH, pathW);
++    lstrcatW(pathW,L"bar");
++    ok(CreateDirectoryW(buffW1, NULL), "CreateDirectory(%s) failed\n", wine_dbgstr_w(buffW1));
++    ok(CreateDirectoryW(buffW2, NULL), "CreateDirectory(%s) failed\n", wine_dbgstr_w(buffW2));
++    ok(CreateDirectoryW(pathW, NULL), "CreateDirectory(%s) failed\n", wine_dbgstr_w(pathW));
++    src = SysAllocString(srcW);
++    dst = SysAllocString(pathW);
++    hr = IFileSystem3_MoveFolder(fs3, src, dst);
++    ok(hr == S_OK, "Unexpected hr %#lx.\n", hr);
++    SysFreeString(src);
++    SysFreeString(dst);
++    lstrcpyW(buffW1,pathW);
++    lstrcatW(buffW1,L"\\foo1");
++    lstrcpyW(buffW2,pathW);
++    lstrcatW(buffW2,L"\\foo2");
++    ok(RemoveDirectoryW(buffW1), "can't remove %s directory\n", wine_dbgstr_w(buffW1));
++    ok(RemoveDirectoryW(buffW2), "can't remove %s directory\n", wine_dbgstr_w(buffW2));
++    ok(RemoveDirectoryW(pathW), "can't remove %s directory\n", wine_dbgstr_w(pathW));
+ }
+ 
+ static void test_DoOpenPipeStream(void)
+-- 
+2.43.0
+
