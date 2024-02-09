@@ -1,4 +1,4 @@
-From c58ac24e08827a2b5aac12f365197d1c5174db3a Mon Sep 17 00:00:00 2001
+From 5306b83f69d37bf99110fc1b662fccc89552be3d Mon Sep 17 00:00:00 2001
 From: "Erich E. Hoover" <erich.e.hoover@gmail.com>
 Date: Thu, 16 Jan 2014 21:02:11 -0700
 Subject: [PATCH] server: Implement FILE_OPEN_REPARSE_POINT option.
@@ -6,11 +6,11 @@ Subject: [PATCH] server: Implement FILE_OPEN_REPARSE_POINT option.
 Signed-off-by: Erich E. Hoover <erich.e.hoover@gmail.com>
 ---
  dlls/kernelbase/file.c |   2 +
- server/fd.c            | 152 +++++++++++++++++++++++++++++++++++++++--
- 2 files changed, 147 insertions(+), 7 deletions(-)
+ server/fd.c            | 147 +++++++++++++++++++++++++++++++++++++++--
+ 2 files changed, 142 insertions(+), 7 deletions(-)
 
 diff --git a/dlls/kernelbase/file.c b/dlls/kernelbase/file.c
-index 7c2e132bdcb..2a8dc8df875 100644
+index e1ba92a6448..04cb6760872 100644
 --- a/dlls/kernelbase/file.c
 +++ b/dlls/kernelbase/file.c
 @@ -732,6 +732,8 @@ static UINT get_nt_file_options( DWORD attributes )
@@ -23,7 +23,7 @@ index 7c2e132bdcb..2a8dc8df875 100644
  }
  
 diff --git a/server/fd.c b/server/fd.c
-index 0b0e91ebfbb..233c9eb94ef 100644
+index 8576882aaa9..0d5964b2427 100644
 --- a/server/fd.c
 +++ b/server/fd.c
 @@ -31,6 +31,7 @@
@@ -45,7 +45,48 @@ index 0b0e91ebfbb..233c9eb94ef 100644
  #if defined(HAVE_SYS_EPOLL_H) && defined(HAVE_EPOLL_CREATE)
  # include <sys/epoll.h>
  # define USE_EPOLL
-@@ -1152,6 +1157,59 @@ static void inode_dump( struct object *obj, int verbose )
+@@ -1066,6 +1071,9 @@ static void device_destroy( struct object *obj )
+     list_remove( &device->entry );  /* remove it from the hash table */
+ }
+ 
++static int is_reparse_dir( const char *path, int *is_dir );
++static int rmdir_recursive( int dir_fd, const char *pathname );
++
+ /****************************************************************/
+ /* inode functions */
+ 
+@@ -1073,10 +1081,29 @@ static void unlink_closed_fd( struct inode *inode, struct closed_fd *fd )
+ {
+     /* make sure it is still the same file */
+     struct stat st;
+-    if (!stat( fd->unix_name, &st ) && st.st_dev == inode->device->dev && st.st_ino == inode->ino)
++    if (!lstat( fd->unix_name, &st ) && st.st_dev == inode->device->dev && st.st_ino == inode->ino)
+     {
++        int is_reparse_point = (is_reparse_dir( fd->unix_name, NULL ) == 0);
+         if (S_ISDIR(st.st_mode)) rmdir( fd->unix_name );
+         else unlink( fd->unix_name );
++        /* remove reparse point metadata (if applicable) */
++        if (is_reparse_point)
++        {
++            char tmp[PATH_MAX], metadata_path[PATH_MAX], *p;
++
++            strcpy( tmp, fd->unix_name );
++            p = dirname( tmp );
++            if (p != tmp ) strcpy( tmp, p );
++            strcpy( metadata_path, tmp );
++            strcat( metadata_path, "/.REPARSE_POINT/" );
++            strcpy( tmp, fd->unix_name );
++            p = basename( tmp );
++            if (p != tmp) strcpy( tmp, p );
++            strcat( metadata_path, tmp );
++
++            rmdir_recursive( AT_FDCWD, metadata_path );
++            rmdir( dirname( metadata_path ) );
++        }
+     }
+ }
+ 
+@@ -1115,6 +1142,59 @@ static void inode_dump( struct object *obj, int verbose )
      fprintf( stderr, "\n" );
  }
  
@@ -105,43 +146,7 @@ index 0b0e91ebfbb..233c9eb94ef 100644
  static void inode_destroy( struct object *obj )
  {
      struct inode *inode = (struct inode *)obj;
-@@ -1168,7 +1226,34 @@ static void inode_destroy( struct object *obj )
-         list_remove( ptr );
-         if (fd->unix_fd != -1) close( fd->unix_fd );
-         if (fd->disp_flags & FILE_DISPOSITION_DELETE)
--            unlink_closed_fd( inode, fd );
-+        {
-+            /* make sure it is still the same file */
-+            struct stat st;
-+            if (!lstat( fd->unix_name, &st ) && st.st_dev == inode->device->dev && st.st_ino == inode->ino)
-+            {
-+                int is_reparse_point = (is_reparse_dir( fd->unix_name, NULL ) == 0);
-+                if (S_ISDIR(st.st_mode)) rmdir( fd->unix_name );
-+                else unlink_closed_fd( inode, fd );
-+                /* remove reparse point metadata (if applicable) */
-+                if (is_reparse_point)
-+                {
-+                    char tmp[PATH_MAX], metadata_path[PATH_MAX], *p;
-+
-+                    strcpy( tmp, fd->unix_name );
-+                    p = dirname( tmp );
-+                    if (p != tmp ) strcpy( tmp, p );
-+                    strcpy( metadata_path, tmp );
-+                    strcat( metadata_path, "/.REPARSE_POINT/" );
-+                    strcpy( tmp, fd->unix_name );
-+                    p = basename( tmp );
-+                    if (p != tmp) strcpy( tmp, p );
-+                    strcat( metadata_path, tmp );
-+
-+                    rmdir_recursive( AT_FDCWD, metadata_path );
-+                    rmdir( dirname( metadata_path ) );
-+                }
-+            }
-+        }
-         free( fd->unix_name );
-         free( fd );
-     }
-@@ -1902,6 +1987,38 @@ void get_nt_name( struct fd *fd, struct unicode_str *name )
+@@ -1870,6 +1950,38 @@ void get_nt_name( struct fd *fd, struct unicode_str *name )
      name->len = fd->nt_namelen;
  }
  
@@ -180,7 +185,7 @@ index 0b0e91ebfbb..233c9eb94ef 100644
  /* open() wrapper that returns a struct fd with no fd user set */
  struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_name,
                      int flags, mode_t *mode, unsigned int access,
-@@ -1962,6 +2079,15 @@ struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_nam
+@@ -1930,6 +2042,15 @@ struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_nam
      }
      else rw_mode = O_RDONLY;
  
@@ -196,7 +201,7 @@ index 0b0e91ebfbb..233c9eb94ef 100644
      if ((fd->unix_fd = open( name, rw_mode | (flags & ~O_TRUNC), *mode )) == -1)
      {
          /* if we tried to open a directory for write access, retry read-only */
-@@ -1986,7 +2112,7 @@ struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_nam
+@@ -1954,7 +2075,7 @@ struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_nam
      fd->unix_name = NULL;
      if ((path = dup_fd_name( root, name )))
      {
@@ -205,7 +210,7 @@ index 0b0e91ebfbb..233c9eb94ef 100644
          free( path );
      }
  
-@@ -1997,10 +2123,11 @@ struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_nam
+@@ -1965,10 +2086,11 @@ struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_nam
      *mode = st.st_mode;
  
      /* only bother with an inode for normal files and directories */
@@ -218,7 +223,7 @@ index 0b0e91ebfbb..233c9eb94ef 100644
  
          if (!inode)
          {
-@@ -2015,13 +2142,17 @@ struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_nam
+@@ -1983,13 +2105,17 @@ struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_nam
          list_add_head( &inode->open, &fd->inode_entry );
          closed_fd = NULL;
  
@@ -238,7 +243,7 @@ index 0b0e91ebfbb..233c9eb94ef 100644
          {
              set_error( STATUS_FILE_IS_A_DIRECTORY );
              goto error;
-@@ -2454,6 +2585,7 @@ static struct fd *get_handle_fd_obj( struct process *process, obj_handle_t handl
+@@ -2436,6 +2562,7 @@ static struct fd *get_handle_fd_obj( struct process *process, obj_handle_t handl
  
  static int is_dir_empty( int fd )
  {
@@ -246,7 +251,7 @@ index 0b0e91ebfbb..233c9eb94ef 100644
      DIR *dir;
      int empty;
      struct dirent *de;
-@@ -2461,8 +2593,13 @@ static int is_dir_empty( int fd )
+@@ -2443,8 +2570,13 @@ static int is_dir_empty( int fd )
      if ((fd = dup( fd )) == -1)
          return -1;
  
@@ -261,7 +266,7 @@ index 0b0e91ebfbb..233c9eb94ef 100644
          close( fd );
          return -1;
      }
-@@ -2474,6 +2611,7 @@ static int is_dir_empty( int fd )
+@@ -2456,6 +2588,7 @@ static int is_dir_empty( int fd )
          empty = 0;
      }
      closedir( dir );
@@ -269,7 +274,7 @@ index 0b0e91ebfbb..233c9eb94ef 100644
      return empty;
  }
  
-@@ -2512,7 +2650,7 @@ static void set_fd_disposition( struct fd *fd, unsigned int flags )
+@@ -2494,7 +2627,7 @@ static void set_fd_disposition( struct fd *fd, unsigned int flags )
              file_set_error();
              return;
          }
@@ -279,5 +284,5 @@ index 0b0e91ebfbb..233c9eb94ef 100644
              if (!(flags & FILE_DISPOSITION_IGNORE_READONLY_ATTRIBUTE) &&
                  !(st.st_mode & (S_IWUSR | S_IWGRP | S_IWOTH)))
 -- 
-2.40.1
+2.43.0
 
