@@ -1,0 +1,1511 @@
+From 40a35105a5ad10c4f55237bf75cd0a8f8e645ab2 Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Wed, 21 Feb 2024 15:11:16 +1100
+Subject: [PATCH] Updated vkd3d to d9c68ee481367d90da949cbd41b09ceb4b6a3823.
+
+---
+ libs/vkd3d/libs/vkd3d-shader/dxil.c           | 284 ++++++++++---
+ libs/vkd3d/libs/vkd3d-shader/fx.c             | 379 ++++++++++++++++--
+ libs/vkd3d/libs/vkd3d-shader/hlsl.c           |  20 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl.h           |  16 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl.y           | 130 +++---
+ libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c   |  48 ++-
+ libs/vkd3d/libs/vkd3d-shader/tpf.c            |   8 +
+ .../libs/vkd3d-shader/vkd3d_shader_main.c     |  10 +-
+ .../libs/vkd3d-shader/vkd3d_shader_private.h  |   1 +
+ 9 files changed, 712 insertions(+), 184 deletions(-)
+
+diff --git a/libs/vkd3d/libs/vkd3d-shader/dxil.c b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+index 33d30aef08e..2ca3aa955e7 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/dxil.c
++++ b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+@@ -199,10 +199,12 @@ enum dxil_resource_kind
+     RESOURCE_KIND_FEEDBACKTEXTURE2DARRAY  = 18,
+ };
+ 
+-enum dxil_resource_type
++enum dxil_resource_tag
+ {
+-    RESOURCE_TYPE_NON_RAW_STRUCTURED = 0,
+-    RESOURCE_TYPE_RAW_STRUCTURED     = 1,
++    RESOURCE_TAG_ELEMENT_TYPE          = 0,
++    RESOURCE_TAG_ELEMENT_STRIDE        = 1,
++    RESOURCE_TAG_SAMPLER_FEEDBACK_KIND = 2,
++    RESOURCE_TAG_ENABLE_ATOMIC_64      = 3,
+ };
+ 
+ enum dxil_component_type
+@@ -381,6 +383,8 @@ enum dx_intrinsic_opcode
+     DX_TEXTURE_LOAD                 =  66,
+     DX_TEXTURE_STORE                =  67,
+     DX_BUFFER_LOAD                  =  68,
++    DX_ATOMIC_BINOP                 =  78,
++    DX_ATOMIC_CMP_XCHG              =  79,
+     DX_DERIV_COARSEX                =  83,
+     DX_DERIV_COARSEY                =  84,
+     DX_DERIV_FINEX                  =  85,
+@@ -438,6 +442,20 @@ enum dxil_predicate
+     ICMP_SLE   = 41,
+ };
+ 
++enum dxil_atomic_binop_code
++{
++    ATOMIC_BINOP_ADD,
++    ATOMIC_BINOP_AND,
++    ATOMIC_BINOP_OR,
++    ATOMIC_BINOP_XOR,
++    ATOMIC_BINOP_IMIN,
++    ATOMIC_BINOP_IMAX,
++    ATOMIC_BINOP_UMIN,
++    ATOMIC_BINOP_UMAX,
++    ATOMIC_BINOP_XCHG,
++    ATOMIC_BINOP_INVALID,
++};
++
+ struct sm6_pointer_info
+ {
+     const struct sm6_type *type;
+@@ -2275,7 +2293,7 @@ static void src_param_init_from_value(struct vkd3d_shader_src_param *param, cons
+ static void src_param_init_vector_from_reg(struct vkd3d_shader_src_param *param,
+         const struct vkd3d_shader_register *reg)
+ {
+-    param->swizzle = VKD3D_SHADER_NO_SWIZZLE;
++    param->swizzle = (reg->dimension == VSIR_DIMENSION_VEC4) ? VKD3D_SHADER_NO_SWIZZLE : VKD3D_SHADER_SWIZZLE(X, X, X, X);
+     param->modifiers = VKD3DSPSM_NONE;
+     param->reg = *reg;
+ }
+@@ -3823,6 +3841,105 @@ static void sm6_parser_emit_dx_binary(struct sm6_parser *sm6, enum dx_intrinsic_
+     instruction_dst_param_init_ssa_scalar(ins, sm6);
+ }
+ 
++static enum vkd3d_shader_opcode map_dx_atomic_binop(const struct sm6_value *operand, struct sm6_parser *sm6)
++{
++    uint64_t code = sm6_value_get_constant_uint(operand);
++
++    switch (code)
++    {
++        case ATOMIC_BINOP_ADD:
++            return VKD3DSIH_IMM_ATOMIC_IADD;
++        case ATOMIC_BINOP_AND:
++            return VKD3DSIH_IMM_ATOMIC_AND;
++        case ATOMIC_BINOP_IMAX:
++            return VKD3DSIH_IMM_ATOMIC_IMAX;
++        case ATOMIC_BINOP_IMIN:
++            return VKD3DSIH_IMM_ATOMIC_IMIN;
++        case ATOMIC_BINOP_OR:
++            return VKD3DSIH_IMM_ATOMIC_OR;
++        case ATOMIC_BINOP_UMAX:
++            return VKD3DSIH_IMM_ATOMIC_UMAX;
++        case ATOMIC_BINOP_UMIN:
++            return VKD3DSIH_IMM_ATOMIC_UMIN;
++        case ATOMIC_BINOP_XCHG:
++            return VKD3DSIH_IMM_ATOMIC_EXCH;
++        case ATOMIC_BINOP_XOR:
++            return VKD3DSIH_IMM_ATOMIC_XOR;
++        /* DXIL currently doesn't use SUB and NAND. */
++        default:
++            FIXME("Unhandled atomic binop %"PRIu64".\n", code);
++            vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_OPERAND,
++                    "Operation %"PRIu64" for an atomic binop instruction is unhandled.", code);
++            return VKD3DSIH_INVALID;
++    }
++}
++
++static void sm6_parser_emit_dx_atomic_binop(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
++        const struct sm6_value **operands, struct function_emission_state *state)
++{
++    struct sm6_value *dst = sm6_parser_get_current_value(sm6);
++    enum vkd3d_shader_resource_type resource_type;
++    bool is_cmp_xchg = op == DX_ATOMIC_CMP_XCHG;
++    unsigned int i, coord_idx, coord_count = 1;
++    struct vkd3d_shader_dst_param *dst_params;
++    struct vkd3d_shader_src_param *src_params;
++    enum vkd3d_shader_opcode handler_idx;
++    struct vkd3d_shader_instruction *ins;
++    const struct sm6_value *resource;
++    struct vkd3d_shader_register reg;
++
++    resource = operands[0];
++    if (!sm6_value_validate_is_handle(resource, sm6))
++        return;
++
++    if (is_cmp_xchg)
++        handler_idx = VKD3DSIH_IMM_ATOMIC_CMP_EXCH;
++    else if ((handler_idx = map_dx_atomic_binop(operands[1], sm6)) == VKD3DSIH_INVALID)
++        return;
++
++    coord_idx = 2 - is_cmp_xchg;
++    resource_type = resource->u.handle.d->resource_type;
++    if (resource_type != VKD3D_SHADER_RESOURCE_BUFFER || resource->u.handle.d->kind == RESOURCE_KIND_STRUCTUREDBUFFER)
++    {
++        coord_count = 2 + (resource_type != VKD3D_SHADER_RESOURCE_BUFFER);
++        if (!sm6_parser_emit_coordinate_construct(sm6, &operands[coord_idx], coord_count, NULL, state, &reg))
++            return;
++    }
++    else
++    {
++        reg = operands[coord_idx]->u.reg;
++    }
++
++    for (i = coord_idx + coord_count; i < coord_idx + 3; ++i)
++    {
++        if (!operands[i]->is_undefined)
++        {
++            WARN("Ignoring unexpected operand.\n");
++            vkd3d_shader_parser_warning(&sm6->p, VKD3D_SHADER_WARNING_DXIL_IGNORING_OPERANDS,
++                    "Ignoring an unexpected defined operand value for atomic instruction %u.", handler_idx);
++            break;
++        }
++    }
++
++    ins = state->ins;
++    vsir_instruction_init(ins, &sm6->p.location, handler_idx);
++
++    if (!(src_params = instruction_src_params_alloc(ins, 2 + is_cmp_xchg, sm6)))
++        return;
++    src_param_init_vector_from_reg(&src_params[0], &reg);
++    if (is_cmp_xchg)
++        src_param_init_from_value(&src_params[1], operands[4]);
++    src_param_init_from_value(&src_params[1 + is_cmp_xchg], operands[5]);
++
++    dst_params = instruction_dst_params_alloc(ins, 2, sm6);
++    dst_param_init(&dst_params[0]);
++    register_init_ssa_scalar(&dst_params[0].reg, dst->type, dst, sm6);
++    dst_param_init(&dst_params[1]);
++    dst_params[1].reg = resource->u.handle.reg;
++
++    dst->u.reg = dst_params[0].reg;
++}
++
+ static void sm6_parser_emit_dx_cbuffer_load(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
+         const struct sm6_value **operands, struct function_emission_state *state)
+ {
+@@ -4357,6 +4474,8 @@ static const struct sm6_dx_opcode_info sm6_dx_op_table[] =
+     [DX_ACOS                          ] = {"g", "R",    sm6_parser_emit_dx_unary},
+     [DX_ASIN                          ] = {"g", "R",    sm6_parser_emit_dx_unary},
+     [DX_ATAN                          ] = {"g", "R",    sm6_parser_emit_dx_unary},
++    [DX_ATOMIC_BINOP                  ] = {"o", "HciiiR", sm6_parser_emit_dx_atomic_binop},
++    [DX_ATOMIC_CMP_XCHG               ] = {"o", "HiiiRR", sm6_parser_emit_dx_atomic_binop},
+     [DX_BFREV                         ] = {"m", "R",    sm6_parser_emit_dx_unary},
+     [DX_BUFFER_LOAD                   ] = {"o", "Hii",  sm6_parser_emit_dx_buffer_load},
+     [DX_CBUFFER_LOAD_LEGACY           ] = {"o", "Hi",   sm6_parser_emit_dx_cbuffer_load},
+@@ -6556,15 +6675,97 @@ static enum vkd3d_data_type vkd3d_data_type_from_dxil_component_type(enum dxil_c
+     return data_type;
+ }
+ 
++struct resource_additional_values
++{
++    enum vkd3d_data_type data_type;
++    unsigned int byte_stride;
++};
++
++static bool resources_load_additional_values(struct resource_additional_values *info,
++        const struct sm6_metadata_node *node, enum dxil_resource_kind kind, struct sm6_parser *sm6)
++{
++    unsigned int i, operand_count, tag, value;
++
++    info->data_type = VKD3D_DATA_UNUSED;
++    info->byte_stride = 0;
++
++    if (node->operand_count & 1)
++    {
++        WARN("Operand count is not even.\n");
++        vkd3d_shader_parser_warning(&sm6->p, VKD3D_SHADER_WARNING_DXIL_IGNORING_OPERANDS,
++                "Operand count for resource descriptor tag/value pairs is not even.");
++    }
++    operand_count = node->operand_count & ~1u;
++
++    for (i = 0; i < operand_count; i += 2)
++    {
++        if (!sm6_metadata_get_uint_value(sm6, node->operands[i], &tag)
++                || !sm6_metadata_get_uint_value(sm6, node->operands[i + 1], &value))
++        {
++            WARN("Failed to load tag/value pair at index %u.\n", i);
++            vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_RESOURCES,
++                    "Resource descriptor tag/value pair at index %u is not an integer pair.", i);
++            return false;
++        }
++
++        switch (tag)
++        {
++            case RESOURCE_TAG_ELEMENT_TYPE:
++                if (value && kind != RESOURCE_KIND_TYPEDBUFFER && !resource_kind_is_texture(kind))
++                {
++                    WARN("Invalid type %u for an untyped resource.\n", value);
++                    vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_RESOURCES,
++                            "An untyped resource has type %u.", value);
++                    return false;
++                }
++                info->data_type = vkd3d_data_type_from_dxil_component_type(value, sm6);
++                break;
++
++            case RESOURCE_TAG_ELEMENT_STRIDE:
++                if (value && kind != RESOURCE_KIND_STRUCTUREDBUFFER)
++                {
++                    WARN("Invalid stride %u for an unstructured resource.\n", value);
++                    vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_RESOURCES,
++                            "An unstructured resource has a byte stride.");
++                    return false;
++                }
++                info->byte_stride = value;
++                break;
++
++            case RESOURCE_TAG_SAMPLER_FEEDBACK_KIND:
++                /* MinMip = 0, MipRegionUsed = 1 */
++                FIXME("Unhandled sampler feedback kind %u.\n", value);
++                vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_RESOURCES,
++                        "Sampler feedback kind %u is unhandled.", value);
++                break;
++
++            case RESOURCE_TAG_ENABLE_ATOMIC_64:
++                if (value)
++                {
++                    FIXME("Unsupported 64-bit atomic ops.\n");
++                    vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_RESOURCES,
++                            "64-bit atomic ops on resources are not supported.");
++                }
++                break;
++
++            default:
++                FIXME("Unhandled tag %u, value %u.\n", tag, value);
++                vkd3d_shader_parser_warning(&sm6->p, VKD3D_SHADER_WARNING_DXIL_IGNORING_OPERANDS,
++                        "Tag %u for resource descriptor additional value %u is unhandled.", tag, value);
++                break;
++        }
++    }
++
++    return true;
++}
++
+ static struct vkd3d_shader_resource *sm6_parser_resources_load_common_info(struct sm6_parser *sm6,
+         const struct sm6_metadata_value *type_value, bool is_uav, enum dxil_resource_kind kind,
+         const struct sm6_metadata_value *m, struct vkd3d_shader_instruction *ins)
+ {
++    struct resource_additional_values resource_values;
+     enum vkd3d_shader_resource_type resource_type;
+-    enum dxil_resource_type dxil_resource_type;
+-    const struct sm6_metadata_node *node;
+-    enum vkd3d_data_type data_type;
+-    unsigned int i, values[2];
++    unsigned int i;
+ 
+     if (!(resource_type = shader_resource_type_from_dxil_resource_kind(kind)))
+     {
+@@ -6590,72 +6791,37 @@ static struct vkd3d_shader_resource *sm6_parser_resources_load_common_info(struc
+         return NULL;
+     }
+ 
+-    node = m->u.node;
+-
+-    if (node->operand_count < 2)
+-    {
+-        WARN("Invalid operand count %u.\n", node->operand_count);
+-        vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_OPERAND_COUNT,
+-                "Invalid operand count %u for a resource descriptor.", node->operand_count);
++    if (!resources_load_additional_values(&resource_values, m->u.node, kind, sm6))
+         return NULL;
+-    }
+-    if (node->operand_count > 2)
+-    {
+-        WARN("Ignoring %u extra operands.\n", node->operand_count - 2);
+-        vkd3d_shader_parser_warning(&sm6->p, VKD3D_SHADER_WARNING_DXIL_IGNORING_OPERANDS,
+-                "Ignoring %u extra operands for a resource descriptor.", node->operand_count - 2);
+-    }
+-
+-    for (i = 0; i < 2; ++i)
+-    {
+-        if (!sm6_metadata_get_uint_value(sm6, node->operands[i], &values[i]))
+-        {
+-            WARN("Failed to load uint value at index %u.\n", i);
+-            vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_RESOURCES,
+-                    "A resource descriptor operand metadata value is not an integer.");
+-            return NULL;
+-        }
+-    }
+ 
+-    if ((dxil_resource_type = values[0]) == RESOURCE_TYPE_NON_RAW_STRUCTURED)
++    if (kind == RESOURCE_KIND_TYPEDBUFFER || resource_kind_is_texture(kind))
+     {
+-        if (kind != RESOURCE_KIND_TYPEDBUFFER && !resource_kind_is_texture(kind))
++        if (resource_values.data_type == VKD3D_DATA_UNUSED)
+         {
+-            WARN("Unhandled resource kind %u.\n", kind);
++            WARN("No data type defined.\n");
+             vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_RESOURCES,
+-                    "Resource kind %u for a typed resource is unhandled.", kind);
+-            return NULL;
++                    "A typed resource has no data type.");
+         }
+ 
+-        data_type = vkd3d_data_type_from_dxil_component_type(values[1], sm6);
+         ins->handler_idx = is_uav ? VKD3DSIH_DCL_UAV_TYPED : VKD3DSIH_DCL;
+         for (i = 0; i < VKD3D_VEC4_SIZE; ++i)
+-            ins->declaration.semantic.resource_data_type[i] = data_type;
++            ins->declaration.semantic.resource_data_type[i] = resource_values.data_type;
+         ins->declaration.semantic.resource_type = resource_type;
+         ins->declaration.semantic.resource.reg.write_mask = VKD3DSP_WRITEMASK_ALL;
+ 
+         return &ins->declaration.semantic.resource;
+     }
+-    else if (dxil_resource_type == RESOURCE_TYPE_RAW_STRUCTURED)
++    else if (kind == RESOURCE_KIND_RAWBUFFER)
+     {
+-        if (kind == RESOURCE_KIND_RAWBUFFER)
+-        {
+-            ins->handler_idx = is_uav ? VKD3DSIH_DCL_UAV_RAW : VKD3DSIH_DCL_RESOURCE_RAW;
+-            ins->declaration.raw_resource.resource.reg.write_mask = 0;
+-
+-            return &ins->declaration.raw_resource.resource;
+-        }
+-
+-        if (kind != RESOURCE_KIND_STRUCTUREDBUFFER)
+-        {
+-            WARN("Unhandled resource kind %u.\n", kind);
+-            vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_RESOURCES,
+-                    "Resource kind %u for a raw or structured buffer is unhandled.", kind);
+-            return NULL;
+-        }
++        ins->handler_idx = is_uav ? VKD3DSIH_DCL_UAV_RAW : VKD3DSIH_DCL_RESOURCE_RAW;
++        ins->declaration.raw_resource.resource.reg.write_mask = 0;
+ 
++        return &ins->declaration.raw_resource.resource;
++    }
++    else if (kind == RESOURCE_KIND_STRUCTUREDBUFFER)
++    {
+         ins->handler_idx = is_uav ? VKD3DSIH_DCL_UAV_STRUCTURED : VKD3DSIH_DCL_RESOURCE_STRUCTURED;
+-        ins->declaration.structured_resource.byte_stride = values[1];
++        ins->declaration.structured_resource.byte_stride = resource_values.byte_stride;
+         ins->declaration.structured_resource.resource.reg.write_mask = 0;
+ 
+         /* TODO: 16-bit resources. */
+@@ -6671,9 +6837,9 @@ static struct vkd3d_shader_resource *sm6_parser_resources_load_common_info(struc
+     }
+     else
+     {
+-        FIXME("Unhandled resource type %u.\n", dxil_resource_type);
++        FIXME("Unhandled resource kind %u.\n", kind);
+         vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_RESOURCES,
+-                "Resource type %u is unhandled.", dxil_resource_type);
++                "Resource kind %u is unhandled.", kind);
+     }
+ 
+     return NULL;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/fx.c b/libs/vkd3d/libs/vkd3d-shader/fx.c
+index e1459f76c14..11dee4ba9d7 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d/libs/vkd3d-shader/fx.c
+@@ -20,6 +20,11 @@
+ 
+ #include "hlsl.h"
+ 
++static inline size_t put_u32_unaligned(struct vkd3d_bytecode_buffer *buffer, uint32_t value)
++{
++    return bytecode_put_bytes_unaligned(buffer, &value, sizeof(value));
++}
++
+ struct string_entry
+ {
+     struct rb_entry entry;
+@@ -28,6 +33,14 @@ struct string_entry
+     uint32_t offset;
+ };
+ 
++struct type_entry
++{
++    struct list entry;
++    const char *name;
++    uint32_t elements_count;
++    uint32_t offset;
++};
++
+ static int string_storage_compare(const void *key, const struct rb_entry *entry)
+ {
+     struct string_entry *string_entry = RB_ENTRY_VALUE(entry, struct string_entry, entry);
+@@ -48,6 +61,7 @@ struct fx_write_context;
+ struct fx_write_context_ops
+ {
+     uint32_t (*write_string)(const char *string, struct fx_write_context *fx);
++    uint32_t (*write_type)(const struct hlsl_type *type, struct fx_write_context *fx);
+     void (*write_technique)(struct hlsl_ir_var *var, struct fx_write_context *fx);
+     void (*write_pass)(struct hlsl_ir_var *var, struct fx_write_context *fx);
+ };
+@@ -60,17 +74,28 @@ struct fx_write_context
+     struct vkd3d_bytecode_buffer structured;
+ 
+     struct rb_tree strings;
++    struct list types;
+ 
+     unsigned int min_technique_version;
+     unsigned int max_technique_version;
+ 
+     uint32_t technique_count;
+     uint32_t group_count;
++    uint32_t buffer_count;
++    uint32_t numeric_variable_count;
+     int status;
+ 
+     const struct fx_write_context_ops *ops;
+ };
+ 
++static void set_status(struct fx_write_context *fx, int status)
++{
++    if (fx->status < 0)
++        return;
++    if (status < 0)
++        fx->status = status;
++}
++
+ static uint32_t write_string(const char *string, struct fx_write_context *fx)
+ {
+     return fx->ops->write_string(string, fx);
+@@ -81,6 +106,46 @@ static void write_pass(struct hlsl_ir_var *var, struct fx_write_context *fx)
+     fx->ops->write_pass(var, fx);
+ }
+ 
++static uint32_t write_type(const struct hlsl_type *type, struct fx_write_context *fx)
++{
++    struct type_entry *type_entry;
++    unsigned int elements_count;
++    const char *name;
++
++    if (type->class == HLSL_CLASS_ARRAY)
++    {
++        name = hlsl_get_multiarray_element_type(type)->name;
++        elements_count = hlsl_get_multiarray_size(type);
++    }
++    else
++    {
++        name = type->name;
++        elements_count = 0;
++    }
++
++    LIST_FOR_EACH_ENTRY(type_entry, &fx->types, struct type_entry, entry)
++    {
++        if (strcmp(type_entry->name, name))
++            continue;
++
++        if (type_entry->elements_count != elements_count)
++            continue;
++
++        return type_entry->offset;
++    }
++
++    if (!(type_entry = hlsl_alloc(fx->ctx, sizeof(*type_entry))))
++        return 0;
++
++    type_entry->offset = fx->ops->write_type(type, fx);
++    type_entry->name = name;
++    type_entry->elements_count = elements_count;
++
++    list_add_tail(&fx->types, &type_entry->entry);
++
++    return type_entry->offset;
++}
++
+ static void fx_write_context_init(struct hlsl_ctx *ctx, const struct fx_write_context_ops *ops,
+         struct fx_write_context *fx)
+ {
+@@ -107,13 +172,22 @@ static void fx_write_context_init(struct hlsl_ctx *ctx, const struct fx_write_co
+     }
+ 
+     rb_init(&fx->strings, string_storage_compare);
++    list_init(&fx->types);
+ }
+ 
+ static int fx_write_context_cleanup(struct fx_write_context *fx)
+ {
++    struct type_entry *type, *next_type;
+     int status = fx->status;
++
+     rb_destroy(&fx->strings, string_storage_destroy, NULL);
+ 
++    LIST_FOR_EACH_ENTRY_SAFE(type, next_type, &fx->types, struct type_entry, entry)
++    {
++        list_remove(&type->entry);
++        vkd3d_free(type);
++    }
++
+     return status;
+ }
+ 
+@@ -145,7 +219,7 @@ static uint32_t write_fx_4_string(const char *string, struct fx_write_context *f
+     if (!(string_entry = hlsl_alloc(fx->ctx, sizeof(*string_entry))))
+         return 0;
+ 
+-    string_entry->offset = put_string(&fx->unstructured, string);
++    string_entry->offset = bytecode_put_bytes_unaligned(&fx->unstructured, string, strlen(string) + 1);
+     string_entry->string = string;
+ 
+     rb_put(&fx->strings, string, &string_entry->entry);
+@@ -181,6 +255,156 @@ static void write_fx_2_pass(struct hlsl_ir_var *var, struct fx_write_context *fx
+     /* TODO: assignments */
+ }
+ 
++static uint32_t get_fx_4_type_size(const struct hlsl_type *type)
++{
++    uint32_t elements_count;
++
++    elements_count = hlsl_get_multiarray_size(type);
++    type = hlsl_get_multiarray_element_type(type);
++
++    return type->reg_size[HLSL_REGSET_NUMERIC] * sizeof(float) * elements_count;
++}
++
++static uint32_t get_fx_4_numeric_type_description(const struct hlsl_type *type, struct fx_write_context *fx)
++{
++    static const unsigned int NUMERIC_BASE_TYPE_SHIFT = 3;
++    static const unsigned int NUMERIC_ROWS_SHIFT = 8;
++    static const unsigned int NUMERIC_COLUMNS_SHIFT = 11;
++    static const unsigned int NUMERIC_COLUMN_MAJOR_MASK = 0x4000;
++    static const uint32_t numeric_type_class[] =
++    {
++        [HLSL_CLASS_SCALAR] = 1,
++        [HLSL_CLASS_VECTOR] = 2,
++        [HLSL_CLASS_MATRIX] = 3,
++    };
++    static const uint32_t numeric_base_type[] =
++    {
++        [HLSL_TYPE_FLOAT] = 1,
++        [HLSL_TYPE_INT  ] = 2,
++        [HLSL_TYPE_UINT ] = 3,
++        [HLSL_TYPE_BOOL ] = 4,
++    };
++    uint32_t value = 0;
++
++    switch (type->class)
++    {
++        case HLSL_CLASS_SCALAR:
++        case HLSL_CLASS_VECTOR:
++        case HLSL_CLASS_MATRIX:
++            value |= numeric_type_class[type->class];
++            break;
++        default:
++            FIXME("Unexpected type class %u.\n", type->class);
++            set_status(fx, VKD3D_ERROR_NOT_IMPLEMENTED);
++            return 0;
++    }
++
++    switch (type->base_type)
++    {
++        case HLSL_TYPE_FLOAT:
++        case HLSL_TYPE_INT:
++        case HLSL_TYPE_UINT:
++        case HLSL_TYPE_BOOL:
++            value |= (numeric_base_type[type->base_type] << NUMERIC_BASE_TYPE_SHIFT);
++            break;
++        default:
++            FIXME("Unexpected base type %u.\n", type->base_type);
++            set_status(fx, VKD3D_ERROR_NOT_IMPLEMENTED);
++            return 0;
++    }
++
++    value |= (type->dimy & 0x7) << NUMERIC_ROWS_SHIFT;
++    value |= (type->dimx & 0x7) << NUMERIC_COLUMNS_SHIFT;
++    if (type->modifiers & HLSL_MODIFIER_COLUMN_MAJOR)
++        value |= NUMERIC_COLUMN_MAJOR_MASK;
++
++    return value;
++}
++
++static uint32_t write_fx_4_type(const struct hlsl_type *type, struct fx_write_context *fx)
++{
++    struct vkd3d_bytecode_buffer *buffer = &fx->unstructured;
++    uint32_t name_offset, offset, size, stride, numeric_desc;
++    uint32_t elements_count = 0;
++    static const uint32_t variable_type[] =
++    {
++        [HLSL_CLASS_SCALAR] = 1,
++        [HLSL_CLASS_VECTOR] = 1,
++        [HLSL_CLASS_MATRIX] = 1,
++        [HLSL_CLASS_OBJECT] = 2,
++        [HLSL_CLASS_STRUCT] = 3,
++    };
++
++    /* Resolve arrays to element type and number of elements. */
++    if (type->class == HLSL_CLASS_ARRAY)
++    {
++        elements_count = hlsl_get_multiarray_size(type);
++        type = hlsl_get_multiarray_element_type(type);
++    }
++
++    name_offset = write_string(type->name, fx);
++    offset = put_u32_unaligned(buffer, name_offset);
++
++    switch (type->class)
++    {
++        case HLSL_CLASS_SCALAR:
++        case HLSL_CLASS_VECTOR:
++        case HLSL_CLASS_MATRIX:
++        case HLSL_CLASS_OBJECT:
++        case HLSL_CLASS_STRUCT:
++            put_u32_unaligned(buffer, variable_type[type->class]);
++            break;
++        default:
++            FIXME("Writing type class %u is not implemented.\n", type->class);
++            set_status(fx, VKD3D_ERROR_NOT_IMPLEMENTED);
++            return 0;
++    }
++
++    size = stride = type->reg_size[HLSL_REGSET_NUMERIC] * sizeof(float);
++    if (elements_count)
++        size *= elements_count;
++    stride = align(stride, 4 * sizeof(float));
++
++    put_u32_unaligned(buffer, elements_count);
++    put_u32_unaligned(buffer, size); /* Total size. */
++    put_u32_unaligned(buffer, stride); /* Stride. */
++    put_u32_unaligned(buffer, size);
++
++    if (type->class == HLSL_CLASS_STRUCT)
++    {
++        size_t i;
++
++        put_u32_unaligned(buffer, type->e.record.field_count);
++        for (i = 0; i < type->e.record.field_count; ++i)
++        {
++            const struct hlsl_struct_field *field = &type->e.record.fields[i];
++            uint32_t semantic_offset, field_type_offset;
++
++            name_offset = write_string(field->name, fx);
++            semantic_offset = write_string(field->semantic.name, fx);
++            field_type_offset = write_type(field->type, fx);
++
++            put_u32_unaligned(buffer, name_offset);
++            put_u32_unaligned(buffer, semantic_offset);
++            put_u32_unaligned(buffer, field->reg_offset[HLSL_REGSET_NUMERIC]);
++            put_u32_unaligned(buffer, field_type_offset);
++        }
++    }
++    else if (type->class == HLSL_CLASS_OBJECT)
++    {
++        FIXME("Object types are not supported.\n");
++        set_status(fx, VKD3D_ERROR_NOT_IMPLEMENTED);
++        return 0;
++    }
++    else /* Numeric type */
++    {
++        numeric_desc = get_fx_4_numeric_type_description(type, fx);
++        put_u32_unaligned(buffer, numeric_desc);
++    }
++
++    return offset;
++}
++
+ static void write_fx_4_technique(struct hlsl_ir_var *var, struct fx_write_context *fx)
+ {
+     struct vkd3d_bytecode_buffer *buffer = &fx->structured;
+@@ -202,14 +426,6 @@ static void write_fx_4_technique(struct hlsl_ir_var *var, struct fx_write_contex
+     set_u32(buffer, count_offset, count);
+ }
+ 
+-static void set_status(struct fx_write_context *fx, int status)
+-{
+-    if (fx->status < 0)
+-        return;
+-    if (status < 0)
+-        fx->status = status;
+-}
+-
+ static void write_techniques(struct hlsl_scope *scope, struct fx_write_context *fx)
+ {
+     struct hlsl_ir_var *var;
+@@ -227,10 +443,10 @@ static void write_techniques(struct hlsl_scope *scope, struct fx_write_context *
+     set_status(fx, fx->structured.status);
+ }
+ 
+-static void write_group(struct hlsl_scope *scope, const char *name, struct fx_write_context *fx)
++static void write_group(struct hlsl_ir_var *var, struct fx_write_context *fx)
+ {
+     struct vkd3d_bytecode_buffer *buffer = &fx->structured;
+-    uint32_t name_offset = write_string(name, fx);
++    uint32_t name_offset = write_string(var ? var->name : NULL, fx);
+     uint32_t count_offset, count;
+ 
+     put_u32(buffer, name_offset);
+@@ -238,14 +454,15 @@ static void write_group(struct hlsl_scope *scope, const char *name, struct fx_wr
+     put_u32(buffer, 0); /* Annotation count */
+ 
+     count = fx->technique_count;
+-    write_techniques(scope, fx);
++    write_techniques(var ? var->scope : fx->ctx->globals, fx);
+     set_u32(buffer, count_offset, fx->technique_count - count);
+ 
+     ++fx->group_count;
+ }
+ 
+-static void write_groups(struct hlsl_scope *scope, struct fx_write_context *fx)
++static void write_groups(struct fx_write_context *fx)
+ {
++    struct hlsl_scope *scope = fx->ctx->globals;
+     bool needs_default_group = false;
+     struct hlsl_ir_var *var;
+ 
+@@ -259,13 +476,13 @@ static void write_groups(struct hlsl_scope *scope, struct fx_write_context *fx)
+     }
+ 
+     if (needs_default_group)
+-        write_group(scope, NULL, fx);
++        write_group(NULL, fx);
+     LIST_FOR_EACH_ENTRY(var, &scope->vars, struct hlsl_ir_var, scope_entry)
+     {
+         const struct hlsl_type *type = var->data_type;
+ 
+         if (type->base_type == HLSL_TYPE_EFFECT_GROUP)
+-            write_group(var->scope, var->name, fx);
++            write_group(var, fx);
+     }
+ }
+ 
+@@ -366,21 +583,121 @@ static int hlsl_fx_2_write(struct hlsl_ctx *ctx, struct vkd3d_shader_code *out)
+ static const struct fx_write_context_ops fx_4_ops =
+ {
+     .write_string = write_fx_4_string,
++    .write_type = write_fx_4_type,
+     .write_technique = write_fx_4_technique,
+     .write_pass = write_fx_4_pass,
+ };
+ 
++static void write_fx_4_variable(struct hlsl_ir_var *var, struct fx_write_context *fx)
++{
++    struct vkd3d_bytecode_buffer *buffer = &fx->structured;
++    uint32_t semantic_offset, flags = 0;
++    uint32_t name_offset, type_offset;
++    enum fx_4_variable_flags
++    {
++        HAS_EXPLICIT_BIND_POINT = 0x4,
++    };
++
++    /* Explicit bind point. */
++    if (var->reg_reservation.reg_type)
++        flags |= HAS_EXPLICIT_BIND_POINT;
++
++    type_offset = write_type(var->data_type, fx);
++    name_offset = write_string(var->name, fx);
++    semantic_offset = write_string(var->semantic.name, fx);
++
++    put_u32(buffer, name_offset);
++    put_u32(buffer, type_offset);
++
++    semantic_offset = put_u32(buffer, semantic_offset); /* Semantic */
++    put_u32(buffer, var->buffer_offset); /* Offset in the constant buffer */
++    put_u32(buffer, 0); /* FIXME: default value offset */
++    put_u32(buffer, flags); /* Flags */
++
++    put_u32(buffer, 0); /* Annotations count */
++    /* FIXME: write annotations */
++}
++
++static void write_fx_4_buffer(struct hlsl_buffer *b, struct fx_write_context *fx)
++{
++    enum fx_4_buffer_flags
++    {
++        IS_TBUFFER = 0x1,
++        IS_SINGLE  = 0x2,
++    };
++    struct vkd3d_bytecode_buffer *buffer = &fx->structured;
++    uint32_t count = 0, bind_point = ~0u, flags = 0, size;
++    uint32_t name_offset, size_offset;
++    struct hlsl_ctx *ctx = fx->ctx;
++    struct hlsl_ir_var *var;
++    uint32_t count_offset;
++
++    if (b->reservation.reg_type)
++        bind_point = b->reservation.reg_index;
++    if (b->type == HLSL_BUFFER_TEXTURE)
++        flags |= IS_TBUFFER;
++    /* FIXME: set 'single' flag for fx_5_0 */
++
++    name_offset = write_string(b->name, fx);
++
++    put_u32(buffer, name_offset); /* Name */
++    size_offset = put_u32(buffer, 0); /* Data size */
++    put_u32(buffer, flags); /* Flags */
++    count_offset = put_u32(buffer, 0);
++    put_u32(buffer, bind_point); /* Bind point */
++
++    put_u32(buffer, 0); /* Annotations count */
++    /* FIXME: write annotations */
++
++    count = 0;
++    size = 0;
++    LIST_FOR_EACH_ENTRY(var, &ctx->extern_vars, struct hlsl_ir_var, extern_entry)
++    {
++        if (var->buffer != b)
++            continue;
++
++        write_fx_4_variable(var, fx);
++        size += get_fx_4_type_size(var->data_type);
++        ++count;
++    }
++
++    set_u32(buffer, count_offset, count);
++    set_u32(buffer, size_offset, align(size, 16));
++
++    fx->numeric_variable_count += count;
++}
++
++static void write_buffers(struct fx_write_context *fx)
++{
++    struct hlsl_buffer *buffer;
++    struct hlsl_block block;
++
++    hlsl_block_init(&block);
++    hlsl_prepend_global_uniform_copy(fx->ctx, &block);
++    hlsl_block_init(&block);
++    hlsl_calculate_buffer_offsets(fx->ctx);
++
++    LIST_FOR_EACH_ENTRY(buffer, &fx->ctx->buffers, struct hlsl_buffer, entry)
++    {
++        if (!buffer->size)
++            continue;
++
++        write_fx_4_buffer(buffer, fx);
++        ++fx->buffer_count;
++    }
++}
++
+ static int hlsl_fx_4_write(struct hlsl_ctx *ctx, struct vkd3d_shader_code *out)
+ {
+     struct vkd3d_bytecode_buffer buffer = { 0 };
+     struct fx_write_context fx;
+-    uint32_t size_offset, size;
++    uint32_t size_offset;
+ 
+     fx_write_context_init(ctx, &fx_4_ops, &fx);
+ 
+     put_u32(&fx.unstructured, 0); /* Empty string placeholder. */
+ 
+-    /* TODO: buffers */
++    write_buffers(&fx);
+     /* TODO: objects */
+     /* TODO: shared buffers */
+     /* TODO: shared objects */
+@@ -388,9 +705,9 @@ static int hlsl_fx_4_write(struct hlsl_ctx *ctx, struct vkd3d_shader_code *out)
+     write_techniques(ctx->globals, &fx);
+ 
+     put_u32(&buffer, ctx->profile->minor_version == 0 ? 0xfeff1001 : 0xfeff1011); /* Version. */
+-    put_u32(&buffer, 0); /* Buffer count. */
+-    put_u32(&buffer, 0); /* Variable count. */
+-    put_u32(&buffer, 0); /* Object count. */
++    put_u32(&buffer, fx.buffer_count); /* Buffer count. */
++    put_u32(&buffer, fx.numeric_variable_count); /* Numeric variable count. */
++    put_u32(&buffer, 0); /* Object variable count. */
+     put_u32(&buffer, 0); /* Pool buffer count. */
+     put_u32(&buffer, 0); /* Pool variable count. */
+     put_u32(&buffer, 0); /* Pool object count. */
+@@ -407,11 +724,10 @@ static int hlsl_fx_4_write(struct hlsl_ctx *ctx, struct vkd3d_shader_code *out)
+     put_u32(&buffer, 0); /* Shader count. */
+     put_u32(&buffer, 0); /* Inline shader count. */
+ 
+-    size = align(fx.unstructured.size, 4);
+-    set_u32(&buffer, size_offset, size);
++    set_u32(&buffer, size_offset, fx.unstructured.size);
+ 
+     bytecode_put_bytes(&buffer, fx.unstructured.data, fx.unstructured.size);
+-    bytecode_put_bytes(&buffer, fx.structured.data, fx.structured.size);
++    bytecode_put_bytes_unaligned(&buffer, fx.structured.data, fx.structured.size);
+ 
+     vkd3d_free(fx.unstructured.data);
+     vkd3d_free(fx.structured.data);
+@@ -434,22 +750,22 @@ static int hlsl_fx_5_write(struct hlsl_ctx *ctx, struct vkd3d_shader_code *out)
+ {
+     struct vkd3d_bytecode_buffer buffer = { 0 };
+     struct fx_write_context fx;
+-    uint32_t size_offset, size;
++    uint32_t size_offset;
+ 
+     fx_write_context_init(ctx, &fx_4_ops, &fx);
+ 
+     put_u32(&fx.unstructured, 0); /* Empty string placeholder. */
+ 
+-    /* TODO: buffers */
++    write_buffers(&fx);
+     /* TODO: objects */
+     /* TODO: interface variables */
+ 
+-    write_groups(ctx->globals, &fx);
++    write_groups(&fx);
+ 
+     put_u32(&buffer, 0xfeff2001); /* Version. */
+-    put_u32(&buffer, 0); /* Buffer count. */
+-    put_u32(&buffer, 0); /* Variable count. */
+-    put_u32(&buffer, 0); /* Object count. */
++    put_u32(&buffer, fx.buffer_count); /* Buffer count. */
++    put_u32(&buffer, fx.numeric_variable_count); /* Numeric variable count. */
++    put_u32(&buffer, 0); /* Object variable count. */
+     put_u32(&buffer, 0); /* Pool buffer count. */
+     put_u32(&buffer, 0); /* Pool variable count. */
+     put_u32(&buffer, 0); /* Pool object count. */
+@@ -471,11 +787,10 @@ static int hlsl_fx_5_write(struct hlsl_ctx *ctx, struct vkd3d_shader_code *out)
+     put_u32(&buffer, 0); /* Interface variable element count. */
+     put_u32(&buffer, 0); /* Class instance elements count. */
+ 
+-    size = align(fx.unstructured.size, 4);
+-    set_u32(&buffer, size_offset, size);
++    set_u32(&buffer, size_offset, fx.unstructured.size);
+ 
+     bytecode_put_bytes(&buffer, fx.unstructured.data, fx.unstructured.size);
+-    bytecode_put_bytes(&buffer, fx.structured.data, fx.structured.size);
++    bytecode_put_bytes_unaligned(&buffer, fx.structured.data, fx.structured.size);
+ 
+     vkd3d_free(fx.unstructured.data);
+     vkd3d_free(fx.structured.data);
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.c b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+index 3d068ac6d3b..edd99238d59 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+@@ -1554,6 +1554,15 @@ bool hlsl_index_is_resource_access(struct hlsl_ir_index *index)
+     return index->val.node->data_type->class == HLSL_CLASS_OBJECT;
+ }
+ 
++bool hlsl_index_chain_has_resource_access(struct hlsl_ir_index *index)
++{
++    if (hlsl_index_is_resource_access(index))
++        return true;
++    if (index->val.node->type == HLSL_IR_INDEX)
++        return hlsl_index_chain_has_resource_access(hlsl_ir_index(index->val.node));
++    return false;
++}
++
+ struct hlsl_ir_node *hlsl_new_index(struct hlsl_ctx *ctx, struct hlsl_ir_node *val,
+         struct hlsl_ir_node *idx, const struct vkd3d_shader_location *loc)
+ {
+@@ -2192,9 +2201,16 @@ struct vkd3d_string_buffer *hlsl_type_to_string(struct hlsl_ctx *ctx, const stru
+                         return string;
+                     }
+ 
+-                    assert(type->sampler_dim < ARRAY_SIZE(dimensions));
+                     assert(type->e.resource_format->base_type < ARRAY_SIZE(base_types));
+-                    vkd3d_string_buffer_printf(string, "Texture%s", dimensions[type->sampler_dim]);
++                    if (type->sampler_dim == HLSL_SAMPLER_DIM_BUFFER)
++                    {
++                        vkd3d_string_buffer_printf(string, "Buffer");
++                    }
++                    else
++                    {
++                        assert(type->sampler_dim < ARRAY_SIZE(dimensions));
++                        vkd3d_string_buffer_printf(string, "Texture%s", dimensions[type->sampler_dim]);
++                    }
+                     if ((inner_string = hlsl_type_to_string(ctx, type->e.resource_format)))
+                     {
+                         vkd3d_string_buffer_printf(string, "<%s>", inner_string->buffer);
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.h b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+index 974a5dd7aee..91500ed8b8b 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.h
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+@@ -104,7 +104,7 @@ enum hlsl_base_type
+ 
+ enum hlsl_sampler_dim
+ {
+-    HLSL_SAMPLER_DIM_GENERIC,
++    HLSL_SAMPLER_DIM_GENERIC = 0,
+     HLSL_SAMPLER_DIM_COMPARISON,
+     HLSL_SAMPLER_DIM_1D,
+     HLSL_SAMPLER_DIM_2D,
+@@ -116,10 +116,10 @@ enum hlsl_sampler_dim
+     HLSL_SAMPLER_DIM_2DMS,
+     HLSL_SAMPLER_DIM_2DMSARRAY,
+     HLSL_SAMPLER_DIM_CUBEARRAY,
+-    HLSL_SAMPLER_DIM_LAST_TEXTURE = HLSL_SAMPLER_DIM_CUBEARRAY,
+     HLSL_SAMPLER_DIM_BUFFER,
+     HLSL_SAMPLER_DIM_STRUCTURED_BUFFER,
+     HLSL_SAMPLER_DIM_MAX = HLSL_SAMPLER_DIM_STRUCTURED_BUFFER,
++    /* NOTE: Remember to update object_methods[] in hlsl.y if this enum is modified. */
+ };
+ 
+ enum hlsl_regset
+@@ -149,7 +149,8 @@ struct hlsl_type
+     enum hlsl_base_type base_type;
+ 
+     /* If base_type is HLSL_TYPE_SAMPLER, then sampler_dim is <= HLSL_SAMPLER_DIM_LAST_SAMPLER.
+-     * If base_type is HLSL_TYPE_TEXTURE, then sampler_dim is <= HLSL_SAMPLER_DIM_LAST_TEXTURE.
++     * If base_type is HLSL_TYPE_TEXTURE, then sampler_dim can be any value of the enum except
++     *   HLSL_SAMPLER_DIM_GENERIC and HLSL_SAMPLER_DIM_COMPARISON.
+      * If base_type is HLSL_TYPE_UAV, then sampler_dim must be one of HLSL_SAMPLER_DIM_1D,
+      *   HLSL_SAMPLER_DIM_2D, HLSL_SAMPLER_DIM_3D, HLSL_SAMPLER_DIM_1DARRAY, HLSL_SAMPLER_DIM_2DARRAY,
+      *   HLSL_SAMPLER_DIM_BUFFER, or HLSL_SAMPLER_DIM_STRUCTURED_BUFFER.
+@@ -1147,6 +1148,11 @@ static inline unsigned int hlsl_sampler_dim_count(enum hlsl_sampler_dim dim)
+     }
+ }
+ 
++static inline bool hlsl_var_has_buffer_offset_register_reservation(struct hlsl_ctx *ctx, const struct hlsl_ir_var *var)
++{
++    return var->reg_reservation.reg_type == 'c' && var->buffer == ctx->globals_buffer;
++}
++
+ char *hlsl_sprintf_alloc(struct hlsl_ctx *ctx, const char *fmt, ...) VKD3D_PRINTF_FUNC(2, 3);
+ 
+ const char *debug_hlsl_expr_op(enum hlsl_ir_expr_op op);
+@@ -1252,6 +1258,7 @@ bool hlsl_new_store_component(struct hlsl_ctx *ctx, struct hlsl_block *block,
+ 
+ bool hlsl_index_is_noncontiguous(struct hlsl_ir_index *index);
+ bool hlsl_index_is_resource_access(struct hlsl_ir_index *index);
++bool hlsl_index_chain_has_resource_access(struct hlsl_ir_index *index);
+ 
+ struct hlsl_ir_node *hlsl_new_index(struct hlsl_ctx *ctx, struct hlsl_ir_node *val,
+         struct hlsl_ir_node *idx, const struct vkd3d_shader_location *loc);
+@@ -1315,6 +1322,9 @@ bool hlsl_type_is_resource(const struct hlsl_type *type);
+ unsigned int hlsl_type_get_sm4_offset(const struct hlsl_type *type, unsigned int offset);
+ bool hlsl_types_are_equal(const struct hlsl_type *t1, const struct hlsl_type *t2);
+ 
++void hlsl_calculate_buffer_offsets(struct hlsl_ctx *ctx);
++void hlsl_prepend_global_uniform_copy(struct hlsl_ctx *ctx, struct hlsl_block *block);
++
+ const struct hlsl_type *hlsl_get_multiarray_element_type(const struct hlsl_type *type);
+ unsigned int hlsl_get_multiarray_size(const struct hlsl_type *type);
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.y b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+index 37a372893df..000e14b6de9 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.y
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+@@ -1915,7 +1915,7 @@ static struct hlsl_ir_node *add_assignment(struct hlsl_ctx *ctx, struct hlsl_blo
+         }
+     }
+ 
+-    if (lhs->type == HLSL_IR_INDEX && hlsl_index_is_resource_access(hlsl_ir_index(lhs)))
++    if (lhs->type == HLSL_IR_INDEX && hlsl_index_chain_has_resource_access(hlsl_ir_index(lhs)))
+     {
+         struct hlsl_ir_node *coords = hlsl_ir_index(lhs)->idx.node;
+         struct hlsl_deref resource_deref;
+@@ -1923,6 +1923,12 @@ static struct hlsl_ir_node *add_assignment(struct hlsl_ctx *ctx, struct hlsl_blo
+         struct hlsl_ir_node *store;
+         unsigned int dim_count;
+ 
++        if (!hlsl_index_is_resource_access(hlsl_ir_index(lhs)))
++        {
++            hlsl_fixme(ctx, &lhs->loc, "Non-direct structured resource store.");
++            return NULL;
++        }
++
+         if (!hlsl_init_deref_from_index_chain(ctx, &resource_deref, hlsl_ir_index(lhs)->val.node))
+             return NULL;
+ 
+@@ -4229,6 +4235,7 @@ static unsigned int hlsl_offset_dim_count(enum hlsl_sampler_dim dim)
+             return 3;
+         case HLSL_SAMPLER_DIM_CUBE:
+         case HLSL_SAMPLER_DIM_CUBEARRAY:
++        case HLSL_SAMPLER_DIM_BUFFER:
+             /* Offset parameters not supported for these types. */
+             return 0;
+         default:
+@@ -4252,28 +4259,31 @@ static bool add_load_method_call(struct hlsl_ctx *ctx, struct hlsl_block *block,
+         const char *name, const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+ {
+     const struct hlsl_type *object_type = object->data_type;
+-    const unsigned int sampler_dim = hlsl_sampler_dim_count(object_type->sampler_dim);
+-    const unsigned int offset_dim = hlsl_offset_dim_count(object_type->sampler_dim);
+     struct hlsl_resource_load_params load_params = {.type = HLSL_RESOURCE_LOAD};
++    unsigned int sampler_dim, offset_dim;
+     struct hlsl_ir_node *load;
+     bool multisampled;
+ 
+-    if (object_type->sampler_dim == HLSL_SAMPLER_DIM_CUBE
+-            || object_type->sampler_dim == HLSL_SAMPLER_DIM_CUBEARRAY)
++    if (object_type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER)
+     {
+-        return raise_invalid_method_object_type(ctx, object_type, name, loc);
++        hlsl_fixme(ctx, loc, "Method '%s' for structured buffers.", name);
++        return false;
+     }
+ 
++    sampler_dim = hlsl_sampler_dim_count(object_type->sampler_dim);
++    offset_dim = hlsl_offset_dim_count(object_type->sampler_dim);
++
+     multisampled = object_type->sampler_dim == HLSL_SAMPLER_DIM_2DMS
+             || object_type->sampler_dim == HLSL_SAMPLER_DIM_2DMSARRAY;
+ 
+-    if (params->args_count < 1 + multisampled || params->args_count > 3 + multisampled)
++    if (params->args_count < 1 + multisampled || params->args_count > 2 + multisampled + !!offset_dim)
+     {
+         hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_WRONG_PARAMETER_COUNT,
+                 "Wrong number of arguments to method 'Load': expected between %u and %u, but got %u.",
+-                1 + multisampled, 3 + multisampled, params->args_count);
++                1 + multisampled, 2 + multisampled + !!offset_dim, params->args_count);
+         return false;
+     }
++
+     if (multisampled)
+     {
+         if (!(load_params.sample_index = add_implicit_conversion(ctx, block, params->args[1],
+@@ -4281,14 +4291,14 @@ static bool add_load_method_call(struct hlsl_ctx *ctx, struct hlsl_block *block,
+             return false;
+     }
+ 
+-    assert(offset_dim);
+-    if (params->args_count > 1 + multisampled)
++    if (!!offset_dim && params->args_count > 1 + multisampled)
+     {
+         if (!(load_params.texel_offset = add_implicit_conversion(ctx, block, params->args[1 + multisampled],
+                 hlsl_get_vector_type(ctx, HLSL_TYPE_INT, offset_dim), loc)))
+             return false;
+     }
+-    if (params->args_count > 2 + multisampled)
++
++    if (params->args_count > 1 + multisampled + !!offset_dim)
+     {
+         hlsl_fixme(ctx, loc, "Tiled resource status argument.");
+     }
+@@ -4311,17 +4321,13 @@ static bool add_sample_method_call(struct hlsl_ctx *ctx, struct hlsl_block *bloc
+         const char *name, const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+ {
+     const struct hlsl_type *object_type = object->data_type;
+-    const unsigned int sampler_dim = hlsl_sampler_dim_count(object_type->sampler_dim);
+-    const unsigned int offset_dim = hlsl_offset_dim_count(object_type->sampler_dim);
+     struct hlsl_resource_load_params load_params = {.type = HLSL_RESOURCE_SAMPLE};
++    unsigned int sampler_dim, offset_dim;
+     const struct hlsl_type *sampler_type;
+     struct hlsl_ir_node *load;
+ 
+-    if (object_type->sampler_dim == HLSL_SAMPLER_DIM_2DMS
+-            || object_type->sampler_dim == HLSL_SAMPLER_DIM_2DMSARRAY)
+-    {
+-        return raise_invalid_method_object_type(ctx, object_type, name, loc);
+-    }
++    sampler_dim = hlsl_sampler_dim_count(object_type->sampler_dim);
++    offset_dim = hlsl_offset_dim_count(object_type->sampler_dim);
+ 
+     if (params->args_count < 2 || params->args_count > 4 + !!offset_dim)
+     {
+@@ -4375,17 +4381,13 @@ static bool add_sample_cmp_method_call(struct hlsl_ctx *ctx, struct hlsl_block *
+         const char *name, const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+ {
+     const struct hlsl_type *object_type = object->data_type;
+-    const unsigned int sampler_dim = hlsl_sampler_dim_count(object_type->sampler_dim);
+-    const unsigned int offset_dim = hlsl_offset_dim_count(object_type->sampler_dim);
+     struct hlsl_resource_load_params load_params = { 0 };
++    unsigned int sampler_dim, offset_dim;
+     const struct hlsl_type *sampler_type;
+     struct hlsl_ir_node *load;
+ 
+-    if (object_type->sampler_dim == HLSL_SAMPLER_DIM_2DMS
+-            || object_type->sampler_dim == HLSL_SAMPLER_DIM_2DMSARRAY)
+-    {
+-        return raise_invalid_method_object_type(ctx, object_type, name, loc);
+-    }
++    sampler_dim = hlsl_sampler_dim_count(object_type->sampler_dim);
++    offset_dim = hlsl_offset_dim_count(object_type->sampler_dim);
+ 
+     if (!strcmp(name, "SampleCmpLevelZero"))
+         load_params.type = HLSL_RESOURCE_SAMPLE_CMP_LZ;
+@@ -4449,20 +4451,14 @@ static bool add_gather_method_call(struct hlsl_ctx *ctx, struct hlsl_block *bloc
+         const char *name, const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+ {
+     const struct hlsl_type *object_type = object->data_type;
+-    const unsigned int sampler_dim = hlsl_sampler_dim_count(object_type->sampler_dim);
+-    const unsigned int offset_dim = hlsl_offset_dim_count(object_type->sampler_dim);
+     struct hlsl_resource_load_params load_params = {0};
++    unsigned int sampler_dim, offset_dim;
+     const struct hlsl_type *sampler_type;
+     struct hlsl_ir_node *load;
+     unsigned int read_channel;
+ 
+-    if (object_type->sampler_dim != HLSL_SAMPLER_DIM_2D
+-            && object_type->sampler_dim != HLSL_SAMPLER_DIM_2DARRAY
+-            && object_type->sampler_dim != HLSL_SAMPLER_DIM_CUBE
+-            && object_type->sampler_dim != HLSL_SAMPLER_DIM_CUBEARRAY)
+-    {
+-        return raise_invalid_method_object_type(ctx, object_type, name, loc);
+-    }
++    sampler_dim = hlsl_sampler_dim_count(object_type->sampler_dim);
++    offset_dim = hlsl_offset_dim_count(object_type->sampler_dim);
+ 
+     if (!strcmp(name, "GatherGreen"))
+     {
+@@ -4613,12 +4609,14 @@ static bool add_getdimensions_method_call(struct hlsl_ctx *ctx, struct hlsl_bloc
+         { HLSL_SAMPLER_DIM_CUBEARRAY, 5, { ARG_MIP_LEVEL, ARG_WIDTH, ARG_HEIGHT, ARG_ELEMENT_COUNT, ARG_LEVEL_COUNT } },
+         { HLSL_SAMPLER_DIM_2DMS, 3, { ARG_WIDTH, ARG_HEIGHT, ARG_SAMPLE_COUNT } },
+         { HLSL_SAMPLER_DIM_2DMSARRAY, 4, { ARG_WIDTH, ARG_HEIGHT, ARG_ELEMENT_COUNT, ARG_SAMPLE_COUNT } },
++        { HLSL_SAMPLER_DIM_BUFFER, 1, { ARG_WIDTH} },
+     };
+     const struct overload *o = NULL;
+ 
+-    if (object_type->sampler_dim > HLSL_SAMPLER_DIM_LAST_TEXTURE)
++    if (object_type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER)
+     {
+-        hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE, "GetDimensions() is not defined for this type.");
++        hlsl_fixme(ctx, loc, "Method '%s' for structured buffers.", name);
++        return false;
+     }
+ 
+     uint_type = hlsl_get_scalar_type(ctx, HLSL_TYPE_UINT);
+@@ -4732,16 +4730,12 @@ static bool add_sample_lod_method_call(struct hlsl_ctx *ctx, struct hlsl_block *
+ {
+     const struct hlsl_type *object_type = object->data_type;
+     struct hlsl_resource_load_params load_params = { 0 };
+-    const unsigned int sampler_dim = hlsl_sampler_dim_count(object_type->sampler_dim);
+-    const unsigned int offset_dim = hlsl_offset_dim_count(object_type->sampler_dim);
++    unsigned int sampler_dim, offset_dim;
+     const struct hlsl_type *sampler_type;
+     struct hlsl_ir_node *load;
+ 
+-    if (object_type->sampler_dim == HLSL_SAMPLER_DIM_2DMS
+-            || object_type->sampler_dim == HLSL_SAMPLER_DIM_2DMSARRAY)
+-    {
+-        return raise_invalid_method_object_type(ctx, object_type, name, loc);
+-    }
++    sampler_dim = hlsl_sampler_dim_count(object_type->sampler_dim);
++    offset_dim = hlsl_offset_dim_count(object_type->sampler_dim);
+ 
+     if (!strcmp(name, "SampleLevel"))
+         load_params.type = HLSL_RESOURCE_SAMPLE_LOD;
+@@ -4802,16 +4796,12 @@ static bool add_sample_grad_method_call(struct hlsl_ctx *ctx, struct hlsl_block
+ {
+     const struct hlsl_type *object_type = object->data_type;
+     struct hlsl_resource_load_params load_params = { 0 };
+-    const unsigned int sampler_dim = hlsl_sampler_dim_count(object_type->sampler_dim);
+-    const unsigned int offset_dim = hlsl_offset_dim_count(object_type->sampler_dim);
++    unsigned int sampler_dim, offset_dim;
+     const struct hlsl_type *sampler_type;
+     struct hlsl_ir_node *load;
+ 
+-    if (object_type->sampler_dim == HLSL_SAMPLER_DIM_2DMS
+-            || object_type->sampler_dim == HLSL_SAMPLER_DIM_2DMSARRAY)
+-    {
+-        return raise_invalid_method_object_type(ctx, object_type, name, loc);
+-    }
++    sampler_dim = hlsl_sampler_dim_count(object_type->sampler_dim);
++    offset_dim = hlsl_offset_dim_count(object_type->sampler_dim);
+ 
+     load_params.type = HLSL_RESOURCE_SAMPLE_GRAD;
+ 
+@@ -4873,25 +4863,27 @@ static const struct method_function
+     const char *name;
+     bool (*handler)(struct hlsl_ctx *ctx, struct hlsl_block *block, struct hlsl_ir_node *object,
+             const char *name, const struct parse_initializer *params, const struct vkd3d_shader_location *loc);
++    bool valid_dims[HLSL_SAMPLER_DIM_MAX + 1];
+ }
+ object_methods[] =
+ {
+-    { "Gather",             add_gather_method_call },
+-    { "GatherAlpha",        add_gather_method_call },
+-    { "GatherBlue",         add_gather_method_call },
+-    { "GatherGreen",        add_gather_method_call },
+-    { "GatherRed",          add_gather_method_call },
++                                                        /*  g c   1d  2d  3d  cube  1darr  2darr  2dms  2dmsarr  cubearr  buff  sbuff*/
++    { "Gather",             add_gather_method_call,        {0,0,  0,  1,  0,  1,    0,     1,     0,    0,       1,       0,    0}},
++    { "GatherAlpha",        add_gather_method_call,        {0,0,  0,  1,  0,  1,    0,     1,     0,    0,       1,       0,    0}},
++    { "GatherBlue",         add_gather_method_call,        {0,0,  0,  1,  0,  1,    0,     1,     0,    0,       1,       0,    0}},
++    { "GatherGreen",        add_gather_method_call,        {0,0,  0,  1,  0,  1,    0,     1,     0,    0,       1,       0,    0}},
++    { "GatherRed",          add_gather_method_call,        {0,0,  0,  1,  0,  1,    0,     1,     0,    0,       1,       0,    0}},
+ 
+-    { "GetDimensions",      add_getdimensions_method_call },
++    { "GetDimensions",      add_getdimensions_method_call, {0,0,  1,  1,  1,  1,    1,     1,     1,    1,       1,       1,    1}},
+ 
+-    { "Load",               add_load_method_call },
++    { "Load",               add_load_method_call,          {0,0,  1,  1,  1,  0,    1,     1,     1,    1,       0,       1,    1}},
+ 
+-    { "Sample",             add_sample_method_call },
+-    { "SampleBias",         add_sample_lod_method_call },
+-    { "SampleCmp",          add_sample_cmp_method_call },
+-    { "SampleCmpLevelZero", add_sample_cmp_method_call },
+-    { "SampleGrad",         add_sample_grad_method_call },
+-    { "SampleLevel",        add_sample_lod_method_call },
++    { "Sample",             add_sample_method_call,        {0,0,  1,  1,  1,  1,    1,     1,     0,    0,       1,       0,    0}},
++    { "SampleBias",         add_sample_lod_method_call,    {0,0,  1,  1,  1,  1,    1,     1,     0,    0,       1,       0,    0}},
++    { "SampleCmp",          add_sample_cmp_method_call,    {0,0,  1,  1,  1,  1,    1,     1,     0,    0,       1,       0,    0}},
++    { "SampleCmpLevelZero", add_sample_cmp_method_call,    {0,0,  1,  1,  1,  1,    1,     1,     0,    0,       1,       0,    0}},
++    { "SampleGrad",         add_sample_grad_method_call,   {0,0,  1,  1,  1,  1,    1,     1,     0,    0,       1,       0,    0}},
++    { "SampleLevel",        add_sample_lod_method_call,    {0,0,  1,  1,  1,  1,    1,     1,     0,    0,       1,       0,    0}},
+ };
+ 
+ static int object_method_function_name_compare(const void *a, const void *b)
+@@ -4919,8 +4911,10 @@ static bool add_method_call(struct hlsl_ctx *ctx, struct hlsl_block *block, stru
+         return false;
+     }
+ 
+-    if ((method = bsearch(name, object_methods, ARRAY_SIZE(object_methods),
+-            sizeof(*method), object_method_function_name_compare)))
++    method = bsearch(name, object_methods, ARRAY_SIZE(object_methods), sizeof(*method),
++            object_method_function_name_compare);
++
++    if (method && method->valid_dims[object_type->sampler_dim])
+     {
+         return method->handler(ctx, block, object, name, params, loc);
+     }
+@@ -6037,7 +6031,11 @@ parameter:
+         }
+ 
+ texture_type:
+-      KW_TEXTURE1D
++      KW_BUFFER
++        {
++            $$ = HLSL_SAMPLER_DIM_BUFFER;
++        }
++    | KW_TEXTURE1D
+         {
+             $$ = HLSL_SAMPLER_DIM_1D;
+         }
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+index 4121fadf333..7da427796e7 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+@@ -4335,7 +4335,7 @@ static const struct hlsl_buffer *get_reserved_buffer(struct hlsl_ctx *ctx, uint3
+     return NULL;
+ }
+ 
+-static void calculate_buffer_offset(struct hlsl_ctx *ctx, struct hlsl_ir_var *var, bool register_reservation)
++static void hlsl_calculate_buffer_offset(struct hlsl_ctx *ctx, struct hlsl_ir_var *var, bool register_reservation)
+ {
+     unsigned int var_reg_size = var->data_type->reg_size[HLSL_REGSET_NUMERIC];
+     enum hlsl_type_class var_class = var->data_type->class;
+@@ -4449,24 +4449,17 @@ static void validate_buffer_offsets(struct hlsl_ctx *ctx)
+     }
+ }
+ 
+-static bool var_has_buffer_offset_register_reservation(struct hlsl_ctx *ctx, const struct hlsl_ir_var *var)
++void hlsl_calculate_buffer_offsets(struct hlsl_ctx *ctx)
+ {
+-    return var->reg_reservation.reg_type == 'c' && var->buffer == ctx->globals_buffer;
+-}
+-
+-static void allocate_buffers(struct hlsl_ctx *ctx)
+-{
+-    struct hlsl_buffer *buffer;
+     struct hlsl_ir_var *var;
+-    uint32_t index = 0;
+ 
+     LIST_FOR_EACH_ENTRY(var, &ctx->extern_vars, struct hlsl_ir_var, extern_entry)
+     {
+         if (!var->is_uniform || hlsl_type_is_resource(var->data_type))
+             continue;
+ 
+-        if (var->is_param)
+-            var->buffer = ctx->params_buffer;
++        if (hlsl_var_has_buffer_offset_register_reservation(ctx, var))
++            hlsl_calculate_buffer_offset(ctx, var, true);
+     }
+ 
+     LIST_FOR_EACH_ENTRY(var, &ctx->extern_vars, struct hlsl_ir_var, extern_entry)
+@@ -4474,19 +4467,27 @@ static void allocate_buffers(struct hlsl_ctx *ctx)
+         if (!var->is_uniform || hlsl_type_is_resource(var->data_type))
+             continue;
+ 
+-        if (var_has_buffer_offset_register_reservation(ctx, var))
+-            calculate_buffer_offset(ctx, var, true);
++        if (!hlsl_var_has_buffer_offset_register_reservation(ctx, var))
++            hlsl_calculate_buffer_offset(ctx, var, false);
+     }
++}
++
++static void allocate_buffers(struct hlsl_ctx *ctx)
++{
++    struct hlsl_buffer *buffer;
++    struct hlsl_ir_var *var;
++    uint32_t index = 0;
+ 
+     LIST_FOR_EACH_ENTRY(var, &ctx->extern_vars, struct hlsl_ir_var, extern_entry)
+     {
+         if (!var->is_uniform || hlsl_type_is_resource(var->data_type))
+             continue;
+ 
+-        if (!var_has_buffer_offset_register_reservation(ctx, var))
+-            calculate_buffer_offset(ctx, var, false);
++        if (var->is_param)
++            var->buffer = ctx->params_buffer;
+     }
+ 
++    hlsl_calculate_buffer_offsets(ctx);
+     validate_buffer_offsets(ctx);
+ 
+     LIST_FOR_EACH_ENTRY(buffer, &ctx->buffers, struct hlsl_buffer, entry)
+@@ -4959,6 +4960,17 @@ static void remove_unreachable_code(struct hlsl_ctx *ctx, struct hlsl_block *bod
+     }
+ }
+ 
++void hlsl_prepend_global_uniform_copy(struct hlsl_ctx *ctx, struct hlsl_block *body)
++{
++    struct hlsl_ir_var *var;
++
++    LIST_FOR_EACH_ENTRY(var, &ctx->globals->vars, struct hlsl_ir_var, scope_entry)
++    {
++        if (var->storage_modifiers & HLSL_STORAGE_UNIFORM)
++            prepend_uniform_copy(ctx, body, var);
++    }
++}
++
+ int hlsl_emit_bytecode(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl *entry_func,
+         enum vkd3d_shader_target_type target_type, struct vkd3d_shader_code *out)
+ {
+@@ -4987,11 +4999,7 @@ int hlsl_emit_bytecode(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl *entry
+     lower_ir(ctx, lower_matrix_swizzles, body);
+     lower_ir(ctx, lower_index_loads, body);
+ 
+-    LIST_FOR_EACH_ENTRY(var, &ctx->globals->vars, struct hlsl_ir_var, scope_entry)
+-    {
+-        if (var->storage_modifiers & HLSL_STORAGE_UNIFORM)
+-            prepend_uniform_copy(ctx, body, var);
+-    }
++    hlsl_prepend_global_uniform_copy(ctx, body);
+ 
+     for (i = 0; i < entry_func->parameters.count; ++i)
+     {
+diff --git a/libs/vkd3d/libs/vkd3d-shader/tpf.c b/libs/vkd3d/libs/vkd3d-shader/tpf.c
+index f70606e6f22..492e5ec027d 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/tpf.c
++++ b/libs/vkd3d/libs/vkd3d-shader/tpf.c
+@@ -2810,6 +2810,7 @@ bool hlsl_sm4_usage_from_semantic(struct hlsl_ctx *ctx, const struct hlsl_semant
+ 
+         {"position",                    false, VKD3D_SHADER_TYPE_PIXEL,     D3D_NAME_POSITION},
+         {"sv_position",                 false, VKD3D_SHADER_TYPE_PIXEL,     D3D_NAME_POSITION},
++        {"sv_primitiveid",              false, VKD3D_SHADER_TYPE_PIXEL,     D3D_NAME_PRIMITIVE_ID},
+         {"sv_isfrontface",              false, VKD3D_SHADER_TYPE_PIXEL,     D3D_NAME_IS_FRONT_FACE},
+         {"sv_rendertargetarrayindex",   false, VKD3D_SHADER_TYPE_PIXEL,     D3D_NAME_RENDER_TARGET_ARRAY_INDEX},
+         {"sv_viewportarrayindex",       false, VKD3D_SHADER_TYPE_PIXEL,     D3D_NAME_VIEWPORT_ARRAY_INDEX},
+@@ -4764,6 +4765,13 @@ static void write_sm4_resinfo(const struct tpf_writer *tpf, const struct hlsl_ir
+     const struct hlsl_ir_node *dst = &load->node;
+     struct sm4_instruction instr;
+ 
++    if (resource->data_type->sampler_dim == HLSL_SAMPLER_DIM_BUFFER
++            || resource->data_type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER)
++    {
++        hlsl_fixme(tpf->ctx, &load->node.loc, "resinfo for buffers.");
++        return;
++    }
++
+     assert(dst->data_type->base_type == HLSL_TYPE_UINT || dst->data_type->base_type == HLSL_TYPE_FLOAT);
+ 
+     memset(&instr, 0, sizeof(instr));
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
+index 1557fb3ea7f..b2f7b17eb73 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
+@@ -366,9 +366,9 @@ size_t bytecode_align(struct vkd3d_bytecode_buffer *buffer)
+     return aligned_size;
+ }
+ 
+-size_t bytecode_put_bytes(struct vkd3d_bytecode_buffer *buffer, const void *bytes, size_t size)
++size_t bytecode_put_bytes_unaligned(struct vkd3d_bytecode_buffer *buffer, const void *bytes, size_t size)
+ {
+-    size_t offset = bytecode_align(buffer);
++    size_t offset = buffer->size;
+ 
+     if (buffer->status)
+         return offset;
+@@ -383,6 +383,12 @@ size_t bytecode_put_bytes(struct vkd3d_bytecode_buffer *buffer, const void *byte
+     return offset;
+ }
+ 
++size_t bytecode_put_bytes(struct vkd3d_bytecode_buffer *buffer, const void *bytes, size_t size)
++{
++    bytecode_align(buffer);
++    return bytecode_put_bytes_unaligned(buffer, bytes, size);
++}
++
+ size_t bytecode_reserve_bytes(struct vkd3d_bytecode_buffer *buffer, size_t size)
+ {
+     size_t offset = bytecode_align(buffer);
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+index acfd39b7643..910d34a7d13 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+@@ -1418,6 +1418,7 @@ struct vkd3d_bytecode_buffer
+ /* Align to the next 4-byte offset, and return that offset. */
+ size_t bytecode_align(struct vkd3d_bytecode_buffer *buffer);
+ size_t bytecode_put_bytes(struct vkd3d_bytecode_buffer *buffer, const void *bytes, size_t size);
++size_t bytecode_put_bytes_unaligned(struct vkd3d_bytecode_buffer *buffer, const void *bytes, size_t size);
+ size_t bytecode_reserve_bytes(struct vkd3d_bytecode_buffer *buffer, size_t size);
+ void set_u32(struct vkd3d_bytecode_buffer *buffer, size_t offset, uint32_t value);
+ void set_string(struct vkd3d_bytecode_buffer *buffer, size_t offset, const char *string, size_t length);
+-- 
+2.43.0
+
