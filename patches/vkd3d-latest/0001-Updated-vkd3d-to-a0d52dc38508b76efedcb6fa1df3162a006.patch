@@ -1,0 +1,589 @@
+From e6d258348f5145557c59da6bb65d1b3044bf8ba4 Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Thu, 7 Mar 2024 10:40:41 +1100
+Subject: [PATCH] Updated vkd3d to a0d52dc38508b76efedcb6fa1df3162a0062ceaf.
+
+---
+ libs/vkd3d/libs/vkd3d-common/blob.c           |   2 +
+ libs/vkd3d/libs/vkd3d-shader/d3dbc.c          |  22 +++-
+ libs/vkd3d/libs/vkd3d-shader/fx.c             |  44 +++----
+ libs/vkd3d/libs/vkd3d-shader/hlsl.c           |   7 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl.h           |   1 +
+ libs/vkd3d/libs/vkd3d-shader/hlsl.l           |   5 +
+ libs/vkd3d/libs/vkd3d-shader/hlsl.y           |   7 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c   | 119 ++++++++++++++++--
+ libs/vkd3d/libs/vkd3d-shader/spirv.c          |   6 +-
+ .../libs/vkd3d-shader/vkd3d_shader_main.c     |   2 +
+ .../libs/vkd3d-shader/vkd3d_shader_private.h  |   1 +
+ 11 files changed, 169 insertions(+), 47 deletions(-)
+
+diff --git a/libs/vkd3d/libs/vkd3d-common/blob.c b/libs/vkd3d/libs/vkd3d-common/blob.c
+index 06a12ef5bc4..dbb26de7d73 100644
+--- a/libs/vkd3d/libs/vkd3d-common/blob.c
++++ b/libs/vkd3d/libs/vkd3d-common/blob.c
+@@ -17,11 +17,13 @@
+  */
+ 
+ #define COBJMACROS
++
+ #define CONST_VTABLE
+ #include "vkd3d.h"
+ #include "vkd3d_blob.h"
+ #include "vkd3d_debug.h"
+ #include "vkd3d_memory.h"
++#include "d3d12shader.h"
+ 
+ struct vkd3d_blob
+ {
+diff --git a/libs/vkd3d/libs/vkd3d-shader/d3dbc.c b/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
+index 27f5c810436..a8cca17faa3 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
++++ b/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
+@@ -1977,16 +1977,13 @@ static void write_sm1_cast(struct hlsl_ctx *ctx, struct vkd3d_bytecode_buffer *b
+             {
+                 case HLSL_TYPE_INT:
+                 case HLSL_TYPE_UINT:
+-                    /* Integers are internally represented as floats, so no change is necessary.*/
++                case HLSL_TYPE_BOOL:
++                    /* Integrals are internally represented as floats, so no change is necessary.*/
+                 case HLSL_TYPE_HALF:
+                 case HLSL_TYPE_FLOAT:
+                     write_sm1_unary_op(ctx, buffer, D3DSIO_MOV, &instr->reg, &arg1->reg, 0, 0);
+                     break;
+ 
+-                case HLSL_TYPE_BOOL:
+-                    hlsl_fixme(ctx, &instr->loc, "SM1 cast from bool to float.");
+-                    break;
+-
+                 case HLSL_TYPE_DOUBLE:
+                     hlsl_fixme(ctx, &instr->loc, "SM1 cast from double to float.");
+                     break;
+@@ -2002,7 +1999,10 @@ static void write_sm1_cast(struct hlsl_ctx *ctx, struct vkd3d_bytecode_buffer *b
+             {
+                 case HLSL_TYPE_HALF:
+                 case HLSL_TYPE_FLOAT:
+-                    /* A compilation pass applies a FLOOR operation to casts to int, so no change is necessary. */
++                    /* A compilation pass turns these into FLOOR+REINTERPRET, so we should not
++                     * reach this case unless we are missing something. */
++                    hlsl_fixme(ctx, &instr->loc, "Unlowered SM1 cast from float to integer.");
++                    break;
+                 case HLSL_TYPE_INT:
+                 case HLSL_TYPE_UINT:
+                     write_sm1_unary_op(ctx, buffer, D3DSIO_MOV, &instr->reg, &arg1->reg, 0, 0);
+@@ -2242,6 +2242,12 @@ static void write_sm1_expr(struct hlsl_ctx *ctx, struct vkd3d_bytecode_buffer *b
+ 
+     assert(instr->reg.allocated);
+ 
++    if (expr->op == HLSL_OP1_REINTERPRET)
++    {
++        write_sm1_unary_op(ctx, buffer, D3DSIO_MOV, &instr->reg, &arg1->reg, 0, 0);
++        return;
++    }
++
+     if (expr->op == HLSL_OP1_CAST)
+     {
+         write_sm1_cast(ctx, buffer, instr);
+@@ -2329,6 +2335,10 @@ static void write_sm1_expr(struct hlsl_ctx *ctx, struct vkd3d_bytecode_buffer *b
+             }
+             break;
+ 
++        case HLSL_OP2_SLT:
++            write_sm1_binary_op(ctx, buffer, D3DSIO_SLT, &instr->reg, &arg1->reg, &arg2->reg);
++            break;
++
+         case HLSL_OP3_CMP:
+             write_sm1_ternary_op(ctx, buffer, D3DSIO_CMP, &instr->reg, &arg1->reg, &arg2->reg, &arg3->reg);
+             break;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/fx.c b/libs/vkd3d/libs/vkd3d-shader/fx.c
+index bc70d5220fd..fd5c8443221 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d/libs/vkd3d-shader/fx.c
+@@ -179,7 +179,6 @@ static void fx_write_context_init(struct hlsl_ctx *ctx, const struct fx_write_co
+ static int fx_write_context_cleanup(struct fx_write_context *fx)
+ {
+     struct type_entry *type, *next_type;
+-    int status = fx->status;
+ 
+     rb_destroy(&fx->strings, string_storage_destroy, NULL);
+ 
+@@ -189,7 +188,7 @@ static int fx_write_context_cleanup(struct fx_write_context *fx)
+         vkd3d_free(type);
+     }
+ 
+-    return status;
++    return fx->ctx->result;
+ }
+ 
+ static bool technique_matches_version(const struct hlsl_ir_var *var, const struct fx_write_context *fx)
+@@ -285,6 +284,7 @@ static uint32_t get_fx_4_numeric_type_description(const struct hlsl_type *type,
+         [HLSL_TYPE_UINT ] = 3,
+         [HLSL_TYPE_BOOL ] = 4,
+     };
++    struct hlsl_ctx *ctx = fx->ctx;
+     uint32_t value = 0;
+ 
+     switch (type->class)
+@@ -295,8 +295,7 @@ static uint32_t get_fx_4_numeric_type_description(const struct hlsl_type *type,
+             value |= numeric_type_class[type->class];
+             break;
+         default:
+-            FIXME("Unexpected type class %u.\n", type->class);
+-            set_status(fx, VKD3D_ERROR_NOT_IMPLEMENTED);
++            hlsl_fixme(ctx, &ctx->location, "Not implemented for type class %u.\n", type->class);
+             return 0;
+     }
+ 
+@@ -309,8 +308,7 @@ static uint32_t get_fx_4_numeric_type_description(const struct hlsl_type *type,
+             value |= (numeric_base_type[type->base_type] << NUMERIC_BASE_TYPE_SHIFT);
+             break;
+         default:
+-            FIXME("Unexpected base type %u.\n", type->base_type);
+-            set_status(fx, VKD3D_ERROR_NOT_IMPLEMENTED);
++            hlsl_fixme(ctx, &ctx->location, "Not implemented for base type %u.\n", type->base_type);
+             return 0;
+     }
+ 
+@@ -359,6 +357,7 @@ static uint32_t write_fx_4_type(const struct hlsl_type *type, struct fx_write_co
+         [HLSL_SAMPLER_DIM_BUFFER]            = "RWBuffer",
+         [HLSL_SAMPLER_DIM_STRUCTURED_BUFFER] = "RWStructuredBuffer",
+     };
++    struct hlsl_ctx *ctx = fx->ctx;
+ 
+     /* Resolve arrays to element type and number of elements. */
+     if (type->class == HLSL_CLASS_ARRAY)
+@@ -387,8 +386,7 @@ static uint32_t write_fx_4_type(const struct hlsl_type *type, struct fx_write_co
+             put_u32_unaligned(buffer, variable_type[type->class]);
+             break;
+         default:
+-            FIXME("Writing type class %u is not implemented.\n", type->class);
+-            set_status(fx, VKD3D_ERROR_NOT_IMPLEMENTED);
++            hlsl_fixme(ctx, &ctx->location, "Writing type class %u is not implemented.\n", type->class);
+             return 0;
+     }
+ 
+@@ -466,8 +464,7 @@ static uint32_t write_fx_4_type(const struct hlsl_type *type, struct fx_write_co
+                 put_u32_unaligned(buffer, uav_type[type->sampler_dim]);
+                 break;
+             default:
+-                FIXME("Object type %u is not supported.\n", type->base_type);
+-                set_status(fx, VKD3D_ERROR_NOT_IMPLEMENTED);
++                hlsl_fixme(ctx, &ctx->location, "Object type %u is not supported.\n", type->base_type);
+                 return 0;
+         }
+     }
+@@ -643,15 +640,18 @@ static int hlsl_fx_2_write(struct hlsl_ctx *ctx, struct vkd3d_shader_code *out)
+     vkd3d_free(fx.unstructured.data);
+     vkd3d_free(fx.structured.data);
+ 
+-    if (!fx.status)
++    if (!fx.technique_count)
++        hlsl_error(ctx, &ctx->location, VKD3D_SHADER_ERROR_HLSL_MISSING_TECHNIQUE, "No techniques found.");
++
++    if (fx.status < 0)
++        ctx->result = fx.status;
++
++    if (!ctx->result)
+     {
+         out->code = buffer.data;
+         out->size = buffer.size;
+     }
+ 
+-    if (fx.status < 0)
+-        ctx->result = fx.status;
+-
+     return fx_write_context_cleanup(&fx);
+ }
+ 
+@@ -870,15 +870,15 @@ static int hlsl_fx_4_write(struct hlsl_ctx *ctx, struct vkd3d_shader_code *out)
+ 
+     set_status(&fx, buffer.status);
+ 
+-    if (!fx.status)
++    if (fx.status < 0)
++        ctx->result = fx.status;
++
++    if (!ctx->result)
+     {
+         out->code = buffer.data;
+         out->size = buffer.size;
+     }
+ 
+-    if (fx.status < 0)
+-        ctx->result = fx.status;
+-
+     return fx_write_context_cleanup(&fx);
+ }
+ 
+@@ -933,15 +933,15 @@ static int hlsl_fx_5_write(struct hlsl_ctx *ctx, struct vkd3d_shader_code *out)
+ 
+     set_status(&fx, buffer.status);
+ 
+-    if (!fx.status)
++    if (fx.status < 0)
++        ctx->result = fx.status;
++
++    if (!ctx->result)
+     {
+         out->code = buffer.data;
+         out->size = buffer.size;
+     }
+ 
+-    if (fx.status < 0)
+-        ctx->result = fx.status;
+-
+     return fx_write_context_cleanup(&fx);
+ }
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.c b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+index 538f083df9c..45d02ce2b4e 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+@@ -784,7 +784,9 @@ static const char * get_case_insensitive_typename(const char *name)
+         "dword",
+         "float",
+         "matrix",
++        "pixelshader",
+         "vector",
++        "vertexshader",
+     };
+     unsigned int i;
+ 
+@@ -2611,6 +2613,7 @@ const char *debug_hlsl_expr_op(enum hlsl_ir_expr_op op)
+         [HLSL_OP2_MUL]         = "*",
+         [HLSL_OP2_NEQUAL]      = "!=",
+         [HLSL_OP2_RSHIFT]      = ">>",
++        [HLSL_OP2_SLT]         = "slt",
+ 
+         [HLSL_OP3_CMP]         = "cmp",
+         [HLSL_OP3_DP2ADD]      = "dp2add",
+@@ -3395,8 +3398,8 @@ static void declare_predefined_types(struct hlsl_ctx *ctx)
+         {"pass",            HLSL_CLASS_OBJECT, HLSL_TYPE_PASS,          1, 1},
+         {"STRING",          HLSL_CLASS_OBJECT, HLSL_TYPE_STRING,        1, 1},
+         {"TEXTURE",         HLSL_CLASS_OBJECT, HLSL_TYPE_TEXTURE,       1, 1},
+-        {"PIXELSHADER",     HLSL_CLASS_OBJECT, HLSL_TYPE_PIXELSHADER,   1, 1},
+-        {"VERTEXSHADER",    HLSL_CLASS_OBJECT, HLSL_TYPE_VERTEXSHADER,  1, 1},
++        {"pixelshader",     HLSL_CLASS_OBJECT, HLSL_TYPE_PIXELSHADER,   1, 1},
++        {"vertexshader",    HLSL_CLASS_OBJECT, HLSL_TYPE_VERTEXSHADER,  1, 1},
+         {"RenderTargetView",HLSL_CLASS_OBJECT, HLSL_TYPE_RENDERTARGETVIEW, 1, 1},
+         {"DepthStencilView",HLSL_CLASS_OBJECT, HLSL_TYPE_DEPTHSTENCILVIEW, 1, 1},
+     };
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.h b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+index df0a53b20de..97b9021146d 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.h
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+@@ -593,6 +593,7 @@ enum hlsl_ir_expr_op
+     HLSL_OP2_MUL,
+     HLSL_OP2_NEQUAL,
+     HLSL_OP2_RSHIFT,
++    HLSL_OP2_SLT,
+ 
+     /* DP2ADD(a, b, c) computes the scalar product of a.xy and b.xy,
+      * then adds c. */
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.l b/libs/vkd3d/libs/vkd3d-shader/hlsl.l
+index 558506db108..8dcceb94c1c 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.l
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.l
+@@ -76,6 +76,7 @@ case                    {return KW_CASE;                }
+ cbuffer                 {return KW_CBUFFER;             }
+ centroid                {return KW_CENTROID;            }
+ column_major            {return KW_COLUMN_MAJOR;        }
++ComputeShader           {return KW_COMPUTESHADER;       }
+ compile                 {return KW_COMPILE;             }
+ const                   {return KW_CONST;               }
+ continue                {return KW_CONTINUE;            }
+@@ -83,6 +84,7 @@ DepthStencilState       {return KW_DEPTHSTENCILSTATE;   }
+ DepthStencilView        {return KW_DEPTHSTENCILVIEW;    }
+ default                 {return KW_DEFAULT;             }
+ discard                 {return KW_DISCARD;             }
++DomainShader            {return KW_DOMAINSHADER;        }
+ do                      {return KW_DO;                  }
+ double                  {return KW_DOUBLE;              }
+ else                    {return KW_ELSE;                }
+@@ -92,6 +94,7 @@ for                     {return KW_FOR;                 }
+ fxgroup                 {return KW_FXGROUP;             }
+ GeometryShader          {return KW_GEOMETRYSHADER;      }
+ groupshared             {return KW_GROUPSHARED;         }
++HullShader              {return KW_HULLSHADER;          }
+ if                      {return KW_IF;                  }
+ in                      {return KW_IN;                  }
+ inline                  {return KW_INLINE;              }
+@@ -105,6 +108,7 @@ out                     {return KW_OUT;                 }
+ packoffset              {return KW_PACKOFFSET;          }
+ pass                    {return KW_PASS;                }
+ PixelShader             {return KW_PIXELSHADER;         }
++pixelshader             {return KW_PIXELSHADER;         }
+ precise                 {return KW_PRECISE;             }
+ RasterizerOrderedBuffer           {return KW_RASTERIZERORDEREDBUFFER;            }
+ RasterizerOrderedStructuredBuffer {return KW_RASTERIZERORDEREDSTRUCTUREDBUFFER;  }
+@@ -163,6 +167,7 @@ typedef                 {return KW_TYPEDEF;             }
+ uniform                 {return KW_UNIFORM;             }
+ vector                  {return KW_VECTOR;              }
+ VertexShader            {return KW_VERTEXSHADER;        }
++vertexshader            {return KW_VERTEXSHADER;        }
+ void                    {return KW_VOID;                }
+ volatile                {return KW_VOLATILE;            }
+ while                   {return KW_WHILE;               }
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.y b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+index cd05fd008a6..8cdc8226370 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.y
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+@@ -5243,6 +5243,7 @@ static void validate_uav_type(struct hlsl_ctx *ctx, enum hlsl_sampler_dim dim,
+ %token KW_CENTROID
+ %token KW_COLUMN_MAJOR
+ %token KW_COMPILE
++%token KW_COMPUTESHADER
+ %token KW_CONST
+ %token KW_CONTINUE
+ %token KW_DEFAULT
+@@ -5250,6 +5251,7 @@ static void validate_uav_type(struct hlsl_ctx *ctx, enum hlsl_sampler_dim dim,
+ %token KW_DEPTHSTENCILVIEW
+ %token KW_DISCARD
+ %token KW_DO
++%token KW_DOMAINSHADER
+ %token KW_DOUBLE
+ %token KW_ELSE
+ %token KW_EXTERN
+@@ -5258,6 +5260,7 @@ static void validate_uav_type(struct hlsl_ctx *ctx, enum hlsl_sampler_dim dim,
+ %token KW_FXGROUP
+ %token KW_GEOMETRYSHADER
+ %token KW_GROUPSHARED
++%token KW_HULLSHADER
+ %token KW_IF
+ %token KW_IN
+ %token KW_INLINE
+@@ -5535,10 +5538,6 @@ technique10:
+             struct hlsl_scope *scope = ctx->cur_scope;
+             hlsl_pop_scope(ctx);
+ 
+-            if (ctx->profile->type == VKD3D_SHADER_TYPE_EFFECT && ctx->profile->major_version == 2)
+-                hlsl_error(ctx, &@1, VKD3D_SHADER_ERROR_HLSL_INVALID_SYNTAX,
+-                        "The 'technique10' keyword is invalid for this profile.");
+-
+             if (!add_technique(ctx, $2, scope, $3, "technique10", &@1))
+                 YYABORT;
+         }
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+index 307f86f55b7..8434a921a62 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+@@ -2647,10 +2647,11 @@ static bool sort_synthetic_separated_samplers_first(struct hlsl_ctx *ctx)
+     return false;
+ }
+ 
+-/* Append a FLOOR before a CAST to int or uint (which is written as a mere MOV). */
++/* Turn CAST to int or uint into FLOOR + REINTERPRET (which is written as a mere MOV). */
+ static bool lower_casts_to_int(struct hlsl_ctx *ctx, struct hlsl_ir_node *instr, struct hlsl_block *block)
+ {
+-    struct hlsl_ir_node *arg, *floor, *cast2;
++    struct hlsl_ir_node *operands[HLSL_MAX_OPERANDS] = { 0 };
++    struct hlsl_ir_node *arg, *floor, *res;
+     struct hlsl_ir_expr *expr;
+ 
+     if (instr->type != HLSL_IR_EXPR)
+@@ -2665,17 +2666,15 @@ static bool lower_casts_to_int(struct hlsl_ctx *ctx, struct hlsl_ir_node *instr,
+     if (arg->data_type->base_type != HLSL_TYPE_FLOAT && arg->data_type->base_type != HLSL_TYPE_HALF)
+         return false;
+ 
+-    /* Check that the argument is not already a FLOOR */
+-    if (arg->type == HLSL_IR_EXPR && hlsl_ir_expr(arg)->op == HLSL_OP1_FLOOR)
+-        return false;
+-
+     if (!(floor = hlsl_new_unary_expr(ctx, HLSL_OP1_FLOOR, arg, &instr->loc)))
+         return false;
+     hlsl_block_add_instr(block, floor);
+ 
+-    if (!(cast2 = hlsl_new_cast(ctx, floor, instr->data_type, &instr->loc)))
++    memset(operands, 0, sizeof(operands));
++    operands[0] = floor;
++    if (!(res = hlsl_new_expr(ctx, HLSL_OP1_REINTERPRET, operands, instr->data_type, &instr->loc)))
+         return false;
+-    hlsl_block_add_instr(block, cast2);
++    hlsl_block_add_instr(block, res);
+ 
+     return true;
+ }
+@@ -2903,7 +2902,7 @@ static bool lower_floor(struct hlsl_ctx *ctx, struct hlsl_ir_node *instr, struct
+     return true;
+ }
+ 
+-/* Use 'movc' for the ternary operator. */
++/* Use movc/cmp/slt for the ternary operator. */
+ static bool lower_ternary(struct hlsl_ctx *ctx, struct hlsl_ir_node *instr, struct hlsl_block *block)
+ {
+     struct hlsl_ir_node *operands[HLSL_MAX_OPERANDS] = { 0 }, *replacement;
+@@ -2949,8 +2948,44 @@ static bool lower_ternary(struct hlsl_ctx *ctx, struct hlsl_ir_node *instr, stru
+     }
+     else if (ctx->profile->major_version < 4 && ctx->profile->type == VKD3D_SHADER_TYPE_VERTEX)
+     {
+-        hlsl_fixme(ctx, &instr->loc, "Ternary operator is not implemented for %s profile.", ctx->profile->name);
+-        return false;
++        struct hlsl_ir_node *neg, *slt, *sum, *mul, *cond2;
++
++        /* Expression used here is "slt(<cond>) * (first - second) + second". */
++
++        if (ctx->profile->major_version == 3)
++        {
++            if (!(cond2 = hlsl_new_unary_expr(ctx, HLSL_OP1_ABS, cond, &instr->loc)))
++                return false;
++        }
++        else
++        {
++            if (!(cond2 = hlsl_new_binary_expr(ctx, HLSL_OP2_MUL, cond, cond)))
++                return false;
++        }
++        hlsl_block_add_instr(block, cond2);
++
++        if (!(neg = hlsl_new_unary_expr(ctx, HLSL_OP1_NEG, cond2, &instr->loc)))
++            return false;
++        hlsl_block_add_instr(block, neg);
++
++        if (!(slt = hlsl_new_binary_expr(ctx, HLSL_OP2_SLT, neg, cond2)))
++            return false;
++        hlsl_block_add_instr(block, slt);
++
++        if (!(neg = hlsl_new_unary_expr(ctx, HLSL_OP1_NEG, second, &instr->loc)))
++            return false;
++        hlsl_block_add_instr(block, neg);
++
++        if (!(sum = hlsl_new_binary_expr(ctx, HLSL_OP2_ADD, first, neg)))
++            return false;
++        hlsl_block_add_instr(block, sum);
++
++        if (!(mul = hlsl_new_binary_expr(ctx, HLSL_OP2_MUL, slt, sum)))
++            return false;
++        hlsl_block_add_instr(block, mul);
++
++        if (!(replacement = hlsl_new_binary_expr(ctx, HLSL_OP2_ADD, mul, second)))
++            return false;
+     }
+     else
+     {
+@@ -3308,6 +3343,61 @@ static bool lower_float_modulus(struct hlsl_ctx *ctx, struct hlsl_ir_node *instr
+     return true;
+ }
+ 
++static bool lower_nonfloat_exprs(struct hlsl_ctx *ctx, struct hlsl_ir_node *instr, struct hlsl_block *block)
++{
++    struct hlsl_ir_expr *expr;
++
++    if (instr->type != HLSL_IR_EXPR)
++        return false;
++    expr = hlsl_ir_expr(instr);
++    if (expr->op == HLSL_OP1_CAST || instr->data_type->base_type == HLSL_TYPE_FLOAT)
++        return false;
++
++    switch (expr->op)
++    {
++        case HLSL_OP1_ABS:
++        case HLSL_OP1_NEG:
++        case HLSL_OP2_ADD:
++        case HLSL_OP2_DIV:
++        case HLSL_OP2_MAX:
++        case HLSL_OP2_MIN:
++        case HLSL_OP2_MUL:
++        {
++            struct hlsl_ir_node *operands[HLSL_MAX_OPERANDS] = {0};
++            struct hlsl_ir_node *arg, *arg_cast, *float_expr, *ret;
++            struct hlsl_type *float_type;
++            unsigned int i;
++
++            for (i = 0; i < HLSL_MAX_OPERANDS; ++i)
++            {
++                arg = expr->operands[i].node;
++                if (!arg)
++                    continue;
++
++                float_type = hlsl_get_vector_type(ctx, HLSL_TYPE_FLOAT, arg->data_type->dimx);
++                if (!(arg_cast = hlsl_new_cast(ctx, arg, float_type, &instr->loc)))
++                    return false;
++                hlsl_block_add_instr(block, arg_cast);
++
++                operands[i] = arg_cast;
++            }
++
++            float_type = hlsl_get_vector_type(ctx, HLSL_TYPE_FLOAT, instr->data_type->dimx);
++            if (!(float_expr = hlsl_new_expr(ctx, expr->op, operands, float_type, &instr->loc)))
++                return false;
++            hlsl_block_add_instr(block, float_expr);
++
++            if (!(ret = hlsl_new_cast(ctx, float_expr, instr->data_type, &instr->loc)))
++                return false;
++            hlsl_block_add_instr(block, ret);
++
++            return true;
++        }
++        default:
++            return false;
++    }
++}
++
+ static bool lower_discard_neg(struct hlsl_ctx *ctx, struct hlsl_ir_node *instr, void *context)
+ {
+     struct hlsl_ir_node *zero, *bool_false, *or, *cmp, *load;
+@@ -5087,6 +5177,13 @@ int hlsl_emit_bytecode(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl *entry
+     remove_unreachable_code(ctx, body);
+     hlsl_transform_ir(ctx, normalize_switch_cases, body, NULL);
+ 
++    if (profile-> major_version < 4)
++    {
++        lower_ir(ctx, lower_nonfloat_exprs, body);
++        /* Constants casted to float must be folded. */
++        hlsl_transform_ir(ctx, hlsl_fold_constant_exprs, body, NULL);
++    }
++
+     lower_ir(ctx, lower_nonconstant_vector_derefs, body);
+     lower_ir(ctx, lower_casts_to_bool, body);
+     lower_ir(ctx, lower_int_dot, body);
+diff --git a/libs/vkd3d/libs/vkd3d-shader/spirv.c b/libs/vkd3d/libs/vkd3d-shader/spirv.c
+index 5c87ff15503..efdb0b74758 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/spirv.c
++++ b/libs/vkd3d/libs/vkd3d-shader/spirv.c
+@@ -7093,8 +7093,8 @@ static void spirv_compiler_emit_mov(struct spirv_compiler *compiler,
+     struct vkd3d_shader_register_info dst_reg_info, src_reg_info;
+     const struct vkd3d_shader_dst_param *dst = instruction->dst;
+     const struct vkd3d_shader_src_param *src = instruction->src;
++    unsigned int i, component_count, write_mask;
+     uint32_t components[VKD3D_VEC4_SIZE];
+-    unsigned int i, component_count;
+ 
+     if (register_is_constant_or_undef(&src->reg) || src->reg.type == VKD3DSPR_SSA || dst->reg.type == VKD3DSPR_SSA
+             || dst->modifiers || src->modifiers)
+@@ -7145,7 +7145,9 @@ static void spirv_compiler_emit_mov(struct spirv_compiler *compiler,
+     }
+ 
+ general_implementation:
+-    val_id = spirv_compiler_emit_load_src(compiler, src, dst->write_mask);
++    write_mask = (src->reg.type == VKD3DSPR_IMMCONST64 && !data_type_is_64_bit(dst->reg.data_type))
++            ? vsir_write_mask_64_from_32(dst->write_mask) : dst->write_mask;
++    val_id = spirv_compiler_emit_load_src(compiler, src, write_mask);
+     if (dst->reg.data_type != src->reg.data_type)
+     {
+         val_id = vkd3d_spirv_build_op_bitcast(builder, vkd3d_spirv_get_type_id_for_data_type(builder,
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
+index 4f400d19f6f..385c4368e31 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
+@@ -23,6 +23,8 @@
+ #include <stdio.h>
+ #include <math.h>
+ 
++/* VKD3D_DEBUG_ENV_NAME("VKD3D_SHADER_DEBUG"); */
++
+ static inline int char_to_int(char c)
+ {
+     if ('0' <= c && c <= '9')
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+index 2d3b3254638..990a7713308 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+@@ -148,6 +148,7 @@ enum vkd3d_shader_error
+     VKD3D_SHADER_ERROR_HLSL_INCONSISTENT_SAMPLER        = 5026,
+     VKD3D_SHADER_ERROR_HLSL_NON_FINITE_RESULT           = 5027,
+     VKD3D_SHADER_ERROR_HLSL_DUPLICATE_SWITCH_CASE       = 5028,
++    VKD3D_SHADER_ERROR_HLSL_MISSING_TECHNIQUE           = 5029,
+ 
+     VKD3D_SHADER_WARNING_HLSL_IMPLICIT_TRUNCATION       = 5300,
+     VKD3D_SHADER_WARNING_HLSL_DIVISION_BY_ZERO          = 5301,
+-- 
+2.43.0
+
