@@ -1,0 +1,2796 @@
+From 01e9d461f76202f7994a9f03ce6443bd6bbc9440 Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Sat, 9 Mar 2024 10:36:15 +1100
+Subject: [PATCH] Updated vkd3d to 23259263cf662fb203a173b30b90f44cfbb9d29e.
+
+---
+ libs/vkd3d/include/vkd3d_shader.h             |   8 +
+ libs/vkd3d/include/vkd3d_types.h              |   2 +
+ libs/vkd3d/libs/vkd3d-shader/d3d_asm.c        | 250 ++++++++--
+ libs/vkd3d/libs/vkd3d-shader/dxil.c           |   4 +-
+ libs/vkd3d/libs/vkd3d-shader/glsl.c           |   2 +
+ libs/vkd3d/libs/vkd3d-shader/hlsl.c           |   7 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl.h           |   3 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl.y           |  97 +++-
+ libs/vkd3d/libs/vkd3d-shader/ir.c             | 444 +++++++++++++++++-
+ libs/vkd3d/libs/vkd3d-shader/spirv.c          |  83 +++-
+ .../libs/vkd3d-shader/vkd3d_shader_main.c     | 241 ++++------
+ .../libs/vkd3d-shader/vkd3d_shader_private.h  |  13 +-
+ libs/vkd3d/libs/vkd3d/device.c                | 336 ++++++++-----
+ libs/vkd3d/libs/vkd3d/resource.c              |   9 +-
+ libs/vkd3d/libs/vkd3d/vkd3d_main.c            |   4 +-
+ libs/vkd3d/libs/vkd3d/vkd3d_private.h         |  12 +-
+ 16 files changed, 1166 insertions(+), 349 deletions(-)
+
+diff --git a/libs/vkd3d/include/vkd3d_shader.h b/libs/vkd3d/include/vkd3d_shader.h
+index 9e663919c38..1a62f093d6b 100644
+--- a/libs/vkd3d/include/vkd3d_shader.h
++++ b/libs/vkd3d/include/vkd3d_shader.h
+@@ -148,6 +148,12 @@ enum vkd3d_shader_compile_option_formatting_flags
+     VKD3D_SHADER_COMPILE_OPTION_FORMATTING_OFFSETS = 0x00000004,
+     VKD3D_SHADER_COMPILE_OPTION_FORMATTING_HEADER  = 0x00000008,
+     VKD3D_SHADER_COMPILE_OPTION_FORMATTING_RAW_IDS = 0x00000010,
++    /**
++     * Emit the signatures when disassembling a shader.
++     *
++     * \since 1.12
++     */
++    VKD3D_SHADER_COMPILE_OPTION_FORMATTING_IO_SIGNATURES = 0x00000020,
+ 
+     VKD3D_FORCE_32_BIT_ENUM(VKD3D_SHADER_COMPILE_OPTION_FORMATTING_FLAGS),
+ };
+@@ -886,6 +892,8 @@ enum vkd3d_shader_spirv_extension
+     VKD3D_SHADER_SPIRV_EXTENSION_EXT_STENCIL_EXPORT,
+     /** \since 1.11 */
+     VKD3D_SHADER_SPIRV_EXTENSION_EXT_VIEWPORT_INDEX_LAYER,
++    /** \since 1.12 */
++    VKD3D_SHADER_SPIRV_EXTENSION_EXT_FRAGMENT_SHADER_INTERLOCK,
+ 
+     VKD3D_FORCE_32_BIT_ENUM(VKD3D_SHADER_SPIRV_EXTENSION),
+ };
+diff --git a/libs/vkd3d/include/vkd3d_types.h b/libs/vkd3d/include/vkd3d_types.h
+index 12ceef42fc4..017eaf11806 100644
+--- a/libs/vkd3d/include/vkd3d_types.h
++++ b/libs/vkd3d/include/vkd3d_types.h
+@@ -41,6 +41,8 @@ enum vkd3d_result
+ {
+     /** Success. */
+     VKD3D_OK = 0,
++    /** Success as a result of there being nothing to do. */
++    VKD3D_FALSE = 1,
+     /** An unspecified failure occurred. */
+     VKD3D_ERROR = -1,
+     /** There are not enough resources available to complete the operation. */
+diff --git a/libs/vkd3d/libs/vkd3d-shader/d3d_asm.c b/libs/vkd3d/libs/vkd3d-shader/d3d_asm.c
+index 3f86bd45960..b8dcfd011b6 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/d3d_asm.c
++++ b/libs/vkd3d/libs/vkd3d-shader/d3d_asm.c
+@@ -250,6 +250,7 @@ static const char * const shader_opcode_names[] =
+     [VKD3DSIH_NOT                             ] = "not",
+     [VKD3DSIH_NRM                             ] = "nrm",
+     [VKD3DSIH_OR                              ] = "or",
++    [VKD3DSIH_ORD                             ] = "ord",
+     [VKD3DSIH_PHASE                           ] = "phase",
+     [VKD3DSIH_PHI                             ] = "phi",
+     [VKD3DSIH_POW                             ] = "pow",
+@@ -321,6 +322,7 @@ static const char * const shader_opcode_names[] =
+     [VKD3DSIH_UMAX                            ] = "umax",
+     [VKD3DSIH_UMIN                            ] = "umin",
+     [VKD3DSIH_UMUL                            ] = "umul",
++    [VKD3DSIH_UNO                             ] = "uno",
+     [VKD3DSIH_USHR                            ] = "ushr",
+     [VKD3DSIH_UTOD                            ] = "utod",
+     [VKD3DSIH_UTOF                            ] = "utof",
+@@ -370,6 +372,7 @@ struct vkd3d_d3d_asm_colours
+     const char *swizzle;
+     const char *version;
+     const char *write_mask;
++    const char *label;
+ };
+ 
+ struct vkd3d_d3d_asm_compiler
+@@ -377,7 +380,7 @@ struct vkd3d_d3d_asm_compiler
+     struct vkd3d_string_buffer buffer;
+     struct vkd3d_shader_version shader_version;
+     struct vkd3d_d3d_asm_colours colours;
+-    enum vsir_asm_dialect dialect;
++    enum vsir_asm_flags flags;
+     const struct vkd3d_shader_instruction *current;
+ };
+ 
+@@ -920,7 +923,7 @@ static void shader_dump_register(struct vkd3d_d3d_asm_compiler *compiler, const
+     static const char * const rastout_reg_names[] = {"oPos", "oFog", "oPts"};
+     static const char * const misctype_reg_names[] = {"vPos", "vFace"};
+ 
+-    shader_addline(buffer, "%s", compiler->colours.reg);
++    shader_addline(buffer, "%s", reg->type == VKD3DSPR_LABEL ? compiler->colours.label : compiler->colours.reg);
+     switch (reg->type)
+     {
+         case VKD3DSPR_TEMP:
+@@ -1370,7 +1373,7 @@ static void shader_dump_reg_type(struct vkd3d_d3d_asm_compiler *compiler,
+     struct vkd3d_string_buffer *buffer = &compiler->buffer;
+     const char *dimension;
+ 
+-    if (compiler->dialect != VSIR_ASM_VSIR)
++    if (!(compiler->flags & VSIR_ASM_FLAG_DUMP_TYPES))
+         return;
+ 
+     if (reg->dimension < ARRAY_SIZE(dimensions))
+@@ -1383,31 +1386,45 @@ static void shader_dump_reg_type(struct vkd3d_d3d_asm_compiler *compiler,
+     shader_addline(buffer, ">");
+ }
+ 
++static void shader_print_write_mask(struct vkd3d_d3d_asm_compiler *compiler,
++        const char *prefix, uint32_t mask, const char *suffix)
++{
++    unsigned int i = 0;
++    char buffer[5];
++
++    if (mask == 0)
++    {
++        vkd3d_string_buffer_printf(&compiler->buffer, "%s%s", prefix, suffix);
++        return;
++    }
++
++    if (mask & VKD3DSP_WRITEMASK_0)
++        buffer[i++] = 'x';
++    if (mask & VKD3DSP_WRITEMASK_1)
++        buffer[i++] = 'y';
++    if (mask & VKD3DSP_WRITEMASK_2)
++        buffer[i++] = 'z';
++    if (mask & VKD3DSP_WRITEMASK_3)
++        buffer[i++] = 'w';
++    buffer[i++] = '\0';
++
++    vkd3d_string_buffer_printf(&compiler->buffer, "%s.%s%s%s%s", prefix,
++            compiler->colours.write_mask, buffer, compiler->colours.reset, suffix);
++}
++
+ static void shader_dump_dst_param(struct vkd3d_d3d_asm_compiler *compiler,
+         const struct vkd3d_shader_dst_param *param, bool is_declaration)
+ {
+-    struct vkd3d_string_buffer *buffer = &compiler->buffer;
+     uint32_t write_mask = param->write_mask;
+ 
+     shader_dump_register(compiler, &param->reg, is_declaration);
+ 
+     if (write_mask && param->reg.dimension == VSIR_DIMENSION_VEC4)
+     {
+-        static const char write_mask_chars[] = "xyzw";
+-
+         if (data_type_is_64_bit(param->reg.data_type))
+             write_mask = vsir_write_mask_32_from_64(write_mask);
+ 
+-        shader_addline(buffer, ".%s", compiler->colours.write_mask);
+-        if (write_mask & VKD3DSP_WRITEMASK_0)
+-            shader_addline(buffer, "%c", write_mask_chars[0]);
+-        if (write_mask & VKD3DSP_WRITEMASK_1)
+-            shader_addline(buffer, "%c", write_mask_chars[1]);
+-        if (write_mask & VKD3DSP_WRITEMASK_2)
+-            shader_addline(buffer, "%c", write_mask_chars[2]);
+-        if (write_mask & VKD3DSP_WRITEMASK_3)
+-            shader_addline(buffer, "%c", write_mask_chars[3]);
+-        shader_addline(buffer, "%s", compiler->colours.reset);
++        shader_print_write_mask(compiler, "", write_mask, "");
+     }
+ 
+     shader_print_precision(compiler, &param->reg);
+@@ -2037,21 +2054,186 @@ static void shader_dump_instruction(struct vkd3d_d3d_asm_compiler *compiler,
+     shader_addline(buffer, "\n");
+ }
+ 
++static const char *get_sysval_semantic_name(enum vkd3d_shader_sysval_semantic semantic)
++{
++    switch (semantic)
++    {
++        case VKD3D_SHADER_SV_NONE:                      return "NONE";
++        case VKD3D_SHADER_SV_POSITION:                  return "POS";
++        case VKD3D_SHADER_SV_CLIP_DISTANCE:             return "CLIPDST";
++        case VKD3D_SHADER_SV_CULL_DISTANCE:             return "CULLDST";
++        case VKD3D_SHADER_SV_RENDER_TARGET_ARRAY_INDEX: return "RTINDEX";
++        case VKD3D_SHADER_SV_VIEWPORT_ARRAY_INDEX:      return "VPINDEX";
++        case VKD3D_SHADER_SV_VERTEX_ID:                 return "VERTID";
++        case VKD3D_SHADER_SV_PRIMITIVE_ID:              return "PRIMID";
++        case VKD3D_SHADER_SV_INSTANCE_ID:               return "INSTID";
++        case VKD3D_SHADER_SV_IS_FRONT_FACE:             return "FFACE";
++        case VKD3D_SHADER_SV_SAMPLE_INDEX:              return "SAMPLE";
++        case VKD3D_SHADER_SV_TESS_FACTOR_QUADEDGE:      return "QUADEDGE";
++        case VKD3D_SHADER_SV_TESS_FACTOR_QUADINT:       return "QUADINT";
++        case VKD3D_SHADER_SV_TESS_FACTOR_TRIEDGE:       return "TRIEDGE";
++        case VKD3D_SHADER_SV_TESS_FACTOR_TRIINT:        return "TRIINT";
++        case VKD3D_SHADER_SV_TESS_FACTOR_LINEDET:       return "LINEDET";
++        case VKD3D_SHADER_SV_TESS_FACTOR_LINEDEN:       return "LINEDEN";
++        case VKD3D_SHADER_SV_TARGET:                    return "TARGET";
++        case VKD3D_SHADER_SV_DEPTH:                     return "DEPTH";
++        case VKD3D_SHADER_SV_COVERAGE:                  return "COVERAGE";
++        case VKD3D_SHADER_SV_DEPTH_GREATER_EQUAL:       return "DEPTHGE";
++        case VKD3D_SHADER_SV_DEPTH_LESS_EQUAL:          return "DEPTHLE";
++        case VKD3D_SHADER_SV_STENCIL_REF:               return "STENCILREF";
++        default:                                        return "??";
++    }
++}
++
++static const char *get_component_type_name(enum vkd3d_shader_component_type type)
++{
++    switch (type)
++    {
++        case VKD3D_SHADER_COMPONENT_VOID:   return "void";
++        case VKD3D_SHADER_COMPONENT_UINT:   return "uint";
++        case VKD3D_SHADER_COMPONENT_INT:    return "int";
++        case VKD3D_SHADER_COMPONENT_FLOAT:  return "float";
++        case VKD3D_SHADER_COMPONENT_BOOL:   return "bool";
++        case VKD3D_SHADER_COMPONENT_DOUBLE: return "double";
++        case VKD3D_SHADER_COMPONENT_UINT64: return "uint64";
++        default:                            return "??";
++    }
++}
++
++static const char *get_minimum_precision_name(enum vkd3d_shader_minimum_precision prec)
++{
++    switch (prec)
++    {
++        case VKD3D_SHADER_MINIMUM_PRECISION_NONE:      return "NONE";
++        case VKD3D_SHADER_MINIMUM_PRECISION_FLOAT_16:  return "FLOAT_16";
++        case VKD3D_SHADER_MINIMUM_PRECISION_FIXED_8_2: return "FIXED_8_2";
++        case VKD3D_SHADER_MINIMUM_PRECISION_INT_16:    return "INT_16";
++        case VKD3D_SHADER_MINIMUM_PRECISION_UINT_16:   return "UINT_16";
++        default:                                       return "??";
++    }
++}
++
++static const char *get_semantic_register_name(enum vkd3d_shader_sysval_semantic semantic)
++{
++    switch (semantic)
++    {
++        case VKD3D_SHADER_SV_DEPTH:               return "oDepth";
++        case VKD3D_SHADER_SV_DEPTH_GREATER_EQUAL: return "oDepthGE";
++        case VKD3D_SHADER_SV_DEPTH_LESS_EQUAL:    return "oDepthLE";
++            /* SV_Coverage has name vCoverage when used as an input,
++             * but it doens't appear in the signature in that case. */
++        case VKD3D_SHADER_SV_COVERAGE:            return "oMask";
++        case VKD3D_SHADER_SV_STENCIL_REF:         return "oStencilRef";
++        default:                                  return "??";
++    }
++}
++
++static enum vkd3d_result dump_signature(struct vkd3d_d3d_asm_compiler *compiler,
++        const char *name, const char *register_name, const struct shader_signature *signature)
++{
++    struct vkd3d_string_buffer *buffer = &compiler->buffer;
++    unsigned int i;
++
++    if (signature->element_count == 0)
++        return VKD3D_OK;
++
++    vkd3d_string_buffer_printf(buffer, "%s%s%s\n",
++            compiler->colours.opcode, name, compiler->colours.reset);
++
++    for (i = 0; i < signature->element_count; ++i)
++    {
++        struct signature_element *element = &signature->elements[i];
++
++        vkd3d_string_buffer_printf(buffer, "%s.param%s %s", compiler->colours.opcode,
++                compiler->colours.reset, element->semantic_name);
++
++        if (element->semantic_index != 0)
++            vkd3d_string_buffer_printf(buffer, "%u", element->semantic_index);
++
++        if (element->register_index != -1)
++        {
++            shader_print_write_mask(compiler, "", element->mask, "");
++            vkd3d_string_buffer_printf(buffer, ", %s%s%d%s", compiler->colours.reg,
++                    register_name, element->register_index, compiler->colours.reset);
++            shader_print_write_mask(compiler, "", element->used_mask, "");
++        }
++        else
++        {
++            vkd3d_string_buffer_printf(buffer, ", %s%s%s", compiler->colours.reg,
++                    get_semantic_register_name(element->sysval_semantic), compiler->colours.reset);
++        }
++
++        if (!element->component_type && !element->sysval_semantic
++                && !element->min_precision && !element->stream_index)
++            goto done;
++
++        vkd3d_string_buffer_printf(buffer, ", %s",
++                get_component_type_name(element->component_type));
++
++        if (!element->sysval_semantic && !element->min_precision && !element->stream_index)
++            goto done;
++
++        vkd3d_string_buffer_printf(buffer, ", %s",
++                get_sysval_semantic_name(element->sysval_semantic));
++
++        if (!element->min_precision && !element->stream_index)
++            goto done;
++
++        vkd3d_string_buffer_printf(buffer, ", %s",
++                get_minimum_precision_name(element->min_precision));
++
++        if (!element->stream_index)
++            goto done;
++
++        vkd3d_string_buffer_printf(buffer, ", m%u",
++                element->stream_index);
++
++    done:
++        vkd3d_string_buffer_printf(buffer, "\n");
++    }
++
++    return VKD3D_OK;
++}
++
++static enum vkd3d_result dump_signatures(struct vkd3d_d3d_asm_compiler *compiler,
++        const struct vkd3d_shader_desc *shader_desc, enum vkd3d_shader_type shader_type)
++{
++    enum vkd3d_result ret;
++
++    if ((ret = dump_signature(compiler, ".input",
++            shader_type == VKD3D_SHADER_TYPE_DOMAIN ? "vicp" : "v",
++            &shader_desc->input_signature)) < 0)
++        return ret;
++
++    if ((ret = dump_signature(compiler, ".output", "o",
++            &shader_desc->output_signature)) < 0)
++        return ret;
++
++    if ((ret = dump_signature(compiler, ".patch_constant",
++            shader_type == VKD3D_SHADER_TYPE_DOMAIN ? "vpc" : "o",
++            &shader_desc->patch_constant_signature)) < 0)
++        return ret;
++
++    vkd3d_string_buffer_printf(&compiler->buffer, "%s.text%s\n",
++            compiler->colours.opcode, compiler->colours.reset);
++
++    return VKD3D_OK;
++}
++
+ enum vkd3d_result vkd3d_dxbc_binary_to_text(const struct vsir_program *program,
+-        const struct vkd3d_shader_compile_info *compile_info,
+-        struct vkd3d_shader_code *out, enum vsir_asm_dialect dialect)
++        const struct vkd3d_shader_desc *shader_desc, const struct vkd3d_shader_compile_info *compile_info,
++        struct vkd3d_shader_code *out, enum vsir_asm_flags flags)
+ {
+     const struct vkd3d_shader_version *shader_version = &program->shader_version;
+     enum vkd3d_shader_compile_option_formatting_flags formatting;
+     struct vkd3d_d3d_asm_compiler compiler =
+     {
+-        .dialect = dialect,
++        .flags = flags,
+     };
+     enum vkd3d_result result = VKD3D_OK;
+     struct vkd3d_string_buffer *buffer;
+     unsigned int indent, i, j;
+     const char *indent_str;
+-    void *code;
+ 
+     static const struct vkd3d_d3d_asm_colours no_colours =
+     {
+@@ -2064,6 +2246,7 @@ enum vkd3d_result vkd3d_dxbc_binary_to_text(const struct vsir_program *program,
+         .swizzle = "",
+         .version = "",
+         .write_mask = "",
++        .label = "",
+     };
+     static const struct vkd3d_d3d_asm_colours colours =
+     {
+@@ -2076,6 +2259,7 @@ enum vkd3d_result vkd3d_dxbc_binary_to_text(const struct vsir_program *program,
+         .swizzle = "\x1b[93m",
+         .version = "\x1b[36m",
+         .write_mask = "\x1b[93m",
++        .label = "\x1b[91m",
+     };
+ 
+     formatting = VKD3D_SHADER_COMPILE_OPTION_FORMATTING_INDENT
+@@ -2109,6 +2293,17 @@ enum vkd3d_result vkd3d_dxbc_binary_to_text(const struct vsir_program *program,
+             shader_get_type_prefix(shader_version->type), shader_version->major,
+             shader_version->minor, compiler.colours.reset);
+ 
++    /* The signatures we emit only make sense for DXBC shaders. D3DBC
++     * doesn't even have an explicit concept of signature. */
++    if (formatting & VKD3D_SHADER_COMPILE_OPTION_FORMATTING_IO_SIGNATURES && shader_version->major >= 4)
++    {
++        if ((result = dump_signatures(&compiler, shader_desc, shader_version->type)) < 0)
++        {
++            vkd3d_string_buffer_cleanup(buffer);
++            return result;
++        }
++    }
++
+     indent = 0;
+     for (i = 0; i < program->instructions.count; ++i)
+     {
+@@ -2150,18 +2345,7 @@ enum vkd3d_result vkd3d_dxbc_binary_to_text(const struct vsir_program *program,
+         }
+     }
+ 
+-    if ((code = vkd3d_malloc(buffer->content_size)))
+-    {
+-        memcpy(code, buffer->buffer, buffer->content_size);
+-        out->size = buffer->content_size;
+-        out->code = code;
+-    }
+-    else
+-    {
+-        result = VKD3D_ERROR_OUT_OF_MEMORY;
+-    }
+-
+-    vkd3d_string_buffer_cleanup(buffer);
++    vkd3d_shader_code_from_string_buffer(out, buffer);
+ 
+     return result;
+ }
+@@ -2171,7 +2355,7 @@ void vkd3d_shader_trace(const struct vsir_program *program)
+     const char *p, *q, *end;
+     struct vkd3d_shader_code code;
+ 
+-    if (vkd3d_dxbc_binary_to_text(program, NULL, &code, VSIR_ASM_VSIR) != VKD3D_OK)
++    if (vkd3d_dxbc_binary_to_text(program, NULL, NULL, &code, VSIR_ASM_FLAG_DUMP_TYPES) != VKD3D_OK)
+         return;
+ 
+     end = (const char *)code.code + code.size;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/dxil.c b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+index 26a8a5c1cc3..a202d208f9d 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/dxil.c
++++ b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+@@ -5187,8 +5187,8 @@ static const struct sm6_cmp_info *sm6_map_cmp2_op(uint64_t code)
+         [FCMP_OLT]   = {VKD3DSIH_LTO},
+         [FCMP_OLE]   = {VKD3DSIH_GEO, true},
+         [FCMP_ONE]   = {VKD3DSIH_NEO},
+-        [FCMP_ORD]   = {VKD3DSIH_INVALID},
+-        [FCMP_UNO]   = {VKD3DSIH_INVALID},
++        [FCMP_ORD]   = {VKD3DSIH_ORD},
++        [FCMP_UNO]   = {VKD3DSIH_UNO},
+         [FCMP_UEQ]   = {VKD3DSIH_EQU},
+         [FCMP_UGT]   = {VKD3DSIH_LTU, true},
+         [FCMP_UGE]   = {VKD3DSIH_GEU},
+diff --git a/libs/vkd3d/libs/vkd3d-shader/glsl.c b/libs/vkd3d/libs/vkd3d-shader/glsl.c
+index bdd03c1e72a..c234caf8275 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/glsl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/glsl.c
+@@ -96,6 +96,8 @@ int vkd3d_glsl_generator_generate(struct vkd3d_glsl_generator *generator,
+     unsigned int i;
+     void *code;
+ 
++    ERR("Generating a GLSL shader. This is unsupported; you get to keep all the pieces if it breaks.\n");
++
+     vkd3d_string_buffer_printf(&generator->buffer, "#version 440\n\n");
+     vkd3d_string_buffer_printf(&generator->buffer, "void main()\n{\n");
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.c b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+index 45d02ce2b4e..c315000a6e9 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+@@ -2020,7 +2020,7 @@ struct hlsl_ir_function_decl *hlsl_new_func_decl(struct hlsl_ctx *ctx,
+ }
+ 
+ struct hlsl_buffer *hlsl_new_buffer(struct hlsl_ctx *ctx, enum hlsl_buffer_type type, const char *name,
+-        const struct hlsl_reg_reservation *reservation, const struct vkd3d_shader_location *loc)
++        uint32_t modifiers, const struct hlsl_reg_reservation *reservation, const struct vkd3d_shader_location *loc)
+ {
+     struct hlsl_buffer *buffer;
+ 
+@@ -2028,6 +2028,7 @@ struct hlsl_buffer *hlsl_new_buffer(struct hlsl_ctx *ctx, enum hlsl_buffer_type
+         return NULL;
+     buffer->type = type;
+     buffer->name = name;
++    buffer->modifiers = modifiers;
+     if (reservation)
+         buffer->reservation = *reservation;
+     buffer->loc = *loc;
+@@ -3574,10 +3575,10 @@ static bool hlsl_ctx_init(struct hlsl_ctx *ctx, const struct vkd3d_shader_compil
+     list_init(&ctx->buffers);
+ 
+     if (!(ctx->globals_buffer = hlsl_new_buffer(ctx, HLSL_BUFFER_CONSTANT,
+-            hlsl_strdup(ctx, "$Globals"), NULL, &ctx->location)))
++            hlsl_strdup(ctx, "$Globals"), 0, NULL, &ctx->location)))
+         return false;
+     if (!(ctx->params_buffer = hlsl_new_buffer(ctx, HLSL_BUFFER_CONSTANT,
+-            hlsl_strdup(ctx, "$Params"), NULL, &ctx->location)))
++            hlsl_strdup(ctx, "$Params"), 0, NULL, &ctx->location)))
+         return false;
+     ctx->cur_buffer = ctx->globals_buffer;
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.h b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+index 97b9021146d..49858869e7d 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.h
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+@@ -799,6 +799,7 @@ struct hlsl_buffer
+     struct vkd3d_shader_location loc;
+     enum hlsl_buffer_type type;
+     const char *name;
++    uint32_t modifiers;
+     /* Register reserved for this buffer, if any.
+      * If provided, it should be of type 'b' if type is HLSL_BUFFER_CONSTANT and 't' if type is
+      *   HLSL_BUFFER_TEXTURE. */
+@@ -1223,7 +1224,7 @@ struct hlsl_ir_node *hlsl_new_binary_expr(struct hlsl_ctx *ctx, enum hlsl_ir_exp
+         struct hlsl_ir_node *arg2);
+ struct hlsl_ir_node *hlsl_new_bool_constant(struct hlsl_ctx *ctx, bool b, const struct vkd3d_shader_location *loc);
+ struct hlsl_buffer *hlsl_new_buffer(struct hlsl_ctx *ctx, enum hlsl_buffer_type type, const char *name,
+-        const struct hlsl_reg_reservation *reservation, const struct vkd3d_shader_location *loc);
++        uint32_t modifiers, const struct hlsl_reg_reservation *reservation, const struct vkd3d_shader_location *loc);
+ struct hlsl_ir_node *hlsl_new_call(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl *decl,
+         const struct vkd3d_shader_location *loc);
+ struct hlsl_ir_node *hlsl_new_cast(struct hlsl_ctx *ctx, struct hlsl_ir_node *node, struct hlsl_type *type,
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.y b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+index 8cdc8226370..b484a952497 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.y
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+@@ -3155,6 +3155,94 @@ static bool intrinsic_ddy_fine(struct hlsl_ctx *ctx,
+     return !!add_unary_arithmetic_expr(ctx, params->instrs, HLSL_OP1_DSY_FINE, arg, loc);
+ }
+ 
++static bool intrinsic_determinant(struct hlsl_ctx *ctx,
++        const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
++{
++    static const char determinant2x2[] =
++            "%s determinant(%s2x2 m)\n"
++            "{\n"
++            "    return m._11 * m._22 - m._12 * m._21;\n"
++            "}";
++    static const char determinant3x3[] =
++            "%s determinant(%s3x3 m)\n"
++            "{\n"
++            "    %s2x2 m1 = { m._22, m._23, m._32, m._33 };\n"
++            "    %s2x2 m2 = { m._21, m._23, m._31, m._33 };\n"
++            "    %s2x2 m3 = { m._21, m._22, m._31, m._32 };\n"
++            "    %s3 v1 = { m._11, -m._12, m._13 };\n"
++            "    %s3 v2 = { determinant(m1), determinant(m2), determinant(m3) };\n"
++            "    return dot(v1, v2);\n"
++            "}";
++    static const char determinant4x4[] =
++            "%s determinant(%s4x4 m)\n"
++            "{\n"
++            "    %s3x3 m1 = { m._22, m._23, m._24, m._32, m._33, m._34, m._42, m._43, m._44 };\n"
++            "    %s3x3 m2 = { m._21, m._23, m._24, m._31, m._33, m._34, m._41, m._43, m._44 };\n"
++            "    %s3x3 m3 = { m._21, m._22, m._24, m._31, m._32, m._34, m._41, m._42, m._44 };\n"
++            "    %s3x3 m4 = { m._21, m._22, m._23, m._31, m._32, m._33, m._41, m._42, m._43 };\n"
++            "    %s4 v1 = { m._11, -m._12, m._13, -m._14 };\n"
++            "    %s4 v2 = { determinant(m1), determinant(m2), determinant(m3), determinant(m4) };\n"
++            "    return dot(v1, v2);\n"
++            "}";
++    static const char *templates[] =
++    {
++        [2] = determinant2x2,
++        [3] = determinant3x3,
++        [4] = determinant4x4,
++    };
++
++    struct hlsl_ir_node *arg = params->args[0];
++    const struct hlsl_type *type = arg->data_type;
++    struct hlsl_ir_function_decl *func;
++    const char *typename, *template;
++    unsigned int dim;
++    char *body;
++
++    if (type->class != HLSL_CLASS_SCALAR && type->class != HLSL_CLASS_MATRIX)
++    {
++        hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE, "Invalid argument type.");
++        return false;
++    }
++
++    dim = min(type->dimx, type->dimy);
++    if (dim == 1)
++    {
++        if (!(arg = intrinsic_float_convert_arg(ctx, params, arg, loc)))
++            return false;
++        return hlsl_add_load_component(ctx, params->instrs, arg, 0, loc);
++    }
++
++    typename = type->base_type == HLSL_TYPE_HALF ? "half" : "float";
++    template = templates[dim];
++
++    switch (dim)
++    {
++        case 2:
++            body = hlsl_sprintf_alloc(ctx, template, typename, typename);
++            break;
++        case 3:
++            body = hlsl_sprintf_alloc(ctx, template, typename, typename, typename,
++                    typename, typename, typename, typename);
++            break;
++        case 4:
++            body = hlsl_sprintf_alloc(ctx, template, typename, typename, typename,
++                    typename, typename, typename, typename, typename);
++            break;
++        default:
++            vkd3d_unreachable();
++    }
++
++    if (!body)
++        return false;
++
++    func = hlsl_compile_internal_function(ctx, "determinant", body);
++    vkd3d_free(body);
++    if (!func)
++        return false;
++
++    return add_user_call(ctx, func, params, loc);
++}
++
+ static bool intrinsic_distance(struct hlsl_ctx *ctx,
+         const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+ {
+@@ -4138,6 +4226,7 @@ intrinsic_functions[] =
+     {"ddy_coarse",                          1, true,  intrinsic_ddy_coarse},
+     {"ddy_fine",                            1, true,  intrinsic_ddy_fine},
+     {"degrees",                             1, true,  intrinsic_degrees},
++    {"determinant",                         1, true,  intrinsic_determinant},
+     {"distance",                            2, true,  intrinsic_distance},
+     {"dot",                                 2, true,  intrinsic_dot},
+     {"exp",                                 1, true,  intrinsic_exp},
+@@ -5579,12 +5668,12 @@ effect_group:
+         }
+ 
+ buffer_declaration:
+-      buffer_type any_identifier colon_attribute
++      var_modifiers buffer_type any_identifier colon_attribute
+         {
+-            if ($3.semantic.name)
+-                hlsl_error(ctx, &@3, VKD3D_SHADER_ERROR_HLSL_INVALID_SEMANTIC, "Semantics are not allowed on buffers.");
++            if ($4.semantic.name)
++                hlsl_error(ctx, &@4, VKD3D_SHADER_ERROR_HLSL_INVALID_SEMANTIC, "Semantics are not allowed on buffers.");
+ 
+-            if (!(ctx->cur_buffer = hlsl_new_buffer(ctx, $1, $2, &$3.reg_reservation, &@2)))
++            if (!(ctx->cur_buffer = hlsl_new_buffer(ctx, $2, $3, $1, &$4.reg_reservation, &@3)))
+                 YYABORT;
+         }
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/ir.c b/libs/vkd3d/libs/vkd3d-shader/ir.c
+index f0bd85338c6..3c862f33ef1 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/ir.c
++++ b/libs/vkd3d/libs/vkd3d-shader/ir.c
+@@ -2041,12 +2041,19 @@ static enum vkd3d_result cf_flattener_iterate_instruction_array(struct cf_flatte
+         flattener->location = instruction->location;
+ 
+         /* Declarations should occur before the first code block, which in hull shaders is marked by the first
+-         * phase instruction, and in all other shader types begins with the first label instruction. */
+-        if (!after_declarations_section && !vsir_instruction_is_dcl(instruction)
+-                && instruction->handler_idx != VKD3DSIH_NOP)
++         * phase instruction, and in all other shader types begins with the first label instruction.
++         * Declaring an indexable temp with function scope is not considered a declaration,
++         * because it needs to live inside a function. */
++        if (!after_declarations_section && instruction->handler_idx != VKD3DSIH_NOP)
+         {
+-            after_declarations_section = true;
+-            cf_flattener_emit_label(flattener, cf_flattener_alloc_block_id(flattener));
++            bool is_function_indexable = instruction->handler_idx == VKD3DSIH_DCL_INDEXABLE_TEMP
++                    && instruction->declaration.indexable_temp.has_function_scope;
++
++            if (!vsir_instruction_is_dcl(instruction) || is_function_indexable)
++            {
++                after_declarations_section = true;
++                cf_flattener_emit_label(flattener, cf_flattener_alloc_block_id(flattener));
++            }
+         }
+ 
+         cf_info = flattener->control_flow_depth
+@@ -3025,14 +3032,8 @@ static void vsir_block_list_cleanup(struct vsir_block_list *list)
+     vkd3d_free(list->blocks);
+ }
+ 
+-static enum vkd3d_result vsir_block_list_add(struct vsir_block_list *list, struct vsir_block *block)
++static enum vkd3d_result vsir_block_list_add_checked(struct vsir_block_list *list, struct vsir_block *block)
+ {
+-    size_t i;
+-
+-    for (i = 0; i < list->count; ++i)
+-        if (block == list->blocks[i])
+-            return VKD3D_OK;
+-
+     if (!vkd3d_array_reserve((void **)&list->blocks, &list->capacity, list->count + 1, sizeof(*list->blocks)))
+     {
+         ERR("Cannot extend block list.\n");
+@@ -3044,6 +3045,24 @@ static enum vkd3d_result vsir_block_list_add(struct vsir_block_list *list, struc
+     return VKD3D_OK;
+ }
+ 
++static enum vkd3d_result vsir_block_list_add(struct vsir_block_list *list, struct vsir_block *block)
++{
++    size_t i;
++
++    for (i = 0; i < list->count; ++i)
++        if (block == list->blocks[i])
++            return VKD3D_FALSE;
++
++    return vsir_block_list_add_checked(list, block);
++}
++
++/* It is guaranteed that the relative order is kept. */
++static void vsir_block_list_remove_index(struct vsir_block_list *list, size_t idx)
++{
++    --list->count;
++    memmove(&list->blocks[idx], &list->blocks[idx + 1], (list->count - idx) * sizeof(*list->blocks));
++}
++
+ struct vsir_block
+ {
+     unsigned int label;
+@@ -3089,12 +3108,38 @@ static void vsir_block_cleanup(struct vsir_block *block)
+     vkd3d_free(block->dominates);
+ }
+ 
++static int block_compare(const void *ptr1, const void *ptr2)
++{
++    const struct vsir_block *block1 = *(const struct vsir_block **)ptr1;
++    const struct vsir_block *block2 = *(const struct vsir_block **)ptr2;
++
++    return vkd3d_u32_compare(block1->label, block2->label);
++}
++
++static void vsir_block_list_sort(struct vsir_block_list *list)
++{
++    qsort(list->blocks, list->count, sizeof(*list->blocks), block_compare);
++}
++
++static bool vsir_block_list_search(struct vsir_block_list *list, struct vsir_block *block)
++{
++    return !!bsearch(&block, list->blocks, list->count, sizeof(*list->blocks), block_compare);
++}
++
+ struct vsir_cfg
+ {
++    struct vkd3d_shader_message_context *message_context;
+     struct vsir_program *program;
+     struct vsir_block *blocks;
+     struct vsir_block *entry;
+     size_t block_count;
++    struct vkd3d_string_buffer debug_buffer;
++
++    struct vsir_block_list *loops;
++    size_t loops_count, loops_capacity;
++    size_t *loops_by_header;
++
++    struct vsir_block_list order;
+ };
+ 
+ static void vsir_cfg_cleanup(struct vsir_cfg *cfg)
+@@ -3104,7 +3149,22 @@ static void vsir_cfg_cleanup(struct vsir_cfg *cfg)
+     for (i = 0; i < cfg->block_count; ++i)
+         vsir_block_cleanup(&cfg->blocks[i]);
+ 
++    for (i = 0; i < cfg->loops_count; ++i)
++        vsir_block_list_cleanup(&cfg->loops[i]);
++
++    vsir_block_list_cleanup(&cfg->order);
++
+     vkd3d_free(cfg->blocks);
++    vkd3d_free(cfg->loops);
++    vkd3d_free(cfg->loops_by_header);
++
++    if (TRACE_ON())
++        vkd3d_string_buffer_cleanup(&cfg->debug_buffer);
++}
++
++static bool vsir_block_dominates(struct vsir_block *b1, struct vsir_block *b2)
++{
++    return bitmap_is_set(b1->dominates, b2->label - 1);
+ }
+ 
+ static enum vkd3d_result vsir_cfg_add_edge(struct vsir_cfg *cfg, struct vsir_block *block,
+@@ -3162,19 +3222,26 @@ static void vsir_cfg_dump_dot(struct vsir_cfg *cfg)
+     TRACE("}\n");
+ }
+ 
+-static enum vkd3d_result vsir_cfg_init(struct vsir_cfg *cfg, struct vsir_program *program)
++static enum vkd3d_result vsir_cfg_init(struct vsir_cfg *cfg, struct vsir_program *program,
++        struct vkd3d_shader_message_context *message_context)
+ {
+     struct vsir_block *current_block = NULL;
+     enum vkd3d_result ret;
+     size_t i;
+ 
+     memset(cfg, 0, sizeof(*cfg));
++    cfg->message_context = message_context;
+     cfg->program = program;
+     cfg->block_count = program->block_count;
+ 
++    vsir_block_list_init(&cfg->order);
++
+     if (!(cfg->blocks = vkd3d_calloc(cfg->block_count, sizeof(*cfg->blocks))))
+         return VKD3D_ERROR_OUT_OF_MEMORY;
+ 
++    if (TRACE_ON())
++        vkd3d_string_buffer_init(&cfg->debug_buffer);
++
+     for (i = 0; i < program->instructions.count; ++i)
+     {
+         struct vkd3d_shader_instruction *instruction = &program->instructions.elements[i];
+@@ -3285,12 +3352,8 @@ static void vsir_cfg_compute_dominators_recurse(struct vsir_block *current, stru
+ 
+ static void vsir_cfg_compute_dominators(struct vsir_cfg *cfg)
+ {
+-    struct vkd3d_string_buffer buf;
+     size_t i, j;
+ 
+-    if (TRACE_ON())
+-        vkd3d_string_buffer_init(&buf);
+-
+     for (i = 0; i < cfg->block_count; ++i)
+     {
+         struct vsir_block *block = &cfg->blocks[i];
+@@ -3302,7 +3365,7 @@ static void vsir_cfg_compute_dominators(struct vsir_cfg *cfg)
+ 
+         if (TRACE_ON())
+         {
+-            vkd3d_string_buffer_printf(&buf, "Block %u dominates:", block->label);
++            vkd3d_string_buffer_printf(&cfg->debug_buffer, "Block %u dominates:", block->label);
+             for (j = 0; j < cfg->block_count; j++)
+             {
+                 struct vsir_block *block2 = &cfg->blocks[j];
+@@ -3310,16 +3373,337 @@ static void vsir_cfg_compute_dominators(struct vsir_cfg *cfg)
+                 if (block2->label == 0)
+                     continue;
+ 
+-                if (bitmap_is_set(block->dominates, j))
+-                    vkd3d_string_buffer_printf(&buf, " %u", block2->label);
++                if (vsir_block_dominates(block, block2))
++                    vkd3d_string_buffer_printf(&cfg->debug_buffer, " %u", block2->label);
++            }
++            TRACE("%s\n", cfg->debug_buffer.buffer);
++            vkd3d_string_buffer_clear(&cfg->debug_buffer);
++        }
++    }
++}
++
++/* A back edge is an edge X -> Y for which block Y dominates block
++ * X. All the other edges are forward edges, and it is required that
++ * the input CFG is reducible, i.e., it is acyclic once you strip away
++ * the back edges.
++ *
++ * Each back edge X -> Y defines a loop: block X is the header block,
++ * block Y is the back edge block, and the loop consists of all the
++ * blocks which are dominated by the header block and have a path to
++ * the back edge block that doesn't pass through the header block
++ * (including the header block itself). It can be proved that all the
++ * blocks in such a path (connecting a loop block to the back edge
++ * block without passing through the header block) belong to the same
++ * loop.
++ *
++ * If the input CFG is reducible, each two loops are either disjoint
++ * or one is a strict subset of the other, provided that each block
++ * has at most one incoming back edge. If this condition does not
++ * hold, a synthetic block can be introduced as the only back edge
++ * block for the given header block, with all the previous back edge
++ * now being forward edges to the synthetic block. This is not
++ * currently implemented (but it is rarely found in practice
++ * anyway). */
++static enum vkd3d_result vsir_cfg_scan_loop(struct vsir_block_list *loop, struct vsir_block *block,
++        struct vsir_block *header)
++{
++    enum vkd3d_result ret;
++    size_t i;
++
++    if ((ret = vsir_block_list_add(loop, block)) < 0)
++        return ret;
++
++    if (ret == VKD3D_FALSE || block == header)
++        return VKD3D_OK;
++
++    for (i = 0; i < block->predecessors.count; ++i)
++    {
++        if ((ret = vsir_cfg_scan_loop(loop, block->predecessors.blocks[i], header)) < 0)
++            return ret;
++    }
++
++    return VKD3D_OK;
++}
++
++static enum vkd3d_result vsir_cfg_compute_loops(struct vsir_cfg *cfg)
++{
++    size_t i, j, k;
++
++    if (!(cfg->loops_by_header = vkd3d_calloc(cfg->block_count, sizeof(*cfg->loops_by_header))))
++        return VKD3D_ERROR_OUT_OF_MEMORY;
++    memset(cfg->loops_by_header, 0xff, cfg->block_count * sizeof(*cfg->loops_by_header));
++
++    for (i = 0; i < cfg->block_count; ++i)
++    {
++        struct vsir_block *block = &cfg->blocks[i];
++
++        if (block->label == 0)
++            continue;
++
++        for (j = 0; j < block->successors.count; ++j)
++        {
++            struct vsir_block *header = block->successors.blocks[j];
++            struct vsir_block_list *loop;
++            enum vkd3d_result ret;
++
++            /* Is this a back edge? */
++            if (!vsir_block_dominates(header, block))
++                continue;
++
++            if (!vkd3d_array_reserve((void **)&cfg->loops, &cfg->loops_capacity, cfg->loops_count + 1, sizeof(*cfg->loops)))
++                return VKD3D_ERROR_OUT_OF_MEMORY;
++
++            loop = &cfg->loops[cfg->loops_count];
++            vsir_block_list_init(loop);
++
++            if ((ret = vsir_cfg_scan_loop(loop, block, header)) < 0)
++                return ret;
++
++            vsir_block_list_sort(loop);
++
++            if (TRACE_ON())
++            {
++                vkd3d_string_buffer_printf(&cfg->debug_buffer, "Back edge %u -> %u with loop:", block->label, header->label);
++
++                for (k = 0; k < loop->count; ++k)
++                    vkd3d_string_buffer_printf(&cfg->debug_buffer, " %u", loop->blocks[k]->label);
++
++                TRACE("%s\n", cfg->debug_buffer.buffer);
++                vkd3d_string_buffer_clear(&cfg->debug_buffer);
++            }
++
++            if (cfg->loops_by_header[header->label - 1] != SIZE_MAX)
++            {
++                FIXME("Block %u is header to more than one loop, this is not implemented.\n", header->label);
++                vkd3d_shader_error(cfg->message_context, &header->begin->location, VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED,
++                        "Block %u is header to more than one loop, this is not implemented.", header->label);
++                return VKD3D_ERROR_NOT_IMPLEMENTED;
++            }
++
++            cfg->loops_by_header[header->label - 1] = cfg->loops_count;
++
++            ++cfg->loops_count;
++        }
++    }
++
++    return VKD3D_OK;
++}
++
++struct vsir_cfg_node_sorter
++{
++    struct vsir_cfg *cfg;
++    struct vsir_cfg_node_sorter_stack_item
++    {
++        struct vsir_block_list *loop;
++        unsigned int seen_count;
++    } *stack;
++    size_t stack_count, stack_capacity;
++    struct vsir_block_list available_blocks;
++};
++
++static enum vkd3d_result vsir_cfg_node_sorter_make_node_available(struct vsir_cfg_node_sorter *sorter, struct vsir_block *block)
++{
++    struct vsir_block_list *loop = NULL;
++    struct vsir_cfg_node_sorter_stack_item *item;
++    enum vkd3d_result ret;
++
++    if (sorter->cfg->loops_by_header[block->label - 1] != SIZE_MAX)
++        loop = &sorter->cfg->loops[sorter->cfg->loops_by_header[block->label - 1]];
++
++    if ((ret = vsir_block_list_add_checked(&sorter->available_blocks, block)) < 0)
++        return ret;
++
++    if (!loop)
++        return VKD3D_OK;
++
++    if (!vkd3d_array_reserve((void **)&sorter->stack, &sorter->stack_capacity, sorter->stack_count + 1, sizeof(*sorter->stack)))
++        return VKD3D_ERROR_OUT_OF_MEMORY;
++
++    item = &sorter->stack[sorter->stack_count++];
++    item->loop = loop;
++    item->seen_count = 0;
++
++    return VKD3D_OK;
++}
++
++/* Topologically sort the blocks according to the forward edges. By
++ * definition if the input CFG is reducible then its forward edges
++ * form a DAG, so a topological sorting exists. In order to compute it
++ * we keep an array with the incoming degree for each block and an
++ * available list of all the blocks whose incoming degree has reached
++ * zero. At each step we pick a block from the available list and
++ * strip it away from the graph, updating the incoming degrees and
++ * available list.
++ *
++ * In principle at each step we can pick whatever node we want from
++ * the available list, and will get a topological sort
++ * anyway. However, we use these two criteria to give to the computed
++ * order additional properties:
++ *
++ *  1. we keep track of which loops we're into, and pick blocks
++ *     belonging to the current innermost loop, so that loops are kept
++ *     contiguous in the order; this can always be done when the input
++ *     CFG is reducible;
++ *
++ *  2. subject to the requirement above, we always pick the most
++ *     recently added block to the available list, because this tends
++ *     to keep related blocks and require fewer control flow
++ *     primitives.
++ */
++static enum vkd3d_result vsir_cfg_sort_nodes(struct vsir_cfg *cfg)
++{
++    struct vsir_cfg_node_sorter sorter = { .cfg = cfg };
++    unsigned int *in_degrees = NULL;
++    enum vkd3d_result ret;
++    size_t i;
++
++    if (!(in_degrees = vkd3d_calloc(cfg->block_count, sizeof(*in_degrees))))
++        return VKD3D_ERROR_OUT_OF_MEMORY;
++
++    for (i = 0; i < cfg->block_count; ++i)
++    {
++        struct vsir_block *block = &cfg->blocks[i];
++
++        if (block->label == 0)
++        {
++            in_degrees[i] = UINT_MAX;
++            continue;
++        }
++
++        in_degrees[i] = block->predecessors.count;
++
++        /* Do not count back edges. */
++        if (cfg->loops_by_header[i] != SIZE_MAX)
++        {
++            assert(in_degrees[i] > 0);
++            in_degrees[i] -= 1;
++        }
++
++        if (in_degrees[i] == 0 && block != cfg->entry)
++        {
++            WARN("Unexpected entry point %u.\n", block->label);
++            vkd3d_shader_error(cfg->message_context, &block->begin->location, VKD3D_SHADER_ERROR_VSIR_INVALID_CONTROL_FLOW,
++                    "Block %u is unreachable from the entry point.", block->label);
++            ret = VKD3D_ERROR_INVALID_SHADER;
++            goto fail;
++        }
++    }
++
++    if (in_degrees[cfg->entry->label - 1] != 0)
++    {
++        WARN("Entry point has %u incoming forward edges.\n", in_degrees[cfg->entry->label - 1]);
++        vkd3d_shader_error(cfg->message_context, &cfg->entry->begin->location, VKD3D_SHADER_ERROR_VSIR_INVALID_CONTROL_FLOW,
++                "The entry point block has %u incoming forward edges.", in_degrees[cfg->entry->label - 1]);
++        ret = VKD3D_ERROR_INVALID_SHADER;
++        goto fail;
++    }
++
++    vsir_block_list_init(&sorter.available_blocks);
++
++    if ((ret = vsir_cfg_node_sorter_make_node_available(&sorter, cfg->entry)) < 0)
++        goto fail;
++
++    while (sorter.available_blocks.count != 0)
++    {
++        struct vsir_cfg_node_sorter_stack_item *inner_stack_item = NULL;
++        struct vsir_block *block;
++        size_t new_seen_count;
++
++        if (sorter.stack_count != 0)
++            inner_stack_item = &sorter.stack[sorter.stack_count - 1];
++
++        for (i = sorter.available_blocks.count - 1; ; --i)
++        {
++            if (i == SIZE_MAX)
++            {
++                ERR("Couldn't find any viable next block, is the input CFG reducible?\n");
++                ret = VKD3D_ERROR_INVALID_SHADER;
++                goto fail;
++            }
++
++            block = sorter.available_blocks.blocks[i];
++
++            if (!inner_stack_item || vsir_block_list_search(inner_stack_item->loop, block))
++                break;
++        }
++
++        vsir_block_list_remove_index(&sorter.available_blocks, i);
++        if ((ret = vsir_block_list_add_checked(&cfg->order, block)) < 0)
++            goto fail;
++
++        /* Close loops: since each loop is a strict subset of any
++         * outer loop, we just need to track how many blocks we've
++         * seen; when I close a loop I mark the same number of seen
++         * blocks for the next outer loop. */
++        new_seen_count = 1;
++        while (sorter.stack_count != 0)
++        {
++            inner_stack_item = &sorter.stack[sorter.stack_count - 1];
++
++            inner_stack_item->seen_count += new_seen_count;
++
++            assert(inner_stack_item->seen_count <= inner_stack_item->loop->count);
++            if (inner_stack_item->seen_count != inner_stack_item->loop->count)
++                break;
++
++            new_seen_count = inner_stack_item->loop->count;
++            --sorter.stack_count;
++        }
++
++        /* Remove (forward) edges and make new nodes available. */
++        for (i = 0; i < block->successors.count; ++i)
++        {
++            struct vsir_block *successor = block->successors.blocks[i];
++
++            if (vsir_block_dominates(successor, block))
++                continue;
++
++            assert(in_degrees[successor->label - 1] > 0);
++            --in_degrees[successor->label - 1];
++
++            if (in_degrees[successor->label - 1] == 0)
++            {
++                if ((ret = vsir_cfg_node_sorter_make_node_available(&sorter, successor)) < 0)
++                    goto fail;
+             }
+-            TRACE("%s\n", buf.buffer);
+-            vkd3d_string_buffer_clear(&buf);
+         }
+     }
+ 
++    if (cfg->order.count != cfg->block_count)
++    {
++        /* There is a cycle of forward edges. */
++        WARN("The control flow graph is not reducible.\n");
++        vkd3d_shader_error(cfg->message_context, &cfg->entry->begin->location, VKD3D_SHADER_ERROR_VSIR_INVALID_CONTROL_FLOW,
++                "The control flow graph is not reducible.");
++        ret = VKD3D_ERROR_INVALID_SHADER;
++        goto fail;
++    }
++
++    assert(sorter.stack_count == 0);
++
++    vkd3d_free(in_degrees);
++    vkd3d_free(sorter.stack);
++    vsir_block_list_cleanup(&sorter.available_blocks);
++
+     if (TRACE_ON())
+-        vkd3d_string_buffer_cleanup(&buf);
++    {
++        vkd3d_string_buffer_printf(&cfg->debug_buffer, "Block order:");
++
++        for (i = 0; i < cfg->order.count; ++i)
++            vkd3d_string_buffer_printf(&cfg->debug_buffer, " %u", cfg->order.blocks[i]->label);
++
++        TRACE("%s\n", cfg->debug_buffer.buffer);
++        vkd3d_string_buffer_clear(&cfg->debug_buffer);
++    }
++
++    return VKD3D_OK;
++
++fail:
++    vkd3d_free(in_degrees);
++    vkd3d_free(sorter.stack);
++    vsir_block_list_cleanup(&sorter.available_blocks);
++
++    return ret;
+ }
+ 
+ enum vkd3d_result vkd3d_shader_normalise(struct vkd3d_shader_parser *parser,
+@@ -3343,11 +3727,23 @@ enum vkd3d_result vkd3d_shader_normalise(struct vkd3d_shader_parser *parser,
+         if ((result = materialize_ssas_to_temps(parser)) < 0)
+             return result;
+ 
+-        if ((result = vsir_cfg_init(&cfg, &parser->program)) < 0)
++        if ((result = vsir_cfg_init(&cfg, &parser->program, parser->message_context)) < 0)
+             return result;
+ 
+         vsir_cfg_compute_dominators(&cfg);
+ 
++        if ((result = vsir_cfg_compute_loops(&cfg)) < 0)
++        {
++            vsir_cfg_cleanup(&cfg);
++            return result;
++        }
++
++        if ((result = vsir_cfg_sort_nodes(&cfg)) < 0)
++        {
++            vsir_cfg_cleanup(&cfg);
++            return result;
++        }
++
+         if ((result = simple_structurizer_run(parser)) < 0)
+         {
+             vsir_cfg_cleanup(&cfg);
+diff --git a/libs/vkd3d/libs/vkd3d-shader/spirv.c b/libs/vkd3d/libs/vkd3d-shader/spirv.c
+index efdb0b74758..5856f2f04ba 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/spirv.c
++++ b/libs/vkd3d/libs/vkd3d-shader/spirv.c
+@@ -1524,6 +1524,19 @@ static uint32_t vkd3d_spirv_build_op_logical_equal(struct vkd3d_spirv_builder *b
+             SpvOpLogicalEqual, result_type, operand0, operand1);
+ }
+ 
++static uint32_t vkd3d_spirv_build_op_logical_or(struct vkd3d_spirv_builder *builder,
++        uint32_t result_type, uint32_t operand0, uint32_t operand1)
++{
++    return vkd3d_spirv_build_op_tr2(builder, &builder->function_stream,
++            SpvOpLogicalOr, result_type, operand0, operand1);
++}
++
++static uint32_t vkd3d_spirv_build_op_logical_not(struct vkd3d_spirv_builder *builder,
++        uint32_t result_type, uint32_t operand)
++{
++    return vkd3d_spirv_build_op_tr1(builder, &builder->function_stream, SpvOpLogicalNot, result_type, operand);
++}
++
+ static uint32_t vkd3d_spirv_build_op_convert_utof(struct vkd3d_spirv_builder *builder,
+         uint32_t result_type, uint32_t unsigned_value)
+ {
+@@ -1940,6 +1953,9 @@ static bool vkd3d_spirv_compile_module(struct vkd3d_spirv_builder *builder,
+             || vkd3d_spirv_capability_is_enabled(builder, SpvCapabilityStorageImageArrayDynamicIndexing)
+             || vkd3d_spirv_capability_is_enabled(builder, SpvCapabilityShaderNonUniformEXT))
+         vkd3d_spirv_build_op_extension(&stream, "SPV_EXT_descriptor_indexing");
++    if (vkd3d_spirv_capability_is_enabled(builder, SpvCapabilityFragmentShaderPixelInterlockEXT)
++            || vkd3d_spirv_capability_is_enabled(builder, SpvCapabilityFragmentShaderSampleInterlockEXT))
++        vkd3d_spirv_build_op_extension(&stream, "SPV_EXT_fragment_shader_interlock");
+     if (vkd3d_spirv_capability_is_enabled(builder, SpvCapabilityStencilExportEXT))
+         vkd3d_spirv_build_op_extension(&stream, "SPV_EXT_shader_stencil_export");
+     if (vkd3d_spirv_capability_is_enabled(builder, SpvCapabilityShaderViewportIndexLayerEXT))
+@@ -2346,6 +2362,7 @@ struct spirv_compiler
+     unsigned int output_control_point_count;
+ 
+     bool use_vocp;
++    bool use_invocation_interlock;
+     bool emit_point_size;
+ 
+     enum vkd3d_shader_opcode phase;
+@@ -6272,9 +6289,24 @@ static void spirv_compiler_emit_resource_declaration(struct spirv_compiler *comp
+         if (!(d->flags & VKD3D_SHADER_DESCRIPTOR_INFO_FLAG_UAV_READ))
+             vkd3d_spirv_build_op_decorate(builder, var_id, SpvDecorationNonReadable, NULL, 0);
+ 
+-        if (d->uav_flags & VKD3DSUF_GLOBALLY_COHERENT)
++        /* ROVs are implicitly globally coherent. */
++        if (d->uav_flags & (VKD3DSUF_GLOBALLY_COHERENT | VKD3DSUF_RASTERISER_ORDERED_VIEW))
+             vkd3d_spirv_build_op_decorate(builder, var_id, SpvDecorationCoherent, NULL, 0);
+ 
++        if (d->uav_flags & VKD3DSUF_RASTERISER_ORDERED_VIEW)
++        {
++            if (compiler->shader_type != VKD3D_SHADER_TYPE_PIXEL)
++                spirv_compiler_error(compiler, VKD3D_SHADER_ERROR_SPV_UNSUPPORTED_FEATURE,
++                        "Rasteriser-ordered views are only supported in fragment shaders.");
++            else if (!spirv_compiler_is_target_extension_supported(compiler,
++                    VKD3D_SHADER_SPIRV_EXTENSION_EXT_FRAGMENT_SHADER_INTERLOCK))
++                spirv_compiler_error(compiler, VKD3D_SHADER_ERROR_SPV_UNSUPPORTED_FEATURE,
++                        "Cannot enable fragment shader interlock. "
++                        "The target environment does not support fragment shader interlock.");
++            else
++                compiler->use_invocation_interlock = true;
++        }
++
+         if (d->flags & VKD3D_SHADER_DESCRIPTOR_INFO_FLAG_UAV_COUNTER)
+         {
+             assert(structure_stride); /* counters are valid only for structured buffers */
+@@ -7686,6 +7718,26 @@ static void spirv_compiler_emit_comparison_instruction(struct spirv_compiler *co
+     spirv_compiler_emit_store_reg(compiler, &dst->reg, dst->write_mask, result_id);
+ }
+ 
++static void spirv_compiler_emit_orderedness_instruction(struct spirv_compiler *compiler,
++        const struct vkd3d_shader_instruction *instruction)
++{
++    struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
++    const struct vkd3d_shader_dst_param *dst = instruction->dst;
++    const struct vkd3d_shader_src_param *src = instruction->src;
++    uint32_t type_id, src0_id, src1_id, val_id;
++
++    type_id = spirv_compiler_get_type_id_for_dst(compiler, dst);
++    src0_id = spirv_compiler_emit_load_src(compiler, &src[0], dst->write_mask);
++    src1_id = spirv_compiler_emit_load_src(compiler, &src[1], dst->write_mask);
++    /* OpOrdered and OpUnordered are only available in Kernel mode. */
++    src0_id = vkd3d_spirv_build_op_is_nan(builder, type_id, src0_id);
++    src1_id = vkd3d_spirv_build_op_is_nan(builder, type_id, src1_id);
++    val_id = vkd3d_spirv_build_op_logical_or(builder, type_id, src0_id, src1_id);
++    if (instruction->handler_idx == VKD3DSIH_ORD)
++        val_id = vkd3d_spirv_build_op_logical_not(builder, type_id, val_id);
++    spirv_compiler_emit_store_dst(compiler, dst, val_id);
++}
++
+ static uint32_t spirv_compiler_emit_conditional_branch(struct spirv_compiler *compiler,
+         const struct vkd3d_shader_instruction *instruction, uint32_t target_block_id)
+ {
+@@ -7704,11 +7756,31 @@ static uint32_t spirv_compiler_emit_conditional_branch(struct spirv_compiler *co
+     return merge_block_id;
+ }
+ 
++static void spirv_compiler_end_invocation_interlock(struct spirv_compiler *compiler)
++{
++    struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
++
++    if (vkd3d_spirv_capability_is_enabled(builder, SpvCapabilitySampleRateShading))
++    {
++        spirv_compiler_emit_execution_mode(compiler, SpvExecutionModeSampleInterlockOrderedEXT, NULL, 0);
++        vkd3d_spirv_enable_capability(builder, SpvCapabilityFragmentShaderSampleInterlockEXT);
++    }
++    else
++    {
++        spirv_compiler_emit_execution_mode(compiler, SpvExecutionModePixelInterlockOrderedEXT, NULL, 0);
++        vkd3d_spirv_enable_capability(builder, SpvCapabilityFragmentShaderPixelInterlockEXT);
++    }
++    vkd3d_spirv_build_op(&builder->function_stream, SpvOpEndInvocationInterlockEXT);
++}
++
+ static void spirv_compiler_emit_return(struct spirv_compiler *compiler,
+         const struct vkd3d_shader_instruction *instruction)
+ {
+     struct vkd3d_spirv_builder *builder = &compiler->spirv_builder;
+ 
++    if (compiler->use_invocation_interlock)
++        spirv_compiler_end_invocation_interlock(compiler);
++
+     if (compiler->shader_type != VKD3D_SHADER_TYPE_GEOMETRY && (is_in_default_phase(compiler)
+             || is_in_control_point_phase(compiler)))
+         spirv_compiler_emit_shader_epilogue_invocation(compiler);
+@@ -9477,6 +9549,11 @@ static void spirv_compiler_emit_main_prolog(struct spirv_compiler *compiler)
+ 
+     if (compiler->emit_point_size)
+         spirv_compiler_emit_point_size(compiler);
++
++    /* Maybe in the future we can try to shrink the size of the interlocked
++     * section. */
++    if (compiler->use_invocation_interlock)
++        vkd3d_spirv_build_op(&compiler->spirv_builder.function_stream, SpvOpBeginInvocationInterlockEXT);
+ }
+ 
+ static int spirv_compiler_handle_instruction(struct spirv_compiler *compiler,
+@@ -9671,6 +9748,10 @@ static int spirv_compiler_handle_instruction(struct spirv_compiler *compiler,
+         case VKD3DSIH_ULT:
+             spirv_compiler_emit_comparison_instruction(compiler, instruction);
+             break;
++        case VKD3DSIH_ORD:
++        case VKD3DSIH_UNO:
++            spirv_compiler_emit_orderedness_instruction(compiler, instruction);
++            break;
+         case VKD3DSIH_BFI:
+         case VKD3DSIH_IBFE:
+         case VKD3DSIH_UBFE:
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
+index 385c4368e31..d128d84d6ea 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
+@@ -226,6 +226,16 @@ void vkd3d_string_buffer_release(struct vkd3d_string_buffer_cache *cache, struct
+     cache->buffers[cache->count++] = buffer;
+ }
+ 
++void vkd3d_shader_code_from_string_buffer(struct vkd3d_shader_code *code, struct vkd3d_string_buffer *buffer)
++{
++    code->code = buffer->buffer;
++    code->size = buffer->content_size;
++
++    buffer->buffer = NULL;
++    buffer->buffer_size = 0;
++    buffer->content_size = 0;
++}
++
+ void vkd3d_shader_message_context_init(struct vkd3d_shader_message_context *context,
+         enum vkd3d_shader_log_level log_level)
+ {
+@@ -1472,60 +1482,6 @@ static int scan_with_parser(const struct vkd3d_shader_compile_info *compile_info
+     return ret;
+ }
+ 
+-static int scan_dxbc(const struct vkd3d_shader_compile_info *compile_info,
+-        struct vkd3d_shader_message_context *message_context)
+-{
+-    struct vkd3d_shader_parser *parser;
+-    int ret;
+-
+-    if ((ret = vkd3d_shader_sm4_parser_create(compile_info, message_context, &parser)) < 0)
+-    {
+-        WARN("Failed to initialise shader parser.\n");
+-        return ret;
+-    }
+-
+-    ret = scan_with_parser(compile_info, message_context, NULL, parser);
+-    vkd3d_shader_parser_destroy(parser);
+-
+-    return ret;
+-}
+-
+-static int scan_d3dbc(const struct vkd3d_shader_compile_info *compile_info,
+-        struct vkd3d_shader_message_context *message_context)
+-{
+-    struct vkd3d_shader_parser *parser;
+-    int ret;
+-
+-    if ((ret = vkd3d_shader_sm1_parser_create(compile_info, message_context, &parser)) < 0)
+-    {
+-        WARN("Failed to initialise shader parser.\n");
+-        return ret;
+-    }
+-
+-    ret = scan_with_parser(compile_info, message_context, NULL, parser);
+-    vkd3d_shader_parser_destroy(parser);
+-
+-    return ret;
+-}
+-
+-static int scan_dxil(const struct vkd3d_shader_compile_info *compile_info,
+-        struct vkd3d_shader_message_context *message_context)
+-{
+-    struct vkd3d_shader_parser *parser;
+-    int ret;
+-
+-    if ((ret = vkd3d_shader_sm6_parser_create(compile_info, message_context, &parser)) < 0)
+-    {
+-        WARN("Failed to initialise shader parser.\n");
+-        return ret;
+-    }
+-
+-    ret = scan_with_parser(compile_info, message_context, NULL, parser);
+-    vkd3d_shader_parser_destroy(parser);
+-
+-    return ret;
+-}
+-
+ int vkd3d_shader_scan(const struct vkd3d_shader_compile_info *compile_info, char **messages)
+ {
+     struct vkd3d_shader_message_context message_context;
+@@ -1545,29 +1501,44 @@ int vkd3d_shader_scan(const struct vkd3d_shader_compile_info *compile_info, char
+ 
+     vkd3d_shader_dump_shader(compile_info);
+ 
+-    switch (compile_info->source_type)
++    if (compile_info->source_type == VKD3D_SHADER_SOURCE_HLSL)
+     {
+-        case VKD3D_SHADER_SOURCE_DXBC_TPF:
+-            ret = scan_dxbc(compile_info, &message_context);
+-            break;
++        FIXME("HLSL support not implemented.\n");
++        ret = VKD3D_ERROR_NOT_IMPLEMENTED;
++    }
++    else
++    {
++        struct vkd3d_shader_parser *parser;
+ 
+-        case VKD3D_SHADER_SOURCE_HLSL:
+-            FIXME("HLSL support not implemented.\n");
+-            ret = VKD3D_ERROR_NOT_IMPLEMENTED;
+-            break;
++        switch (compile_info->source_type)
++        {
++            case VKD3D_SHADER_SOURCE_D3D_BYTECODE:
++                ret = vkd3d_shader_sm1_parser_create(compile_info, &message_context, &parser);
++                break;
+ 
+-        case VKD3D_SHADER_SOURCE_D3D_BYTECODE:
+-            ret = scan_d3dbc(compile_info, &message_context);
+-            break;
++            case VKD3D_SHADER_SOURCE_DXBC_TPF:
++                ret = vkd3d_shader_sm4_parser_create(compile_info, &message_context, &parser);
++                break;
+ 
+-        case VKD3D_SHADER_SOURCE_DXBC_DXIL:
+-            ret = scan_dxil(compile_info, &message_context);
+-            break;
++            case VKD3D_SHADER_SOURCE_DXBC_DXIL:
++                ret = vkd3d_shader_sm6_parser_create(compile_info, &message_context, &parser);
++                break;
+ 
+-        default:
+-            ERR("Unsupported source type %#x.\n", compile_info->source_type);
+-            ret = VKD3D_ERROR_INVALID_ARGUMENT;
+-            break;
++            default:
++                ERR("Unsupported source type %#x.\n", compile_info->source_type);
++                ret = VKD3D_ERROR_INVALID_ARGUMENT;
++                break;
++        }
++
++        if (ret < 0)
++        {
++            WARN("Failed to create shader parser.\n");
++        }
++        else
++        {
++            ret = scan_with_parser(compile_info, &message_context, NULL, parser);
++            vkd3d_shader_parser_destroy(parser);
++        }
+     }
+ 
+     vkd3d_shader_message_context_trace_messages(&message_context);
+@@ -1591,7 +1562,8 @@ static int vkd3d_shader_parser_compile(struct vkd3d_shader_parser *parser,
+     switch (compile_info->target_type)
+     {
+         case VKD3D_SHADER_TARGET_D3D_ASM:
+-            ret = vkd3d_dxbc_binary_to_text(&parser->program, compile_info, out, VSIR_ASM_D3D);
++            ret = vkd3d_dxbc_binary_to_text(&parser->program, &parser->shader_desc,
++                    compile_info, out, VSIR_ASM_FLAG_NONE);
+             break;
+ 
+         case VKD3D_SHADER_TARGET_GLSL:
+@@ -1626,24 +1598,6 @@ static int vkd3d_shader_parser_compile(struct vkd3d_shader_parser *parser,
+     return ret;
+ }
+ 
+-static int compile_dxbc_tpf(const struct vkd3d_shader_compile_info *compile_info,
+-        struct vkd3d_shader_code *out, struct vkd3d_shader_message_context *message_context)
+-{
+-    struct vkd3d_shader_parser *parser;
+-    int ret;
+-
+-    if ((ret = vkd3d_shader_sm4_parser_create(compile_info, message_context, &parser)) < 0)
+-    {
+-        WARN("Failed to initialise shader parser.\n");
+-        return ret;
+-    }
+-
+-    ret = vkd3d_shader_parser_compile(parser, compile_info, out, message_context);
+-
+-    vkd3d_shader_parser_destroy(parser);
+-    return ret;
+-}
+-
+ static int compile_hlsl(const struct vkd3d_shader_compile_info *compile_info,
+         struct vkd3d_shader_code *out, struct vkd3d_shader_message_context *message_context)
+ {
+@@ -1659,42 +1613,6 @@ static int compile_hlsl(const struct vkd3d_shader_compile_info *compile_info,
+     return ret;
+ }
+ 
+-static int compile_d3d_bytecode(const struct vkd3d_shader_compile_info *compile_info,
+-        struct vkd3d_shader_code *out, struct vkd3d_shader_message_context *message_context)
+-{
+-    struct vkd3d_shader_parser *parser;
+-    int ret;
+-
+-    if ((ret = vkd3d_shader_sm1_parser_create(compile_info, message_context, &parser)) < 0)
+-    {
+-        WARN("Failed to initialise shader parser.\n");
+-        return ret;
+-    }
+-
+-    ret = vkd3d_shader_parser_compile(parser, compile_info, out, message_context);
+-
+-    vkd3d_shader_parser_destroy(parser);
+-    return ret;
+-}
+-
+-static int compile_dxbc_dxil(const struct vkd3d_shader_compile_info *compile_info,
+-        struct vkd3d_shader_code *out, struct vkd3d_shader_message_context *message_context)
+-{
+-    struct vkd3d_shader_parser *parser;
+-    int ret;
+-
+-    if ((ret = vkd3d_shader_sm6_parser_create(compile_info, message_context, &parser)) < 0)
+-    {
+-        WARN("Failed to initialise shader parser.\n");
+-        return ret;
+-    }
+-
+-    ret = vkd3d_shader_parser_compile(parser, compile_info, out, message_context);
+-
+-    vkd3d_shader_parser_destroy(parser);
+-    return ret;
+-}
+-
+ int vkd3d_shader_compile(const struct vkd3d_shader_compile_info *compile_info,
+         struct vkd3d_shader_code *out, char **messages)
+ {
+@@ -1715,26 +1633,43 @@ int vkd3d_shader_compile(const struct vkd3d_shader_compile_info *compile_info,
+ 
+     vkd3d_shader_dump_shader(compile_info);
+ 
+-    switch (compile_info->source_type)
++    if (compile_info->source_type == VKD3D_SHADER_SOURCE_HLSL)
+     {
+-        case VKD3D_SHADER_SOURCE_DXBC_TPF:
+-            ret = compile_dxbc_tpf(compile_info, out, &message_context);
+-            break;
++        ret = compile_hlsl(compile_info, out, &message_context);
++    }
++    else
++    {
++        struct vkd3d_shader_parser *parser;
+ 
+-        case VKD3D_SHADER_SOURCE_HLSL:
+-            ret = compile_hlsl(compile_info, out, &message_context);
+-            break;
++        switch (compile_info->source_type)
++        {
++            case VKD3D_SHADER_SOURCE_D3D_BYTECODE:
++                ret = vkd3d_shader_sm1_parser_create(compile_info, &message_context, &parser);
++                break;
+ 
+-        case VKD3D_SHADER_SOURCE_D3D_BYTECODE:
+-            ret = compile_d3d_bytecode(compile_info, out, &message_context);
+-            break;
++            case VKD3D_SHADER_SOURCE_DXBC_TPF:
++                ret = vkd3d_shader_sm4_parser_create(compile_info, &message_context, &parser);
++                break;
+ 
+-        case VKD3D_SHADER_SOURCE_DXBC_DXIL:
+-            ret = compile_dxbc_dxil(compile_info, out, &message_context);
+-            break;
++            case VKD3D_SHADER_SOURCE_DXBC_DXIL:
++                ret = vkd3d_shader_sm6_parser_create(compile_info, &message_context, &parser);
++                break;
+ 
+-        default:
+-            vkd3d_unreachable();
++            default:
++                ERR("Unsupported source type %#x.\n", compile_info->source_type);
++                ret = VKD3D_ERROR_INVALID_ARGUMENT;
++                break;
++        }
++
++        if (ret < 0)
++        {
++            WARN("Failed to create shader parser.\n");
++        }
++        else
++        {
++            ret = vkd3d_shader_parser_compile(parser, compile_info, out, &message_context);
++            vkd3d_shader_parser_destroy(parser);
++        }
+     }
+ 
+     vkd3d_shader_message_context_trace_messages(&message_context);
+@@ -1939,7 +1874,7 @@ const enum vkd3d_shader_target_type *vkd3d_shader_get_supported_target_types(
+         VKD3D_SHADER_TARGET_SPIRV_TEXT,
+ #endif
+         VKD3D_SHADER_TARGET_D3D_ASM,
+-#if 0
++#ifdef VKD3D_SHADER_UNSUPPORTED_GLSL
+         VKD3D_SHADER_TARGET_GLSL,
+ #endif
+     };
+@@ -1960,13 +1895,21 @@ const enum vkd3d_shader_target_type *vkd3d_shader_get_supported_target_types(
+         VKD3D_SHADER_TARGET_D3D_ASM,
+     };
+ 
++#ifdef VKD3D_SHADER_UNSUPPORTED_DXIL
++    static const enum vkd3d_shader_target_type dxbc_dxil_types[] =
++    {
++        VKD3D_SHADER_TARGET_SPIRV_BINARY,
++# ifdef HAVE_SPIRV_TOOLS
++        VKD3D_SHADER_TARGET_SPIRV_TEXT,
++# endif
++        VKD3D_SHADER_TARGET_D3D_ASM,
++    };
++#endif
++
+     TRACE("source_type %#x, count %p.\n", source_type, count);
+ 
+     switch (source_type)
+     {
+-#ifdef VKD3D_SHADER_UNSUPPORTED_DXIL
+-        case VKD3D_SHADER_SOURCE_DXBC_DXIL:
+-#endif
+         case VKD3D_SHADER_SOURCE_DXBC_TPF:
+             *count = ARRAY_SIZE(dxbc_tpf_types);
+             return dxbc_tpf_types;
+@@ -1979,6 +1922,12 @@ const enum vkd3d_shader_target_type *vkd3d_shader_get_supported_target_types(
+             *count = ARRAY_SIZE(d3dbc_types);
+             return d3dbc_types;
+ 
++#ifdef VKD3D_SHADER_UNSUPPORTED_DXIL
++        case VKD3D_SHADER_SOURCE_DXBC_DXIL:
++            *count = ARRAY_SIZE(dxbc_dxil_types);
++            return dxbc_dxil_types;
++#endif
++
+         default:
+             *count = 0;
+             return NULL;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+index 990a7713308..d257d953dd5 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+@@ -446,6 +446,7 @@ enum vkd3d_shader_opcode
+     VKD3DSIH_NOT,
+     VKD3DSIH_NRM,
+     VKD3DSIH_OR,
++    VKD3DSIH_ORD,
+     VKD3DSIH_PHASE,
+     VKD3DSIH_PHI,
+     VKD3DSIH_POW,
+@@ -517,6 +518,7 @@ enum vkd3d_shader_opcode
+     VKD3DSIH_UMAX,
+     VKD3DSIH_UMIN,
+     VKD3DSIH_UMUL,
++    VKD3DSIH_UNO,
+     VKD3DSIH_USHR,
+     VKD3DSIH_UTOD,
+     VKD3DSIH_UTOF,
+@@ -1386,15 +1388,15 @@ struct vkd3d_string_buffer_cache
+     size_t count, max_count, capacity;
+ };
+ 
+-enum vsir_asm_dialect
++enum vsir_asm_flags
+ {
+-    VSIR_ASM_VSIR,
+-    VSIR_ASM_D3D,
++    VSIR_ASM_FLAG_NONE = 0,
++    VSIR_ASM_FLAG_DUMP_TYPES = 0x1,
+ };
+ 
+ enum vkd3d_result vkd3d_dxbc_binary_to_text(const struct vsir_program *program,
+-        const struct vkd3d_shader_compile_info *compile_info,
+-        struct vkd3d_shader_code *out, enum vsir_asm_dialect dialect);
++        const struct vkd3d_shader_desc *shader_desc, const struct vkd3d_shader_compile_info *compile_info,
++        struct vkd3d_shader_code *out, enum vsir_asm_flags flags);
+ void vkd3d_string_buffer_cleanup(struct vkd3d_string_buffer *buffer);
+ struct vkd3d_string_buffer *vkd3d_string_buffer_get(struct vkd3d_string_buffer_cache *list);
+ void vkd3d_string_buffer_init(struct vkd3d_string_buffer *buffer);
+@@ -1409,6 +1411,7 @@ void vkd3d_string_buffer_release(struct vkd3d_string_buffer_cache *list, struct
+         vkd3d_string_buffer_trace_(buffer, __FUNCTION__)
+ void vkd3d_string_buffer_trace_(const struct vkd3d_string_buffer *buffer, const char *function);
+ int vkd3d_string_buffer_vprintf(struct vkd3d_string_buffer *buffer, const char *format, va_list args);
++void vkd3d_shader_code_from_string_buffer(struct vkd3d_shader_code *code, struct vkd3d_string_buffer *buffer);
+ 
+ struct vkd3d_bytecode_buffer
+ {
+diff --git a/libs/vkd3d/libs/vkd3d/device.c b/libs/vkd3d/libs/vkd3d/device.c
+index 17c7ccb3e31..da9c1d964d4 100644
+--- a/libs/vkd3d/libs/vkd3d/device.c
++++ b/libs/vkd3d/libs/vkd3d/device.c
+@@ -2499,17 +2499,18 @@ static void vkd3d_desc_object_cache_cleanup(struct vkd3d_desc_object_cache *cach
+ }
+ 
+ /* ID3D12Device */
+-static inline struct d3d12_device *impl_from_ID3D12Device7(ID3D12Device7 *iface)
++static inline struct d3d12_device *impl_from_ID3D12Device8(ID3D12Device8 *iface)
+ {
+-    return CONTAINING_RECORD(iface, struct d3d12_device, ID3D12Device7_iface);
++    return CONTAINING_RECORD(iface, struct d3d12_device, ID3D12Device8_iface);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_QueryInterface(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_QueryInterface(ID3D12Device8 *iface,
+         REFIID riid, void **object)
+ {
+     TRACE("iface %p, riid %s, object %p.\n", iface, debugstr_guid(riid), object);
+ 
+-    if (IsEqualGUID(riid, &IID_ID3D12Device7)
++    if (IsEqualGUID(riid, &IID_ID3D12Device8)
++            || IsEqualGUID(riid, &IID_ID3D12Device7)
+             || IsEqualGUID(riid, &IID_ID3D12Device6)
+             || IsEqualGUID(riid, &IID_ID3D12Device5)
+             || IsEqualGUID(riid, &IID_ID3D12Device4)
+@@ -2531,9 +2532,9 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_QueryInterface(ID3D12Device7 *ifac
+     return E_NOINTERFACE;
+ }
+ 
+-static ULONG STDMETHODCALLTYPE d3d12_device_AddRef(ID3D12Device7 *iface)
++static ULONG STDMETHODCALLTYPE d3d12_device_AddRef(ID3D12Device8 *iface)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     unsigned int refcount = vkd3d_atomic_increment_u32(&device->refcount);
+ 
+     TRACE("%p increasing refcount to %u.\n", device, refcount);
+@@ -2563,9 +2564,9 @@ static HRESULT device_worker_stop(struct d3d12_device *device)
+     return S_OK;
+ }
+ 
+-static ULONG STDMETHODCALLTYPE d3d12_device_Release(ID3D12Device7 *iface)
++static ULONG STDMETHODCALLTYPE d3d12_device_Release(ID3D12Device8 *iface)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     unsigned int refcount = vkd3d_atomic_decrement_u32(&device->refcount);
+ 
+     TRACE("%p decreasing refcount to %u.\n", device, refcount);
+@@ -2602,10 +2603,10 @@ static ULONG STDMETHODCALLTYPE d3d12_device_Release(ID3D12Device7 *iface)
+     return refcount;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_GetPrivateData(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_GetPrivateData(ID3D12Device8 *iface,
+         REFGUID guid, UINT *data_size, void *data)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+ 
+     TRACE("iface %p, guid %s, data_size %p, data %p.\n",
+             iface, debugstr_guid(guid), data_size, data);
+@@ -2613,10 +2614,10 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_GetPrivateData(ID3D12Device7 *ifac
+     return vkd3d_get_private_data(&device->private_store, guid, data_size, data);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_SetPrivateData(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_SetPrivateData(ID3D12Device8 *iface,
+         REFGUID guid, UINT data_size, const void *data)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+ 
+     TRACE("iface %p, guid %s, data_size %u, data %p.\n",
+             iface, debugstr_guid(guid), data_size, data);
+@@ -2624,19 +2625,19 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_SetPrivateData(ID3D12Device7 *ifac
+     return vkd3d_set_private_data(&device->private_store, guid, data_size, data);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_SetPrivateDataInterface(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_SetPrivateDataInterface(ID3D12Device8 *iface,
+         REFGUID guid, const IUnknown *data)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+ 
+     TRACE("iface %p, guid %s, data %p.\n", iface, debugstr_guid(guid), data);
+ 
+     return vkd3d_set_private_data_interface(&device->private_store, guid, data);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_SetName(ID3D12Device7 *iface, const WCHAR *name)
++static HRESULT STDMETHODCALLTYPE d3d12_device_SetName(ID3D12Device8 *iface, const WCHAR *name)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+ 
+     TRACE("iface %p, name %s.\n", iface, debugstr_w(name, device->wchar_size));
+ 
+@@ -2644,17 +2645,17 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_SetName(ID3D12Device7 *iface, cons
+             VK_DEBUG_REPORT_OBJECT_TYPE_DEVICE_EXT, name);
+ }
+ 
+-static UINT STDMETHODCALLTYPE d3d12_device_GetNodeCount(ID3D12Device7 *iface)
++static UINT STDMETHODCALLTYPE d3d12_device_GetNodeCount(ID3D12Device8 *iface)
+ {
+     TRACE("iface %p.\n", iface);
+ 
+     return 1;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommandQueue(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommandQueue(ID3D12Device8 *iface,
+         const D3D12_COMMAND_QUEUE_DESC *desc, REFIID riid, void **command_queue)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     struct d3d12_command_queue *object;
+     HRESULT hr;
+ 
+@@ -2668,10 +2669,10 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommandQueue(ID3D12Device7 *
+             riid, command_queue);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommandAllocator(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommandAllocator(ID3D12Device8 *iface,
+         D3D12_COMMAND_LIST_TYPE type, REFIID riid, void **command_allocator)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     struct d3d12_command_allocator *object;
+     HRESULT hr;
+ 
+@@ -2685,10 +2686,10 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommandAllocator(ID3D12Devic
+             riid, command_allocator);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateGraphicsPipelineState(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateGraphicsPipelineState(ID3D12Device8 *iface,
+         const D3D12_GRAPHICS_PIPELINE_STATE_DESC *desc, REFIID riid, void **pipeline_state)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     struct d3d12_pipeline_state *object;
+     HRESULT hr;
+ 
+@@ -2702,10 +2703,10 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateGraphicsPipelineState(ID3D12
+             &IID_ID3D12PipelineState, riid, pipeline_state);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateComputePipelineState(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateComputePipelineState(ID3D12Device8 *iface,
+         const D3D12_COMPUTE_PIPELINE_STATE_DESC *desc, REFIID riid, void **pipeline_state)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     struct d3d12_pipeline_state *object;
+     HRESULT hr;
+ 
+@@ -2719,11 +2720,11 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateComputePipelineState(ID3D12D
+             &IID_ID3D12PipelineState, riid, pipeline_state);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommandList(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommandList(ID3D12Device8 *iface,
+         UINT node_mask, D3D12_COMMAND_LIST_TYPE type, ID3D12CommandAllocator *command_allocator,
+         ID3D12PipelineState *initial_pipeline_state, REFIID riid, void **command_list)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     struct d3d12_command_list *object;
+     HRESULT hr;
+ 
+@@ -2846,10 +2847,10 @@ bool d3d12_device_is_uma(struct d3d12_device *device, bool *coherent)
+     return true;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CheckFeatureSupport(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CheckFeatureSupport(ID3D12Device8 *iface,
+         D3D12_FEATURE feature, void *feature_data, UINT feature_data_size)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+ 
+     TRACE("iface %p, feature %#x, feature_data %p, feature_data_size %u.\n",
+             iface, feature, feature_data, feature_data_size);
+@@ -3521,10 +3522,10 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CheckFeatureSupport(ID3D12Device7
+     }
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateDescriptorHeap(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateDescriptorHeap(ID3D12Device8 *iface,
+         const D3D12_DESCRIPTOR_HEAP_DESC *desc, REFIID riid, void **descriptor_heap)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     struct d3d12_descriptor_heap *object;
+     HRESULT hr;
+ 
+@@ -3538,7 +3539,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateDescriptorHeap(ID3D12Device7
+             &IID_ID3D12DescriptorHeap, riid, descriptor_heap);
+ }
+ 
+-static UINT STDMETHODCALLTYPE d3d12_device_GetDescriptorHandleIncrementSize(ID3D12Device7 *iface,
++static UINT STDMETHODCALLTYPE d3d12_device_GetDescriptorHandleIncrementSize(ID3D12Device8 *iface,
+         D3D12_DESCRIPTOR_HEAP_TYPE descriptor_heap_type)
+ {
+     TRACE("iface %p, descriptor_heap_type %#x.\n", iface, descriptor_heap_type);
+@@ -3561,11 +3562,11 @@ static UINT STDMETHODCALLTYPE d3d12_device_GetDescriptorHandleIncrementSize(ID3D
+     }
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateRootSignature(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateRootSignature(ID3D12Device8 *iface,
+         UINT node_mask, const void *bytecode, SIZE_T bytecode_length,
+         REFIID riid, void **root_signature)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     struct d3d12_root_signature *object;
+     HRESULT hr;
+ 
+@@ -3581,10 +3582,10 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateRootSignature(ID3D12Device7
+             &IID_ID3D12RootSignature, riid, root_signature);
+ }
+ 
+-static void STDMETHODCALLTYPE d3d12_device_CreateConstantBufferView(ID3D12Device7 *iface,
++static void STDMETHODCALLTYPE d3d12_device_CreateConstantBufferView(ID3D12Device8 *iface,
+         const D3D12_CONSTANT_BUFFER_VIEW_DESC *desc, D3D12_CPU_DESCRIPTOR_HANDLE descriptor)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     struct d3d12_desc tmp = {0};
+ 
+     TRACE("iface %p, desc %p, descriptor %s.\n", iface, desc, debug_cpu_handle(descriptor));
+@@ -3593,11 +3594,11 @@ static void STDMETHODCALLTYPE d3d12_device_CreateConstantBufferView(ID3D12Device
+     d3d12_desc_write_atomic(d3d12_desc_from_cpu_handle(descriptor), &tmp, device);
+ }
+ 
+-static void STDMETHODCALLTYPE d3d12_device_CreateShaderResourceView(ID3D12Device7 *iface,
++static void STDMETHODCALLTYPE d3d12_device_CreateShaderResourceView(ID3D12Device8 *iface,
+         ID3D12Resource *resource, const D3D12_SHADER_RESOURCE_VIEW_DESC *desc,
+         D3D12_CPU_DESCRIPTOR_HANDLE descriptor)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     struct d3d12_desc tmp = {0};
+ 
+     TRACE("iface %p, resource %p, desc %p, descriptor %s.\n",
+@@ -3607,11 +3608,11 @@ static void STDMETHODCALLTYPE d3d12_device_CreateShaderResourceView(ID3D12Device
+     d3d12_desc_write_atomic(d3d12_desc_from_cpu_handle(descriptor), &tmp, device);
+ }
+ 
+-static void STDMETHODCALLTYPE d3d12_device_CreateUnorderedAccessView(ID3D12Device7 *iface,
++static void STDMETHODCALLTYPE d3d12_device_CreateUnorderedAccessView(ID3D12Device8 *iface,
+         ID3D12Resource *resource, ID3D12Resource *counter_resource,
+         const D3D12_UNORDERED_ACCESS_VIEW_DESC *desc, D3D12_CPU_DESCRIPTOR_HANDLE descriptor)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     struct d3d12_desc tmp = {0};
+ 
+     TRACE("iface %p, resource %p, counter_resource %p, desc %p, descriptor %s.\n",
+@@ -3622,7 +3623,7 @@ static void STDMETHODCALLTYPE d3d12_device_CreateUnorderedAccessView(ID3D12Devic
+     d3d12_desc_write_atomic(d3d12_desc_from_cpu_handle(descriptor), &tmp, device);
+ }
+ 
+-static void STDMETHODCALLTYPE d3d12_device_CreateRenderTargetView(ID3D12Device7 *iface,
++static void STDMETHODCALLTYPE d3d12_device_CreateRenderTargetView(ID3D12Device8 *iface,
+         ID3D12Resource *resource, const D3D12_RENDER_TARGET_VIEW_DESC *desc,
+         D3D12_CPU_DESCRIPTOR_HANDLE descriptor)
+ {
+@@ -3630,10 +3631,10 @@ static void STDMETHODCALLTYPE d3d12_device_CreateRenderTargetView(ID3D12Device7
+             iface, resource, desc, debug_cpu_handle(descriptor));
+ 
+     d3d12_rtv_desc_create_rtv(d3d12_rtv_desc_from_cpu_handle(descriptor),
+-            impl_from_ID3D12Device7(iface), unsafe_impl_from_ID3D12Resource(resource), desc);
++            impl_from_ID3D12Device8(iface), unsafe_impl_from_ID3D12Resource(resource), desc);
+ }
+ 
+-static void STDMETHODCALLTYPE d3d12_device_CreateDepthStencilView(ID3D12Device7 *iface,
++static void STDMETHODCALLTYPE d3d12_device_CreateDepthStencilView(ID3D12Device8 *iface,
+         ID3D12Resource *resource, const D3D12_DEPTH_STENCIL_VIEW_DESC *desc,
+         D3D12_CPU_DESCRIPTOR_HANDLE descriptor)
+ {
+@@ -3641,13 +3642,13 @@ static void STDMETHODCALLTYPE d3d12_device_CreateDepthStencilView(ID3D12Device7
+             iface, resource, desc, debug_cpu_handle(descriptor));
+ 
+     d3d12_dsv_desc_create_dsv(d3d12_dsv_desc_from_cpu_handle(descriptor),
+-            impl_from_ID3D12Device7(iface), unsafe_impl_from_ID3D12Resource(resource), desc);
++            impl_from_ID3D12Device8(iface), unsafe_impl_from_ID3D12Resource(resource), desc);
+ }
+ 
+-static void STDMETHODCALLTYPE d3d12_device_CreateSampler(ID3D12Device7 *iface,
++static void STDMETHODCALLTYPE d3d12_device_CreateSampler(ID3D12Device8 *iface,
+         const D3D12_SAMPLER_DESC *desc, D3D12_CPU_DESCRIPTOR_HANDLE descriptor)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     struct d3d12_desc tmp = {0};
+ 
+     TRACE("iface %p, desc %p, descriptor %s.\n", iface, desc, debug_cpu_handle(descriptor));
+@@ -3656,14 +3657,14 @@ static void STDMETHODCALLTYPE d3d12_device_CreateSampler(ID3D12Device7 *iface,
+     d3d12_desc_write_atomic(d3d12_desc_from_cpu_handle(descriptor), &tmp, device);
+ }
+ 
+-static void STDMETHODCALLTYPE d3d12_device_CopyDescriptors(ID3D12Device7 *iface,
++static void STDMETHODCALLTYPE d3d12_device_CopyDescriptors(ID3D12Device8 *iface,
+         UINT dst_descriptor_range_count, const D3D12_CPU_DESCRIPTOR_HANDLE *dst_descriptor_range_offsets,
+         const UINT *dst_descriptor_range_sizes,
+         UINT src_descriptor_range_count, const D3D12_CPU_DESCRIPTOR_HANDLE *src_descriptor_range_offsets,
+         const UINT *src_descriptor_range_sizes,
+         D3D12_DESCRIPTOR_HEAP_TYPE descriptor_heap_type)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     unsigned int dst_range_idx, dst_idx, src_range_idx, src_idx;
+     unsigned int dst_range_size, src_range_size;
+     struct d3d12_descriptor_heap *dst_heap;
+@@ -3719,7 +3720,7 @@ static void STDMETHODCALLTYPE d3d12_device_CopyDescriptors(ID3D12Device7 *iface,
+     }
+ }
+ 
+-static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple(ID3D12Device7 *iface,
++static void STDMETHODCALLTYPE d3d12_device_CopyDescriptorsSimple(ID3D12Device8 *iface,
+         UINT descriptor_count, const D3D12_CPU_DESCRIPTOR_HANDLE dst_descriptor_range_offset,
+         const D3D12_CPU_DESCRIPTOR_HANDLE src_descriptor_range_offset,
+         D3D12_DESCRIPTOR_HEAP_TYPE descriptor_heap_type)
+@@ -3850,10 +3851,10 @@ static void d3d12_device_get_resource_allocation_info(struct d3d12_device *devic
+ }
+ 
+ static D3D12_RESOURCE_ALLOCATION_INFO * STDMETHODCALLTYPE d3d12_device_GetResourceAllocationInfo(
+-        ID3D12Device7 *iface, D3D12_RESOURCE_ALLOCATION_INFO *info, UINT visible_mask,
++        ID3D12Device8 *iface, D3D12_RESOURCE_ALLOCATION_INFO *info, UINT visible_mask,
+         UINT count, const D3D12_RESOURCE_DESC *resource_descs)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+ 
+     TRACE("iface %p, info %p, visible_mask 0x%08x, count %u, resource_descs %p.\n",
+             iface, info, visible_mask, count, resource_descs);
+@@ -3865,10 +3866,10 @@ static D3D12_RESOURCE_ALLOCATION_INFO * STDMETHODCALLTYPE d3d12_device_GetResour
+     return info;
+ }
+ 
+-static D3D12_HEAP_PROPERTIES * STDMETHODCALLTYPE d3d12_device_GetCustomHeapProperties(ID3D12Device7 *iface,
++static D3D12_HEAP_PROPERTIES * STDMETHODCALLTYPE d3d12_device_GetCustomHeapProperties(ID3D12Device8 *iface,
+         D3D12_HEAP_PROPERTIES *heap_properties, UINT node_mask, D3D12_HEAP_TYPE heap_type)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     bool coherent;
+ 
+     TRACE("iface %p, heap_properties %p, node_mask 0x%08x, heap_type %#x.\n",
+@@ -3908,12 +3909,12 @@ static D3D12_HEAP_PROPERTIES * STDMETHODCALLTYPE d3d12_device_GetCustomHeapPrope
+     return heap_properties;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommittedResource(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommittedResource(ID3D12Device8 *iface,
+         const D3D12_HEAP_PROPERTIES *heap_properties, D3D12_HEAP_FLAGS heap_flags,
+         const D3D12_RESOURCE_DESC *desc, D3D12_RESOURCE_STATES initial_state,
+         const D3D12_CLEAR_VALUE *optimized_clear_value, REFIID iid, void **resource)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     D3D12_RESOURCE_DESC1 resource_desc;
+     struct d3d12_resource *object;
+     HRESULT hr;
+@@ -3935,10 +3936,10 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommittedResource(ID3D12Devi
+     return return_interface(&object->ID3D12Resource2_iface, &IID_ID3D12Resource2, iid, resource);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateHeap(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateHeap(ID3D12Device8 *iface,
+         const D3D12_HEAP_DESC *desc, REFIID iid, void **heap)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     struct d3d12_heap *object;
+     HRESULT hr;
+ 
+@@ -3954,12 +3955,12 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateHeap(ID3D12Device7 *iface,
+     return return_interface(&object->ID3D12Heap_iface, &IID_ID3D12Heap, iid, heap);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreatePlacedResource(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreatePlacedResource(ID3D12Device8 *iface,
+         ID3D12Heap *heap, UINT64 heap_offset,
+         const D3D12_RESOURCE_DESC *desc, D3D12_RESOURCE_STATES initial_state,
+         const D3D12_CLEAR_VALUE *optimized_clear_value, REFIID iid, void **resource)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     D3D12_RESOURCE_DESC1 resource_desc;
+     struct d3d12_heap *heap_object;
+     struct d3d12_resource *object;
+@@ -3980,11 +3981,11 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreatePlacedResource(ID3D12Device7
+     return return_interface(&object->ID3D12Resource2_iface, &IID_ID3D12Resource2, iid, resource);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateReservedResource(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateReservedResource(ID3D12Device8 *iface,
+         const D3D12_RESOURCE_DESC *desc, D3D12_RESOURCE_STATES initial_state,
+         const D3D12_CLEAR_VALUE *optimized_clear_value, REFIID iid, void **resource)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     D3D12_RESOURCE_DESC1 resource_desc;
+     struct d3d12_resource *object;
+     HRESULT hr;
+@@ -4001,11 +4002,11 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateReservedResource(ID3D12Devic
+     return return_interface(&object->ID3D12Resource2_iface, &IID_ID3D12Resource2, iid, resource);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateSharedHandle(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateSharedHandle(ID3D12Device8 *iface,
+         ID3D12DeviceChild *object, const SECURITY_ATTRIBUTES *attributes, DWORD access,
+         const WCHAR *name, HANDLE *handle)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+ 
+     FIXME("iface %p, object %p, attributes %p, access %#x, name %s, handle %p stub!\n",
+             iface, object, attributes, (uint32_t)access, debugstr_w(name, device->wchar_size), handle);
+@@ -4013,7 +4014,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateSharedHandle(ID3D12Device7 *
+     return E_NOTIMPL;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_OpenSharedHandle(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_OpenSharedHandle(ID3D12Device8 *iface,
+         HANDLE handle, REFIID riid, void **object)
+ {
+     FIXME("iface %p, handle %p, riid %s, object %p stub!\n",
+@@ -4022,10 +4023,10 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_OpenSharedHandle(ID3D12Device7 *if
+     return E_NOTIMPL;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_OpenSharedHandleByName(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_OpenSharedHandleByName(ID3D12Device8 *iface,
+         const WCHAR *name, DWORD access, HANDLE *handle)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+ 
+     FIXME("iface %p, name %s, access %#x, handle %p stub!\n",
+             iface, debugstr_w(name, device->wchar_size), (uint32_t)access, handle);
+@@ -4033,7 +4034,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_OpenSharedHandleByName(ID3D12Devic
+     return E_NOTIMPL;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_MakeResident(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_MakeResident(ID3D12Device8 *iface,
+         UINT object_count, ID3D12Pageable * const *objects)
+ {
+     ID3D12Fence *fence;
+@@ -4041,17 +4042,17 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_MakeResident(ID3D12Device7 *iface,
+ 
+     TRACE("iface %p, object_count %u, objects %p.\n", iface, object_count, objects);
+ 
+-    if (FAILED(hr = ID3D12Device7_CreateFence(iface, 0, 0, &IID_ID3D12Fence, (void **)&fence)))
++    if (FAILED(hr = ID3D12Device8_CreateFence(iface, 0, 0, &IID_ID3D12Fence, (void **)&fence)))
+         return hr;
+ 
+-    hr = ID3D12Device7_EnqueueMakeResident(iface, 0, object_count, objects, fence, 1);
++    hr = ID3D12Device8_EnqueueMakeResident(iface, 0, object_count, objects, fence, 1);
+     if (SUCCEEDED(hr))
+         ID3D12Fence_SetEventOnCompletion(fence, 1, NULL);
+     ID3D12Fence_Release(fence);
+     return hr;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_Evict(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_Evict(ID3D12Device8 *iface,
+         UINT object_count, ID3D12Pageable * const *objects)
+ {
+     FIXME_ONCE("iface %p, object_count %u, objects %p stub!\n",
+@@ -4060,10 +4061,10 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_Evict(ID3D12Device7 *iface,
+     return S_OK;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateFence(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateFence(ID3D12Device8 *iface,
+         UINT64 initial_value, D3D12_FENCE_FLAGS flags, REFIID riid, void **fence)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     struct d3d12_fence *object;
+     HRESULT hr;
+ 
+@@ -4076,9 +4077,9 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateFence(ID3D12Device7 *iface,
+     return return_interface(&object->ID3D12Fence1_iface, &IID_ID3D12Fence1, riid, fence);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_GetDeviceRemovedReason(ID3D12Device7 *iface)
++static HRESULT STDMETHODCALLTYPE d3d12_device_GetDeviceRemovedReason(ID3D12Device8 *iface)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+ 
+     TRACE("iface %p.\n", iface);
+ 
+@@ -4163,12 +4164,12 @@ static void d3d12_device_get_copyable_footprints(struct d3d12_device *device,
+         *total_bytes = total;
+ }
+ 
+-static void STDMETHODCALLTYPE d3d12_device_GetCopyableFootprints(ID3D12Device7 *iface,
++static void STDMETHODCALLTYPE d3d12_device_GetCopyableFootprints(ID3D12Device8 *iface,
+         const D3D12_RESOURCE_DESC *desc, UINT first_sub_resource, UINT sub_resource_count,
+         UINT64 base_offset, D3D12_PLACED_SUBRESOURCE_FOOTPRINT *layouts,
+         UINT *row_counts, UINT64 *row_sizes, UINT64 *total_bytes)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     D3D12_RESOURCE_DESC1 resource_desc;
+ 
+     TRACE("iface %p, desc %p, first_sub_resource %u, sub_resource_count %u, base_offset %#"PRIx64", "
+@@ -4182,10 +4183,10 @@ static void STDMETHODCALLTYPE d3d12_device_GetCopyableFootprints(ID3D12Device7 *
+             base_offset, layouts, row_counts, row_sizes, total_bytes);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateQueryHeap(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateQueryHeap(ID3D12Device8 *iface,
+         const D3D12_QUERY_HEAP_DESC *desc, REFIID iid, void **heap)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     struct d3d12_query_heap *object;
+     HRESULT hr;
+ 
+@@ -4198,18 +4199,18 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateQueryHeap(ID3D12Device7 *ifa
+     return return_interface(&object->ID3D12QueryHeap_iface, &IID_ID3D12QueryHeap, iid, heap);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_SetStablePowerState(ID3D12Device7 *iface, BOOL enable)
++static HRESULT STDMETHODCALLTYPE d3d12_device_SetStablePowerState(ID3D12Device8 *iface, BOOL enable)
+ {
+     FIXME("iface %p, enable %#x stub!\n", iface, enable);
+ 
+     return E_NOTIMPL;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommandSignature(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommandSignature(ID3D12Device8 *iface,
+         const D3D12_COMMAND_SIGNATURE_DESC *desc, ID3D12RootSignature *root_signature,
+         REFIID iid, void **command_signature)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     struct d3d12_command_signature *object;
+     HRESULT hr;
+ 
+@@ -4223,14 +4224,14 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommandSignature(ID3D12Devic
+             &IID_ID3D12CommandSignature, iid, command_signature);
+ }
+ 
+-static void STDMETHODCALLTYPE d3d12_device_GetResourceTiling(ID3D12Device7 *iface,
++static void STDMETHODCALLTYPE d3d12_device_GetResourceTiling(ID3D12Device8 *iface,
+         ID3D12Resource *resource, UINT *total_tile_count,
+         D3D12_PACKED_MIP_INFO *packed_mip_info, D3D12_TILE_SHAPE *standard_tile_shape,
+         UINT *sub_resource_tiling_count, UINT first_sub_resource_tiling,
+         D3D12_SUBRESOURCE_TILING *sub_resource_tilings)
+ {
+     const struct d3d12_resource *resource_impl = impl_from_ID3D12Resource(resource);
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+ 
+     TRACE("iface %p, resource %p, total_tile_count %p, packed_mip_info %p, "
+             "standard_title_shape %p, sub_resource_tiling_count %p, "
+@@ -4243,9 +4244,9 @@ static void STDMETHODCALLTYPE d3d12_device_GetResourceTiling(ID3D12Device7 *ifac
+             sub_resource_tiling_count, first_sub_resource_tiling, sub_resource_tilings);
+ }
+ 
+-static LUID * STDMETHODCALLTYPE d3d12_device_GetAdapterLuid(ID3D12Device7 *iface, LUID *luid)
++static LUID * STDMETHODCALLTYPE d3d12_device_GetAdapterLuid(ID3D12Device8 *iface, LUID *luid)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+ 
+     TRACE("iface %p, luid %p.\n", iface, luid);
+ 
+@@ -4254,7 +4255,7 @@ static LUID * STDMETHODCALLTYPE d3d12_device_GetAdapterLuid(ID3D12Device7 *iface
+     return luid;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreatePipelineLibrary(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreatePipelineLibrary(ID3D12Device8 *iface,
+         const void *blob, SIZE_T blob_size, REFIID iid, void **lib)
+ {
+     FIXME("iface %p, blob %p, blob_size %"PRIuPTR", iid %s, lib %p stub!\n",
+@@ -4263,7 +4264,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreatePipelineLibrary(ID3D12Device
+     return DXGI_ERROR_UNSUPPORTED;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_SetEventOnMultipleFenceCompletion(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_SetEventOnMultipleFenceCompletion(ID3D12Device8 *iface,
+         ID3D12Fence *const *fences, const UINT64 *values, UINT fence_count,
+         D3D12_MULTIPLE_FENCE_WAIT_FLAGS flags, HANDLE event)
+ {
+@@ -4273,7 +4274,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_SetEventOnMultipleFenceCompletion(
+     return E_NOTIMPL;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_SetResidencyPriority(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_SetResidencyPriority(ID3D12Device8 *iface,
+         UINT object_count, ID3D12Pageable *const *objects, const D3D12_RESIDENCY_PRIORITY *priorities)
+ {
+     FIXME_ONCE("iface %p, object_count %u, objects %p, priorities %p stub!\n", iface, object_count, objects, priorities);
+@@ -4281,10 +4282,10 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_SetResidencyPriority(ID3D12Device7
+     return S_OK;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreatePipelineState(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreatePipelineState(ID3D12Device8 *iface,
+         const D3D12_PIPELINE_STATE_STREAM_DESC *desc, REFIID iid, void **pipeline_state)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     struct d3d12_pipeline_state *object;
+     HRESULT hr;
+ 
+@@ -4296,7 +4297,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreatePipelineState(ID3D12Device7
+     return return_interface(&object->ID3D12PipelineState_iface, &IID_ID3D12PipelineState, iid, pipeline_state);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_OpenExistingHeapFromAddress(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_OpenExistingHeapFromAddress(ID3D12Device8 *iface,
+         const void *address, REFIID iid, void **heap)
+ {
+     FIXME("iface %p, address %p, iid %s, heap %p stub!\n", iface, address, debugstr_guid(iid), heap);
+@@ -4304,7 +4305,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_OpenExistingHeapFromAddress(ID3D12
+     return E_NOTIMPL;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_OpenExistingHeapFromFileMapping(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_OpenExistingHeapFromFileMapping(ID3D12Device8 *iface,
+         HANDLE file_mapping, REFIID iid, void **heap)
+ {
+     FIXME("iface %p, file_mapping %p, iid %s, heap %p stub!\n", iface, file_mapping, debugstr_guid(iid), heap);
+@@ -4312,7 +4313,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_OpenExistingHeapFromFileMapping(ID
+     return E_NOTIMPL;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_EnqueueMakeResident(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_EnqueueMakeResident(ID3D12Device8 *iface,
+         D3D12_RESIDENCY_FLAGS flags, UINT num_objects, ID3D12Pageable *const *objects,
+         ID3D12Fence *fence, UINT64 fence_value)
+ {
+@@ -4323,7 +4324,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_EnqueueMakeResident(ID3D12Device7
+     return S_OK;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommandList1(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommandList1(ID3D12Device8 *iface,
+         UINT node_mask, D3D12_COMMAND_LIST_TYPE type, D3D12_COMMAND_LIST_FLAGS flags,
+         REFIID iid, void **command_list)
+ {
+@@ -4333,7 +4334,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommandList1(ID3D12Device7 *
+     return E_NOTIMPL;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateProtectedResourceSession(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateProtectedResourceSession(ID3D12Device8 *iface,
+         const D3D12_PROTECTED_RESOURCE_SESSION_DESC *desc, REFIID iid, void **session)
+ {
+     FIXME("iface %p, desc %p, iid %s, session %p stub!\n", iface, desc, debugstr_guid(iid), session);
+@@ -4341,13 +4342,13 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateProtectedResourceSession(ID3
+     return E_NOTIMPL;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommittedResource1(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommittedResource1(ID3D12Device8 *iface,
+         const D3D12_HEAP_PROPERTIES *heap_properties, D3D12_HEAP_FLAGS heap_flags,
+         const D3D12_RESOURCE_DESC *desc, D3D12_RESOURCE_STATES initial_state,
+         const D3D12_CLEAR_VALUE *optimized_clear_value,
+         ID3D12ProtectedResourceSession *protected_session, REFIID iid, void **resource)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     D3D12_RESOURCE_DESC1 resource_desc;
+     struct d3d12_resource *object;
+     HRESULT hr;
+@@ -4369,11 +4370,11 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommittedResource1(ID3D12Dev
+     return return_interface(&object->ID3D12Resource2_iface, &IID_ID3D12Resource2, iid, resource);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateHeap1(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateHeap1(ID3D12Device8 *iface,
+         const D3D12_HEAP_DESC *desc, ID3D12ProtectedResourceSession *protected_session,
+         REFIID iid, void **heap)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+     struct d3d12_heap *object;
+     HRESULT hr;
+ 
+@@ -4389,7 +4390,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateHeap1(ID3D12Device7 *iface,
+     return return_interface(&object->ID3D12Heap_iface, &IID_ID3D12Heap, iid, heap);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateReservedResource1(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateReservedResource1(ID3D12Device8 *iface,
+         const D3D12_RESOURCE_DESC *desc, D3D12_RESOURCE_STATES initial_state,
+         const D3D12_CLEAR_VALUE *optimized_clear_value,
+         ID3D12ProtectedResourceSession *protected_session, REFIID iid, void **resource)
+@@ -4403,11 +4404,11 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateReservedResource1(ID3D12Devi
+ }
+ 
+ static D3D12_RESOURCE_ALLOCATION_INFO * STDMETHODCALLTYPE d3d12_device_GetResourceAllocationInfo1(
+-        ID3D12Device7 *iface, D3D12_RESOURCE_ALLOCATION_INFO *info, UINT visible_mask,
++        ID3D12Device8 *iface, D3D12_RESOURCE_ALLOCATION_INFO *info, UINT visible_mask,
+         UINT count, const D3D12_RESOURCE_DESC *resource_descs,
+         D3D12_RESOURCE_ALLOCATION_INFO1 *info1)
+ {
+-    struct d3d12_device *device = impl_from_ID3D12Device7(iface);
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
+ 
+     TRACE("iface %p, info %p, visible_mask 0x%08x, count %u, resource_descs %p, info1 %p.\n",
+             iface, info, visible_mask, count, resource_descs, info1);
+@@ -4419,7 +4420,7 @@ static D3D12_RESOURCE_ALLOCATION_INFO * STDMETHODCALLTYPE d3d12_device_GetResour
+     return info;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateLifetimeTracker(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateLifetimeTracker(ID3D12Device8 *iface,
+         ID3D12LifetimeOwner *owner, REFIID iid, void **tracker)
+ {
+     FIXME("iface %p, owner %p, iid %s, tracker %p stub!\n", iface, owner, debugstr_guid(iid), tracker);
+@@ -4427,12 +4428,12 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateLifetimeTracker(ID3D12Device
+     return E_NOTIMPL;
+ }
+ 
+-static void STDMETHODCALLTYPE d3d12_device_RemoveDevice(ID3D12Device7 *iface)
++static void STDMETHODCALLTYPE d3d12_device_RemoveDevice(ID3D12Device8 *iface)
+ {
+     FIXME("iface %p stub!\n", iface);
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_EnumerateMetaCommands(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_EnumerateMetaCommands(ID3D12Device8 *iface,
+         UINT *num_meta_commands, D3D12_META_COMMAND_DESC *command_desc)
+ {
+     FIXME("iface %p, num_meta_commands %p, command_desc %p stub!\n", iface,
+@@ -4441,7 +4442,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_EnumerateMetaCommands(ID3D12Device
+     return E_NOTIMPL;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_EnumerateMetaCommandParameters(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_EnumerateMetaCommandParameters(ID3D12Device8 *iface,
+         REFGUID command_id, D3D12_META_COMMAND_PARAMETER_STAGE stage,
+         UINT *size_in_bytes, UINT *parameter_count,
+         D3D12_META_COMMAND_PARAMETER_DESC *parameter_desc)
+@@ -4453,7 +4454,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_EnumerateMetaCommandParameters(ID3
+     return E_NOTIMPL;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateMetaCommand(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateMetaCommand(ID3D12Device8 *iface,
+         REFGUID command_id, UINT node_mask, const void *parameters_data,
+         SIZE_T data_size_in_bytes, REFIID iid, void **meta_command)
+ {
+@@ -4465,7 +4466,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateMetaCommand(ID3D12Device7 *i
+     return E_NOTIMPL;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateStateObject(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateStateObject(ID3D12Device8 *iface,
+         const D3D12_STATE_OBJECT_DESC *desc, REFIID iid, void **state_object)
+ {
+     FIXME("iface %p, desc %p, iid %s, state_object %p stub!\n", iface, desc, debugstr_guid(iid), state_object);
+@@ -4473,14 +4474,14 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateStateObject(ID3D12Device7 *i
+     return E_NOTIMPL;
+ }
+ 
+-static void STDMETHODCALLTYPE d3d12_device_GetRaytracingAccelerationStructurePrebuildInfo(ID3D12Device7 *iface,
++static void STDMETHODCALLTYPE d3d12_device_GetRaytracingAccelerationStructurePrebuildInfo(ID3D12Device8 *iface,
+         const D3D12_BUILD_RAYTRACING_ACCELERATION_STRUCTURE_INPUTS *desc,
+         D3D12_RAYTRACING_ACCELERATION_STRUCTURE_PREBUILD_INFO *info)
+ {
+     FIXME("iface %p, desc %p, info %p stub!\n", iface, desc, info);
+ }
+ 
+-static D3D12_DRIVER_MATCHING_IDENTIFIER_STATUS STDMETHODCALLTYPE d3d12_device_CheckDriverMatchingIdentifier(ID3D12Device7 *iface,
++static D3D12_DRIVER_MATCHING_IDENTIFIER_STATUS STDMETHODCALLTYPE d3d12_device_CheckDriverMatchingIdentifier(ID3D12Device8 *iface,
+         D3D12_SERIALIZED_DATA_TYPE data_type, const D3D12_SERIALIZED_DATA_DRIVER_MATCHING_IDENTIFIER *identifier)
+ {
+     FIXME("iface %p, data_type %u, identifier %p stub!\n", iface, data_type, identifier);
+@@ -4488,7 +4489,7 @@ static D3D12_DRIVER_MATCHING_IDENTIFIER_STATUS STDMETHODCALLTYPE d3d12_device_Ch
+     return D3D12_DRIVER_MATCHING_IDENTIFIER_UNRECOGNIZED;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_SetBackgroundProcessingMode(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_SetBackgroundProcessingMode(ID3D12Device8 *iface,
+         D3D12_BACKGROUND_PROCESSING_MODE mode, D3D12_MEASUREMENTS_ACTION action, HANDLE event,
+         BOOL *further_measurements_desired)
+ {
+@@ -4498,7 +4499,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_SetBackgroundProcessingMode(ID3D12
+     return E_NOTIMPL;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_AddToStateObject(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_AddToStateObject(ID3D12Device8 *iface,
+         const D3D12_STATE_OBJECT_DESC *addition, ID3D12StateObject *state_object_to_grow_from,
+         REFIID riid, void **new_state_object)
+ {
+@@ -4508,7 +4509,7 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_AddToStateObject(ID3D12Device7 *if
+     return E_NOTIMPL;
+ }
+ 
+-static HRESULT STDMETHODCALLTYPE d3d12_device_CreateProtectedResourceSession1(ID3D12Device7 *iface,
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateProtectedResourceSession1(ID3D12Device8 *iface,
+         const D3D12_PROTECTED_RESOURCE_SESSION_DESC1 *desc, REFIID riid, void **session)
+ {
+     FIXME("iface %p, desc %p, riid %s, session %p stub!\n", iface, desc, debugstr_guid(riid), session);
+@@ -4516,7 +4517,94 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreateProtectedResourceSession1(ID
+     return E_NOTIMPL;
+ }
+ 
+-static const struct ID3D12Device7Vtbl d3d12_device_vtbl =
++static D3D12_RESOURCE_ALLOCATION_INFO * STDMETHODCALLTYPE d3d12_device_GetResourceAllocationInfo2(ID3D12Device8 *iface,
++        D3D12_RESOURCE_ALLOCATION_INFO *info, UINT visible_mask, UINT count,
++        const D3D12_RESOURCE_DESC1 *resource_descs, D3D12_RESOURCE_ALLOCATION_INFO1 *info1)
++{
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
++
++    TRACE("iface %p, info %p, visible_mask 0x%08x, count %u, resource_descs %p, info1 %p.\n",
++            iface, info, visible_mask, count, resource_descs, info1);
++
++    debug_ignored_node_mask(visible_mask);
++
++    d3d12_device_get_resource1_allocation_info(device, info1, count, resource_descs, info);
++
++    return info;
++}
++
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreateCommittedResource2(ID3D12Device8 *iface,
++        const D3D12_HEAP_PROPERTIES *heap_properties, D3D12_HEAP_FLAGS heap_flags, const D3D12_RESOURCE_DESC1 *desc,
++        D3D12_RESOURCE_STATES initial_state, const D3D12_CLEAR_VALUE *optimized_clear_value,
++        ID3D12ProtectedResourceSession *protected_session, REFIID iid, void **resource)
++{
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
++    struct d3d12_resource *object;
++    HRESULT hr;
++
++    TRACE("iface %p, heap_properties %p, heap_flags %#x, desc %p, initial_state %#x, "
++            "optimized_clear_value %p, protected_session %p, iid %s, resource %p.\n",
++            iface, heap_properties, heap_flags, desc, initial_state,
++            optimized_clear_value, protected_session, debugstr_guid(iid), resource);
++
++    if (FAILED(hr = d3d12_committed_resource_create(device, heap_properties, heap_flags,
++            desc, initial_state, optimized_clear_value, protected_session, &object)))
++    {
++        *resource = NULL;
++        return hr;
++    }
++
++    return return_interface(&object->ID3D12Resource2_iface, &IID_ID3D12Resource2, iid, resource);
++}
++
++static HRESULT STDMETHODCALLTYPE d3d12_device_CreatePlacedResource1(ID3D12Device8 *iface,
++        ID3D12Heap *heap, UINT64 heap_offset, const D3D12_RESOURCE_DESC1 *resource_desc,
++        D3D12_RESOURCE_STATES initial_state, const D3D12_CLEAR_VALUE *optimized_clear_value,
++        REFIID iid, void **resource)
++{
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
++    struct d3d12_heap *heap_object;
++    struct d3d12_resource *object;
++    HRESULT hr;
++
++    TRACE("iface %p, heap %p, heap_offset %#"PRIx64", desc %p, initial_state %#x, "
++            "optimized_clear_value %p, iid %s, resource %p.\n",
++            iface, heap, heap_offset, resource_desc, initial_state,
++            optimized_clear_value, debugstr_guid(iid), resource);
++
++    heap_object = unsafe_impl_from_ID3D12Heap(heap);
++
++    if (FAILED(hr = d3d12_placed_resource_create(device, heap_object, heap_offset,
++            resource_desc, initial_state, optimized_clear_value, &object)))
++        return hr;
++
++    return return_interface(&object->ID3D12Resource2_iface, &IID_ID3D12Resource2, iid, resource);
++}
++
++static void STDMETHODCALLTYPE d3d12_device_CreateSamplerFeedbackUnorderedAccessView(ID3D12Device8 *iface,
++        ID3D12Resource *target_resource, ID3D12Resource *feedback_resource, D3D12_CPU_DESCRIPTOR_HANDLE descriptor)
++{
++    FIXME("iface %p, target_resource %p, feedback_resource %p, descriptor %s stub!\n",
++            iface, target_resource, feedback_resource, debug_cpu_handle(descriptor));
++}
++
++static void STDMETHODCALLTYPE d3d12_device_GetCopyableFootprints1(ID3D12Device8 *iface,
++        const D3D12_RESOURCE_DESC1 *desc, UINT first_sub_resource, UINT sub_resource_count,
++        UINT64 base_offset, D3D12_PLACED_SUBRESOURCE_FOOTPRINT *layouts, UINT *row_counts,
++        UINT64 *row_sizes, UINT64 *total_bytes)
++{
++    struct d3d12_device *device = impl_from_ID3D12Device8(iface);
++
++    TRACE("iface %p, desc %p, first_sub_resource %u, sub_resource_count %u, base_offset %#"PRIx64", "
++            "layouts %p, row_counts %p, row_sizes %p, total_bytes %p.\n",
++            iface, desc, first_sub_resource, sub_resource_count, base_offset,
++            layouts, row_counts, row_sizes, total_bytes);
++
++    d3d12_device_get_copyable_footprints(device, desc, first_sub_resource, sub_resource_count,
++            base_offset, layouts, row_counts, row_sizes, total_bytes);
++}
++
++static const struct ID3D12Device8Vtbl d3d12_device_vtbl =
+ {
+     /* IUnknown methods */
+     d3d12_device_QueryInterface,
+@@ -4596,14 +4684,20 @@ static const struct ID3D12Device7Vtbl d3d12_device_vtbl =
+     /* ID3D12Device7 methods */
+     d3d12_device_AddToStateObject,
+     d3d12_device_CreateProtectedResourceSession1,
++    /* ID3D12Device8 methods */
++    d3d12_device_GetResourceAllocationInfo2,
++    d3d12_device_CreateCommittedResource2,
++    d3d12_device_CreatePlacedResource1,
++    d3d12_device_CreateSamplerFeedbackUnorderedAccessView,
++    d3d12_device_GetCopyableFootprints1,
+ };
+ 
+-struct d3d12_device *unsafe_impl_from_ID3D12Device7(ID3D12Device7 *iface)
++struct d3d12_device *unsafe_impl_from_ID3D12Device8(ID3D12Device8 *iface)
+ {
+     if (!iface)
+         return NULL;
+     assert(iface->lpVtbl == &d3d12_device_vtbl);
+-    return impl_from_ID3D12Device7(iface);
++    return impl_from_ID3D12Device8(iface);
+ }
+ 
+ static void *device_worker_main(void *arg)
+@@ -4646,7 +4740,7 @@ static HRESULT d3d12_device_init(struct d3d12_device *device,
+     const struct vkd3d_vk_device_procs *vk_procs;
+     HRESULT hr;
+ 
+-    device->ID3D12Device7_iface.lpVtbl = &d3d12_device_vtbl;
++    device->ID3D12Device8_iface.lpVtbl = &d3d12_device_vtbl;
+     device->refcount = 1;
+ 
+     vkd3d_instance_incref(device->vkd3d_instance = instance);
+@@ -4894,28 +4988,28 @@ HRESULT vkd3d_join_thread(struct vkd3d_instance *instance, union vkd3d_thread_ha
+ 
+ IUnknown *vkd3d_get_device_parent(ID3D12Device *device)
+ {
+-    struct d3d12_device *d3d12_device = impl_from_ID3D12Device7((ID3D12Device7 *)device);
++    struct d3d12_device *d3d12_device = impl_from_ID3D12Device8((ID3D12Device8 *)device);
+ 
+     return d3d12_device->parent;
+ }
+ 
+ VkDevice vkd3d_get_vk_device(ID3D12Device *device)
+ {
+-    struct d3d12_device *d3d12_device = impl_from_ID3D12Device7((ID3D12Device7 *)device);
++    struct d3d12_device *d3d12_device = impl_from_ID3D12Device8((ID3D12Device8 *)device);
+ 
+     return d3d12_device->vk_device;
+ }
+ 
+ VkPhysicalDevice vkd3d_get_vk_physical_device(ID3D12Device *device)
+ {
+-    struct d3d12_device *d3d12_device = impl_from_ID3D12Device7((ID3D12Device7 *)device);
++    struct d3d12_device *d3d12_device = impl_from_ID3D12Device8((ID3D12Device8 *)device);
+ 
+     return d3d12_device->vk_physical_device;
+ }
+ 
+ struct vkd3d_instance *vkd3d_instance_from_device(ID3D12Device *device)
+ {
+-    struct d3d12_device *d3d12_device = impl_from_ID3D12Device7((ID3D12Device7 *)device);
++    struct d3d12_device *d3d12_device = impl_from_ID3D12Device8((ID3D12Device8 *)device);
+ 
+     return d3d12_device->vkd3d_instance;
+ }
+diff --git a/libs/vkd3d/libs/vkd3d/resource.c b/libs/vkd3d/libs/vkd3d/resource.c
+index 89764d0901d..446ef3ab0db 100644
+--- a/libs/vkd3d/libs/vkd3d/resource.c
++++ b/libs/vkd3d/libs/vkd3d/resource.c
+@@ -1857,6 +1857,7 @@ static bool d3d12_resource_validate_texture_alignment(const D3D12_RESOURCE_DESC1
+ 
+ HRESULT d3d12_resource_validate_desc(const D3D12_RESOURCE_DESC1 *desc, struct d3d12_device *device)
+ {
++    const D3D12_MIP_REGION *mip_region = &desc->SamplerFeedbackMipRegion;
+     const struct vkd3d_format *format;
+ 
+     switch (desc->Dimension)
+@@ -1926,6 +1927,12 @@ HRESULT d3d12_resource_validate_desc(const D3D12_RESOURCE_DESC1 *desc, struct d3
+ 
+     d3d12_validate_resource_flags(desc->Flags);
+ 
++    if (mip_region->Width && mip_region->Height && mip_region->Depth)
++    {
++        FIXME("Unhandled sampler feedback mip region size (%u, %u, %u).\n", mip_region->Width, mip_region->Height,
++                mip_region->Depth);
++    }
++
+     return S_OK;
+ }
+ 
+@@ -2253,7 +2260,7 @@ HRESULT d3d12_reserved_resource_create(struct d3d12_device *device,
+ HRESULT vkd3d_create_image_resource(ID3D12Device *device,
+         const struct vkd3d_image_resource_create_info *create_info, ID3D12Resource **resource)
+ {
+-    struct d3d12_device *d3d12_device = unsafe_impl_from_ID3D12Device7((ID3D12Device7 *)device);
++    struct d3d12_device *d3d12_device = unsafe_impl_from_ID3D12Device8((ID3D12Device8 *)device);
+     struct d3d12_resource *object;
+     HRESULT hr;
+ 
+diff --git a/libs/vkd3d/libs/vkd3d/vkd3d_main.c b/libs/vkd3d/libs/vkd3d/vkd3d_main.c
+index 7919b7d8760..f6925d47bdf 100644
+--- a/libs/vkd3d/libs/vkd3d/vkd3d_main.c
++++ b/libs/vkd3d/libs/vkd3d/vkd3d_main.c
+@@ -71,11 +71,11 @@ HRESULT vkd3d_create_device(const struct vkd3d_device_create_info *create_info,
+ 
+     if (!device)
+     {
+-        ID3D12Device_Release(&object->ID3D12Device7_iface);
++        ID3D12Device_Release(&object->ID3D12Device8_iface);
+         return S_FALSE;
+     }
+ 
+-    return return_interface(&object->ID3D12Device7_iface, &IID_ID3D12Device, iid, device);
++    return return_interface(&object->ID3D12Device8_iface, &IID_ID3D12Device, iid, device);
+ }
+ 
+ /* ID3D12RootSignatureDeserializer */
+diff --git a/libs/vkd3d/libs/vkd3d/vkd3d_private.h b/libs/vkd3d/libs/vkd3d/vkd3d_private.h
+index b092bb26ded..1f47ddd5023 100644
+--- a/libs/vkd3d/libs/vkd3d/vkd3d_private.h
++++ b/libs/vkd3d/libs/vkd3d/vkd3d_private.h
+@@ -1735,7 +1735,7 @@ struct vkd3d_desc_object_cache
+ /* ID3D12Device */
+ struct d3d12_device
+ {
+-    ID3D12Device7 ID3D12Device7_iface;
++    ID3D12Device8 ID3D12Device8_iface;
+     unsigned int refcount;
+ 
+     VkDevice vk_device;
+@@ -1810,29 +1810,29 @@ struct vkd3d_queue *d3d12_device_get_vkd3d_queue(struct d3d12_device *device, D3
+ bool d3d12_device_is_uma(struct d3d12_device *device, bool *coherent);
+ void d3d12_device_mark_as_removed(struct d3d12_device *device, HRESULT reason,
+         const char *message, ...) VKD3D_PRINTF_FUNC(3, 4);
+-struct d3d12_device *unsafe_impl_from_ID3D12Device7(ID3D12Device7 *iface);
++struct d3d12_device *unsafe_impl_from_ID3D12Device8(ID3D12Device8 *iface);
+ HRESULT d3d12_device_add_descriptor_heap(struct d3d12_device *device, struct d3d12_descriptor_heap *heap);
+ void d3d12_device_remove_descriptor_heap(struct d3d12_device *device, struct d3d12_descriptor_heap *heap);
+ 
+ static inline HRESULT d3d12_device_query_interface(struct d3d12_device *device, REFIID iid, void **object)
+ {
+-    return ID3D12Device7_QueryInterface(&device->ID3D12Device7_iface, iid, object);
++    return ID3D12Device8_QueryInterface(&device->ID3D12Device8_iface, iid, object);
+ }
+ 
+ static inline ULONG d3d12_device_add_ref(struct d3d12_device *device)
+ {
+-    return ID3D12Device7_AddRef(&device->ID3D12Device7_iface);
++    return ID3D12Device8_AddRef(&device->ID3D12Device8_iface);
+ }
+ 
+ static inline ULONG d3d12_device_release(struct d3d12_device *device)
+ {
+-    return ID3D12Device7_Release(&device->ID3D12Device7_iface);
++    return ID3D12Device8_Release(&device->ID3D12Device8_iface);
+ }
+ 
+ static inline unsigned int d3d12_device_get_descriptor_handle_increment_size(struct d3d12_device *device,
+         D3D12_DESCRIPTOR_HEAP_TYPE descriptor_type)
+ {
+-    return ID3D12Device7_GetDescriptorHandleIncrementSize(&device->ID3D12Device7_iface, descriptor_type);
++    return ID3D12Device8_GetDescriptorHandleIncrementSize(&device->ID3D12Device8_iface, descriptor_type);
+ }
+ 
+ /* utils */
+-- 
+2.43.0
+
