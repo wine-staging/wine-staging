@@ -1,0 +1,437 @@
+From 1123af8d7108c26d7c4b4fdb6495d8ad03d8aaa0 Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Wed, 20 Mar 2024 12:18:36 +1100
+Subject: [PATCH] Updated vkd3d to 166dc24b2f73b0541a14815081ee4c8d9eab3269.
+
+---
+ libs/vkd3d/include/private/vkd3d_common.h     | 181 +++++++++++++++++-
+ libs/vkd3d/include/private/vkd3d_memory.h     |   2 +-
+ libs/vkd3d/libs/vkd3d-common/blob.c           |   1 -
+ libs/vkd3d/libs/vkd3d-common/debug.c          |   2 +-
+ libs/vkd3d/libs/vkd3d-common/error.c          |   1 -
+ libs/vkd3d/libs/vkd3d-shader/ir.c             |   8 +-
+ libs/vkd3d/libs/vkd3d-shader/spirv.c          |   3 +-
+ .../libs/vkd3d-shader/vkd3d_shader_private.h  |   5 +-
+ libs/vkd3d/libs/vkd3d/vkd3d_private.h         |  67 -------
+ 9 files changed, 189 insertions(+), 81 deletions(-)
+
+diff --git a/libs/vkd3d/include/private/vkd3d_common.h b/libs/vkd3d/include/private/vkd3d_common.h
+index 6a3b530d868..974ff9446db 100644
+--- a/libs/vkd3d/include/private/vkd3d_common.h
++++ b/libs/vkd3d/include/private/vkd3d_common.h
+@@ -30,6 +30,9 @@
+ #include <stdint.h>
+ #include <stdio.h>
+ #include <stdlib.h>
++#ifndef _WIN32
++#include <pthread.h>
++#endif
+ 
+ #ifdef _MSC_VER
+ #include <intrin.h>
+@@ -105,11 +108,130 @@ VKD3D_NORETURN static inline void vkd3d_unreachable_(const char *filename, unsig
+ #define vkd3d_unreachable() vkd3d_unreachable_(__FILE__, __LINE__)
+ #endif
+ 
++#ifdef VKD3D_NO_TRACE_MESSAGES
++#define TRACE(args...) do { } while (0)
++#define TRACE_ON() (false)
++#endif
++
++#ifdef VKD3D_NO_DEBUG_MESSAGES
++#define WARN(args...) do { } while (0)
++#define FIXME(args...) do { } while (0)
++#endif
++
++enum vkd3d_dbg_level
++{
++    VKD3D_DBG_LEVEL_NONE,
++    VKD3D_DBG_LEVEL_ERR,
++    VKD3D_DBG_LEVEL_FIXME,
++    VKD3D_DBG_LEVEL_WARN,
++    VKD3D_DBG_LEVEL_TRACE,
++};
++
++enum vkd3d_dbg_level vkd3d_dbg_get_level(void);
++
++void vkd3d_dbg_printf(enum vkd3d_dbg_level level, const char *function, const char *fmt, ...) VKD3D_PRINTF_FUNC(3, 4);
++void vkd3d_dbg_set_log_callback(PFN_vkd3d_log callback);
++
++const char *vkd3d_dbg_sprintf(const char *fmt, ...) VKD3D_PRINTF_FUNC(1, 2);
++const char *vkd3d_dbg_vsprintf(const char *fmt, va_list args);
++const char *debugstr_a(const char *str);
++const char *debugstr_an(const char *str, size_t n);
++const char *debugstr_w(const WCHAR *wstr, size_t wchar_size);
++
++#define VKD3D_DBG_LOG(level) \
++        do { \
++        const enum vkd3d_dbg_level vkd3d_dbg_level = VKD3D_DBG_LEVEL_##level; \
++        VKD3D_DBG_PRINTF
++
++#define VKD3D_DBG_LOG_ONCE(first_time_level, level) \
++        do { \
++        static bool vkd3d_dbg_next_time; \
++        const enum vkd3d_dbg_level vkd3d_dbg_level = vkd3d_dbg_next_time \
++        ? VKD3D_DBG_LEVEL_##level : VKD3D_DBG_LEVEL_##first_time_level; \
++        vkd3d_dbg_next_time = true; \
++        VKD3D_DBG_PRINTF
++
++#define VKD3D_DBG_PRINTF(...) \
++        vkd3d_dbg_printf(vkd3d_dbg_level, __FUNCTION__, __VA_ARGS__); } while (0)
++
++#ifndef TRACE
++#define TRACE VKD3D_DBG_LOG(TRACE)
++#endif
++
++#ifndef WARN
++#define WARN  VKD3D_DBG_LOG(WARN)
++#endif
++
++#ifndef FIXME
++#define FIXME VKD3D_DBG_LOG(FIXME)
++#endif
++
++#define ERR   VKD3D_DBG_LOG(ERR)
++
++#ifndef TRACE_ON
++#define TRACE_ON() (vkd3d_dbg_get_level() == VKD3D_DBG_LEVEL_TRACE)
++#endif
++
++#ifndef WARN_ON
++#define WARN_ON() (vkd3d_dbg_get_level() >= VKD3D_DBG_LEVEL_WARN)
++#endif
++
++#define FIXME_ONCE VKD3D_DBG_LOG_ONCE(FIXME, WARN)
++
++#define VKD3D_DEBUG_ENV_NAME(name) const char *const vkd3d_dbg_env_name = name
++
++static inline const char *debugstr_guid(const GUID *guid)
++{
++    if (!guid)
++        return "(null)";
++
++    return vkd3d_dbg_sprintf("{%08lx-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x}",
++            (unsigned long)guid->Data1, guid->Data2, guid->Data3, guid->Data4[0],
++            guid->Data4[1], guid->Data4[2], guid->Data4[3], guid->Data4[4],
++            guid->Data4[5], guid->Data4[6], guid->Data4[7]);
++}
++
++static inline const char *debugstr_hresult(HRESULT hr)
++{
++    switch (hr)
++    {
++#define TO_STR(u) case u: return #u;
++        TO_STR(S_OK)
++        TO_STR(S_FALSE)
++        TO_STR(E_NOTIMPL)
++        TO_STR(E_NOINTERFACE)
++        TO_STR(E_POINTER)
++        TO_STR(E_ABORT)
++        TO_STR(E_FAIL)
++        TO_STR(E_OUTOFMEMORY)
++        TO_STR(E_INVALIDARG)
++        TO_STR(DXGI_ERROR_NOT_FOUND)
++        TO_STR(DXGI_ERROR_MORE_DATA)
++        TO_STR(DXGI_ERROR_UNSUPPORTED)
++#undef TO_STR
++        default:
++            return vkd3d_dbg_sprintf("%#x", (int)hr);
++    }
++}
++
++unsigned int vkd3d_env_var_as_uint(const char *name, unsigned int default_value);
++
++struct vkd3d_debug_option
++{
++    const char *name;
++    uint64_t flag;
++};
++
++bool vkd3d_debug_list_has_member(const char *string, const char *member);
++uint64_t vkd3d_parse_debug_options(const char *string,
++        const struct vkd3d_debug_option *options, unsigned int option_count);
++void vkd3d_set_thread_name(const char *name);
++
+ static inline unsigned int vkd3d_popcount(unsigned int v)
+ {
+ #ifdef _MSC_VER
+     return __popcnt(v);
+-#elif defined(__MINGW32__)
++#elif defined(HAVE_BUILTIN_POPCOUNT)
+     return __builtin_popcount(v);
+ #else
+     v -= (v >> 1) & 0x55555555;
+@@ -305,6 +427,63 @@ static inline uint32_t vkd3d_atomic_increment_u32(uint32_t volatile *x)
+     return vkd3d_atomic_add_fetch_u32(x, 1);
+ }
+ 
++struct vkd3d_mutex
++{
++#ifdef _WIN32
++    CRITICAL_SECTION lock;
++#else
++    pthread_mutex_t lock;
++#endif
++};
++
++static inline void vkd3d_mutex_init(struct vkd3d_mutex *lock)
++{
++#ifdef _WIN32
++    InitializeCriticalSection(&lock->lock);
++#else
++    int ret;
++
++    if ((ret = pthread_mutex_init(&lock->lock, NULL)))
++        ERR("Failed to initialise the mutex, ret %d.\n", ret);
++#endif
++}
++
++static inline void vkd3d_mutex_lock(struct vkd3d_mutex *lock)
++{
++#ifdef _WIN32
++    EnterCriticalSection(&lock->lock);
++#else
++    int ret;
++
++    if ((ret = pthread_mutex_lock(&lock->lock)))
++        ERR("Failed to lock the mutex, ret %d.\n", ret);
++#endif
++}
++
++static inline void vkd3d_mutex_unlock(struct vkd3d_mutex *lock)
++{
++#ifdef _WIN32
++    LeaveCriticalSection(&lock->lock);
++#else
++    int ret;
++
++    if ((ret = pthread_mutex_unlock(&lock->lock)))
++        ERR("Failed to unlock the mutex, ret %d.\n", ret);
++#endif
++}
++
++static inline void vkd3d_mutex_destroy(struct vkd3d_mutex *lock)
++{
++#ifdef _WIN32
++    DeleteCriticalSection(&lock->lock);
++#else
++    int ret;
++
++    if ((ret = pthread_mutex_destroy(&lock->lock)))
++        ERR("Failed to destroy the mutex, ret %d.\n", ret);
++#endif
++}
++
+ static inline void vkd3d_parse_version(const char *version, int *major, int *minor)
+ {
+     *major = atoi(version);
+diff --git a/libs/vkd3d/include/private/vkd3d_memory.h b/libs/vkd3d/include/private/vkd3d_memory.h
+index 8a2edb1000d..bb177e39add 100644
+--- a/libs/vkd3d/include/private/vkd3d_memory.h
++++ b/libs/vkd3d/include/private/vkd3d_memory.h
+@@ -24,7 +24,7 @@
+ #include <stdlib.h>
+ #include <string.h>
+ 
+-#include "vkd3d_debug.h"
++#include "vkd3d_common.h"
+ 
+ static inline void *vkd3d_malloc(size_t size)
+ {
+diff --git a/libs/vkd3d/libs/vkd3d-common/blob.c b/libs/vkd3d/libs/vkd3d-common/blob.c
+index dbb26de7d73..6bc95dc55c4 100644
+--- a/libs/vkd3d/libs/vkd3d-common/blob.c
++++ b/libs/vkd3d/libs/vkd3d-common/blob.c
+@@ -21,7 +21,6 @@
+ #define CONST_VTABLE
+ #include "vkd3d.h"
+ #include "vkd3d_blob.h"
+-#include "vkd3d_debug.h"
+ #include "vkd3d_memory.h"
+ #include "d3d12shader.h"
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-common/debug.c b/libs/vkd3d/libs/vkd3d-common/debug.c
+index e12cd39450a..4523fc997ef 100644
+--- a/libs/vkd3d/libs/vkd3d-common/debug.c
++++ b/libs/vkd3d/libs/vkd3d-common/debug.c
+@@ -20,7 +20,7 @@
+ # define _WIN32_WINNT 0x0600    /* For InitOnceExecuteOnce(). */
+ #endif
+ 
+-#include "vkd3d_debug.h"
++#include "vkd3d_common.h"
+ 
+ #include <assert.h>
+ #include <ctype.h>
+diff --git a/libs/vkd3d/libs/vkd3d-common/error.c b/libs/vkd3d/libs/vkd3d-common/error.c
+index 3572669ac1c..b8350a5404c 100644
+--- a/libs/vkd3d/libs/vkd3d-common/error.c
++++ b/libs/vkd3d/libs/vkd3d-common/error.c
+@@ -17,7 +17,6 @@
+  */
+ 
+ #include "vkd3d_common.h"
+-#include "vkd3d_debug.h"
+ 
+ HRESULT hresult_from_vkd3d_result(int vkd3d_result)
+ {
+diff --git a/libs/vkd3d/libs/vkd3d-shader/ir.c b/libs/vkd3d/libs/vkd3d-shader/ir.c
+index ec32faae8da..4f0226187af 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/ir.c
++++ b/libs/vkd3d/libs/vkd3d-shader/ir.c
+@@ -4393,11 +4393,9 @@ fail:
+     return ret;
+ }
+ 
+-enum vkd3d_result vkd3d_shader_normalise(struct vkd3d_shader_parser *parser,
+-        const struct vkd3d_shader_compile_info *compile_info)
++enum vkd3d_result vsir_program_normalise(struct vsir_program *program, uint64_t config_flags,
++        const struct vkd3d_shader_compile_info *compile_info, struct vkd3d_shader_message_context *message_context)
+ {
+-    struct vkd3d_shader_message_context *message_context = parser->message_context;
+-    struct vsir_program *program = &parser->program;
+     enum vkd3d_result result = VKD3D_OK;
+ 
+     remove_dcl_temps(program);
+@@ -4488,7 +4486,7 @@ enum vkd3d_result vkd3d_shader_normalise(struct vkd3d_shader_parser *parser,
+     if (TRACE_ON())
+         vkd3d_shader_trace(program);
+ 
+-    if ((result = vsir_program_validate(program, parser->config_flags,
++    if ((result = vsir_program_validate(program, config_flags,
+             compile_info->source_name, message_context)) < 0)
+         return result;
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/spirv.c b/libs/vkd3d/libs/vkd3d-shader/spirv.c
+index f830bbdaa6d..673400efd69 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/spirv.c
++++ b/libs/vkd3d/libs/vkd3d-shader/spirv.c
+@@ -10133,7 +10133,8 @@ static int spirv_compiler_generate_spirv(struct spirv_compiler *compiler,
+     enum vkd3d_result result = VKD3D_OK;
+     unsigned int i;
+ 
+-    if ((result = vkd3d_shader_normalise(parser, compile_info)) < 0)
++    if ((result = vsir_program_normalise(program, compiler->config_flags,
++            compile_info, compiler->message_context)) < 0)
+         return result;
+ 
+     if (program->temp_count)
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+index 7503d564af0..a33b6d2d967 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+@@ -1321,6 +1321,8 @@ struct vsir_program
+ 
+ bool vsir_program_init(struct vsir_program *program, const struct vkd3d_shader_version *version, unsigned int reserve);
+ void vsir_program_cleanup(struct vsir_program *program);
++enum vkd3d_result vsir_program_normalise(struct vsir_program *program, uint64_t config_flags,
++        const struct vkd3d_shader_compile_info *compile_info, struct vkd3d_shader_message_context *message_context);
+ enum vkd3d_result vsir_program_validate(struct vsir_program *program, uint64_t config_flags,
+         const char *source_name, struct vkd3d_shader_message_context *message_context);
+ 
+@@ -1784,7 +1786,4 @@ void dxbc_writer_add_section(struct dxbc_writer *dxbc, uint32_t tag, const void
+ void dxbc_writer_init(struct dxbc_writer *dxbc);
+ int dxbc_writer_write(struct dxbc_writer *dxbc, struct vkd3d_shader_code *code);
+ 
+-enum vkd3d_result vkd3d_shader_normalise(struct vkd3d_shader_parser *parser,
+-        const struct vkd3d_shader_compile_info *compile_info);
+-
+ #endif  /* __VKD3D_SHADER_PRIVATE_H */
+diff --git a/libs/vkd3d/libs/vkd3d/vkd3d_private.h b/libs/vkd3d/libs/vkd3d/vkd3d_private.h
+index 34a98c4fc3d..39d892a6fa7 100644
+--- a/libs/vkd3d/libs/vkd3d/vkd3d_private.h
++++ b/libs/vkd3d/libs/vkd3d/vkd3d_private.h
+@@ -203,36 +203,11 @@ union vkd3d_thread_handle
+     void *handle;
+ };
+ 
+-struct vkd3d_mutex
+-{
+-    CRITICAL_SECTION lock;
+-};
+-
+ struct vkd3d_cond
+ {
+     CONDITION_VARIABLE cond;
+ };
+ 
+-static inline void vkd3d_mutex_init(struct vkd3d_mutex *lock)
+-{
+-    InitializeCriticalSection(&lock->lock);
+-}
+-
+-static inline void vkd3d_mutex_lock(struct vkd3d_mutex *lock)
+-{
+-    EnterCriticalSection(&lock->lock);
+-}
+-
+-static inline void vkd3d_mutex_unlock(struct vkd3d_mutex *lock)
+-{
+-    LeaveCriticalSection(&lock->lock);
+-}
+-
+-static inline void vkd3d_mutex_destroy(struct vkd3d_mutex *lock)
+-{
+-    DeleteCriticalSection(&lock->lock);
+-}
+-
+ static inline void vkd3d_cond_init(struct vkd3d_cond *cond)
+ {
+     InitializeConditionVariable(&cond->cond);
+@@ -288,53 +263,11 @@ union vkd3d_thread_handle
+     void *handle;
+ };
+ 
+-struct vkd3d_mutex
+-{
+-    pthread_mutex_t lock;
+-};
+-
+ struct vkd3d_cond
+ {
+     pthread_cond_t cond;
+ };
+ 
+-
+-static inline void vkd3d_mutex_init(struct vkd3d_mutex *lock)
+-{
+-    int ret;
+-
+-    ret = pthread_mutex_init(&lock->lock, NULL);
+-    if (ret)
+-        ERR("Could not initialize the mutex, error %d.\n", ret);
+-}
+-
+-static inline void vkd3d_mutex_lock(struct vkd3d_mutex *lock)
+-{
+-    int ret;
+-
+-    ret = pthread_mutex_lock(&lock->lock);
+-    if (ret)
+-        ERR("Could not lock the mutex, error %d.\n", ret);
+-}
+-
+-static inline void vkd3d_mutex_unlock(struct vkd3d_mutex *lock)
+-{
+-    int ret;
+-
+-    ret = pthread_mutex_unlock(&lock->lock);
+-    if (ret)
+-        ERR("Could not unlock the mutex, error %d.\n", ret);
+-}
+-
+-static inline void vkd3d_mutex_destroy(struct vkd3d_mutex *lock)
+-{
+-    int ret;
+-
+-    ret = pthread_mutex_destroy(&lock->lock);
+-    if (ret)
+-        ERR("Could not destroy the mutex, error %d.\n", ret);
+-}
+-
+ static inline void vkd3d_cond_init(struct vkd3d_cond *cond)
+ {
+     int ret;
+-- 
+2.43.0
+
