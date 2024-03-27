@@ -1,4 +1,4 @@
-From 0a5214d0fe032778fa3ca4ee60c3d2ba64f8f4c0 Mon Sep 17 00:00:00 2001
+From 2c5da9b35cb387a1ca09fe49f662189536ee664a Mon Sep 17 00:00:00 2001
 From: Matthew Wong <itsmattkc@gmail.com>
 Date: Fri, 18 Sep 2020 00:47:13 +0000
 Subject: [PATCH] ddraw: Implement Pick() and GetPickRecords().
@@ -31,16 +31,16 @@ Signed-off-by: Matthew Wong <itsmattkc@gmail.com>
 Signed-off-by: Myah Caron <qsniyg@protonmail.com>
 ---
  dlls/ddraw/ddraw_private.h |   7 +-
- dlls/ddraw/device.c        |  67 ++++++++++++--
+ dlls/ddraw/device.c        |  77 ++++++++++++----
  dlls/ddraw/executebuffer.c | 176 ++++++++++++++++++++++++++++++++++++-
  dlls/ddraw/tests/ddraw1.c  | 133 ++++++++++++++++++++++++++++
- 4 files changed, 373 insertions(+), 10 deletions(-)
+ 4 files changed, 372 insertions(+), 21 deletions(-)
 
 diff --git a/dlls/ddraw/ddraw_private.h b/dlls/ddraw/ddraw_private.h
-index 6fc93b91860..c90b894ea61 100644
+index 1f0c94a9c6e..157384e3579 100644
 --- a/dlls/ddraw/ddraw_private.h
 +++ b/dlls/ddraw/ddraw_private.h
-@@ -338,6 +338,11 @@ struct d3d_device
+@@ -337,6 +337,11 @@ struct d3d_device
      struct d3d_viewport *current_viewport;
      D3DVIEWPORT7 active_viewport;
  
@@ -52,7 +52,7 @@ index 6fc93b91860..c90b894ea61 100644
      /* Required to keep track which of two available texture blending modes in d3ddevice3 is used */
      BOOL legacyTextureBlending;
      D3DTEXTUREBLEND texture_map_blend;
-@@ -571,7 +576,7 @@ struct d3d_execute_buffer *unsafe_impl_from_IDirect3DExecuteBuffer(IDirect3DExec
+@@ -573,7 +578,7 @@ struct d3d_execute_buffer *unsafe_impl_from_IDirect3DExecuteBuffer(IDirect3DExec
  
  /* The execute function */
  HRESULT d3d_execute_buffer_execute(struct d3d_execute_buffer *execute_buffer,
@@ -62,20 +62,30 @@ index 6fc93b91860..c90b894ea61 100644
  /*****************************************************************************
   * IDirect3DVertexBuffer
 diff --git a/dlls/ddraw/device.c b/dlls/ddraw/device.c
-index bc1d91ee00b..82a813f9064 100644
+index f64db3aa633..fe29bf0d16e 100644
 --- a/dlls/ddraw/device.c
 +++ b/dlls/ddraw/device.c
-@@ -349,6 +349,9 @@ static ULONG WINAPI d3d_device_inner_Release(IUnknown *iface)
+@@ -321,17 +321,8 @@ static ULONG WINAPI d3d_device_inner_Release(IUnknown *iface)
              IDirect3DDevice3_DeleteViewport(&This->IDirect3DDevice3_iface, &vp->IDirect3DViewport3_iface);
          }
  
+-        wined3d_stateblock_decref(This->state);
+-        if (This->recording)
+-            wined3d_stateblock_decref(This->recording);
+-
+-        /* Releasing the render target below may release the last reference to the ddraw object. Detach
+-         * the device from it before so it doesn't try to save / restore state on the teared down device. */
+-        if (This->ddraw)
+-        {
+-            list_remove(&This->ddraw_entry);
+-            This->ddraw = NULL;
+-        }
 +        if (This->pick_record_size > 0)
 +            free(This->pick_records);
-+
+ 
          TRACE("Releasing render target %p.\n", This->rt_iface);
          rt_iface = This->rt_iface;
-         This->rt_iface = NULL;
-@@ -758,7 +761,7 @@ static HRESULT WINAPI d3d_device1_Execute(IDirect3DDevice *iface,
+@@ -739,7 +730,7 @@ static HRESULT WINAPI d3d_device1_Execute(IDirect3DDevice *iface,
  
      /* Execute... */
      wined3d_mutex_lock();
@@ -84,7 +94,7 @@ index bc1d91ee00b..82a813f9064 100644
      wined3d_mutex_unlock();
  
      return hr;
-@@ -1025,16 +1028,44 @@ static HRESULT WINAPI d3d_device1_NextViewport(IDirect3DDevice *iface,
+@@ -1006,16 +997,44 @@ static HRESULT WINAPI d3d_device1_NextViewport(IDirect3DDevice *iface,
   *        x2 and y2 are ignored.
   *
   * Returns:
@@ -133,7 +143,7 @@ index bc1d91ee00b..82a813f9064 100644
  }
  
  /*****************************************************************************
-@@ -1050,13 +1081,35 @@ static HRESULT WINAPI d3d_device1_Pick(IDirect3DDevice *iface, IDirect3DExecuteB
+@@ -1031,13 +1050,35 @@ static HRESULT WINAPI d3d_device1_Pick(IDirect3DDevice *iface, IDirect3DExecuteB
   *  D3DPickRec: Address to store the resulting D3DPICKRECORD array.
   *
   * Returns:
@@ -172,7 +182,7 @@ index bc1d91ee00b..82a813f9064 100644
      return D3D_OK;
  }
 diff --git a/dlls/ddraw/executebuffer.c b/dlls/ddraw/executebuffer.c
-index 320ce6649d4..84366dafd7d 100644
+index 0cf0bf121f3..89915fb7145 100644
 --- a/dlls/ddraw/executebuffer.c
 +++ b/dlls/ddraw/executebuffer.c
 @@ -45,15 +45,106 @@ static void _dump_D3DEXECUTEBUFFERDESC(const D3DEXECUTEBUFFERDESC *lpDesc) {
@@ -378,7 +388,7 @@ index 320ce6649d4..84366dafd7d 100644
                              /* Drop through. */
                          case 2:
                              indices[(i * primitive_size) + 1] = ci->v2;
-@@ -426,6 +597,7 @@ HRESULT d3d_execute_buffer_execute(struct d3d_execute_buffer *buffer, struct d3d
+@@ -424,6 +595,7 @@ HRESULT d3d_execute_buffer_execute(struct d3d_execute_buffer *buffer, struct d3d
  end_of_buffer:
      return D3D_OK;
  }
@@ -387,7 +397,7 @@ index 320ce6649d4..84366dafd7d 100644
  static inline struct d3d_execute_buffer *impl_from_IDirect3DExecuteBuffer(IDirect3DExecuteBuffer *iface)
  {
 diff --git a/dlls/ddraw/tests/ddraw1.c b/dlls/ddraw/tests/ddraw1.c
-index d8fcb188c40..bacd9049d6e 100644
+index 0940aa8d78a..faf4e2b7694 100644
 --- a/dlls/ddraw/tests/ddraw1.c
 +++ b/dlls/ddraw/tests/ddraw1.c
 @@ -15467,6 +15467,137 @@ static void test_enum_devices(void)
@@ -536,7 +546,7 @@ index d8fcb188c40..bacd9049d6e 100644
      DestroyWindow(window);
  }
  
-@@ -15646,6 +15778,7 @@ START_TEST(ddraw1)
+@@ -15749,6 +15881,7 @@ START_TEST(ddraw1)
      test_vtbl_protection();
      test_window_position();
      test_get_display_mode();
