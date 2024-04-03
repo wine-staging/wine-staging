@@ -1,0 +1,815 @@
+From 5541aae5a354e5610a3a054a4ff71aee60562542 Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Thu, 4 Apr 2024 09:47:35 +1100
+Subject: [PATCH] Updated vkd3d to 4b0a328a2b58a86e3529ddcc2cdc785a08625f81.
+
+---
+ libs/vkd3d/include/vkd3d_shader.h           |   9 +
+ libs/vkd3d/libs/vkd3d-shader/dxil.c         |  76 ++++++
+ libs/vkd3d/libs/vkd3d-shader/fx.c           |   9 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl.c         |  12 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl.h         |   7 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl.l         |   1 +
+ libs/vkd3d/libs/vkd3d-shader/hlsl.y         |  71 +++---
+ libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c |  25 +-
+ libs/vkd3d/libs/vkd3d-shader/ir.c           | 248 ++++++++++----------
+ 9 files changed, 265 insertions(+), 193 deletions(-)
+
+diff --git a/libs/vkd3d/include/vkd3d_shader.h b/libs/vkd3d/include/vkd3d_shader.h
+index 0ce2ef67b50..5cc36e186e2 100644
+--- a/libs/vkd3d/include/vkd3d_shader.h
++++ b/libs/vkd3d/include/vkd3d_shader.h
+@@ -21,6 +21,7 @@
+ 
+ #include <stdbool.h>
+ #include <stdint.h>
++#include <stddef.h>
+ #include <vkd3d_types.h>
+ 
+ #ifdef __cplusplus
+@@ -321,6 +322,14 @@ enum vkd3d_shader_compile_option_name
+      * \since 1.12
+      */
+     VKD3D_SHADER_COMPILE_OPTION_WARN_IMPLICIT_TRUNCATION = 0x0000000c,
++    /**
++     * If \a value is nonzero, empty constant buffers descriptions are
++     * written out in the output effect binary. This option applies only
++     * to fx_4_0 and fx_4_1 profiles and is otherwise ignored.
++     *
++     * \since 1.12
++     */
++    VKD3D_SHADER_COMPILE_OPTION_INCLUDE_EMPTY_BUFFERS_IN_EFFECTS = 0x0000000d,
+ 
+     VKD3D_FORCE_32_BIT_ENUM(VKD3D_SHADER_COMPILE_OPTION_NAME),
+ };
+diff --git a/libs/vkd3d/libs/vkd3d-shader/dxil.c b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+index 0787ee13930..b5a61d99d3f 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/dxil.c
++++ b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+@@ -382,6 +382,9 @@ enum dx_intrinsic_opcode
+     DX_UMAD                         =  49,
+     DX_IBFE                         =  51,
+     DX_UBFE                         =  52,
++    DX_DOT2                         =  54,
++    DX_DOT3                         =  55,
++    DX_DOT4                         =  56,
+     DX_CREATE_HANDLE                =  57,
+     DX_CBUFFER_LOAD_LEGACY          =  59,
+     DX_SAMPLE                       =  60,
+@@ -410,6 +413,7 @@ enum dx_intrinsic_opcode
+     DX_GROUP_ID                     =  94,
+     DX_THREAD_ID_IN_GROUP           =  95,
+     DX_FLATTENED_THREAD_ID_IN_GROUP =  96,
++    DX_MAKE_DOUBLE                  = 101,
+     DX_SPLIT_DOUBLE                 = 102,
+     DX_LEGACY_F32TOF16              = 130,
+     DX_LEGACY_F16TOF32              = 131,
+@@ -2372,6 +2376,12 @@ static void src_param_init_scalar(struct vkd3d_shader_src_param *param, unsigned
+     param->modifiers = VKD3DSPSM_NONE;
+ }
+ 
++static void src_param_init_vector(struct vkd3d_shader_src_param *param, unsigned int component_count)
++{
++    param->swizzle = VKD3D_SHADER_NO_SWIZZLE & ((1ull << VKD3D_SHADER_SWIZZLE_SHIFT(component_count)) - 1);
++    param->modifiers = VKD3DSPSM_NONE;
++}
++
+ static void src_param_init_from_value(struct vkd3d_shader_src_param *param, const struct sm6_value *src)
+ {
+     src_param_init(param);
+@@ -4473,6 +4483,48 @@ static void sm6_parser_emit_dx_discard(struct sm6_parser *sm6, enum dx_intrinsic
+         src_param_init_from_value(src_param, operands[0]);
+ }
+ 
++static void sm6_parser_emit_dx_dot(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
++        const struct sm6_value **operands, struct function_emission_state *state)
++{
++    struct vkd3d_shader_src_param *src_params;
++    struct vkd3d_shader_instruction *ins;
++    struct vkd3d_shader_register regs[2];
++    enum vkd3d_shader_opcode handler_idx;
++    unsigned int component_count;
++
++    switch (op)
++    {
++        case DX_DOT2:
++            handler_idx = VKD3DSIH_DP2;
++            component_count = 2;
++            break;
++        case DX_DOT3:
++            handler_idx = VKD3DSIH_DP3;
++            component_count = 3;
++            break;
++        case DX_DOT4:
++            handler_idx = VKD3DSIH_DP4;
++            component_count = 4;
++            break;
++        default:
++            vkd3d_unreachable();
++    }
++
++    if (!sm6_parser_emit_composite_construct(sm6, &operands[0], component_count, state, &regs[0]))
++        return;
++    if (!sm6_parser_emit_composite_construct(sm6, &operands[component_count], component_count, state, &regs[1]))
++        return;
++
++    ins = state->ins;
++    vsir_instruction_init(ins, &sm6->p.location, handler_idx);
++    if (!(src_params = instruction_src_params_alloc(ins, 2, sm6)))
++        return;
++    src_param_init_vector_from_reg(&src_params[0], &regs[0]);
++    src_param_init_vector_from_reg(&src_params[1], &regs[1]);
++
++    instruction_dst_param_init_ssa_scalar(ins, sm6);
++}
++
+ static void sm6_parser_emit_dx_fabs(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
+         const struct sm6_value **operands, struct function_emission_state *state)
+ {
+@@ -4699,6 +4751,26 @@ static void sm6_parser_emit_dx_load_input(struct sm6_parser *sm6, enum dx_intrin
+     instruction_dst_param_init_ssa_scalar(ins, sm6);
+ }
+ 
++static void sm6_parser_emit_dx_make_double(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
++        const struct sm6_value **operands, struct function_emission_state *state)
++{
++    struct vkd3d_shader_src_param *src_params;
++    struct vkd3d_shader_instruction *ins;
++    struct vkd3d_shader_register reg;
++
++    if (!sm6_parser_emit_composite_construct(sm6, &operands[0], 2, state, &reg))
++        return;
++
++    ins = state->ins;
++    vsir_instruction_init(ins, &sm6->p.location, VKD3DSIH_MOV);
++    if (!(src_params = instruction_src_params_alloc(ins, 1, sm6)))
++        return;
++    src_params[0].reg = reg;
++    src_param_init_vector(&src_params[0], 2);
++
++    instruction_dst_param_init_ssa_scalar(ins, sm6);
++}
++
+ static void sm6_parser_emit_dx_raw_buffer_load(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
+         const struct sm6_value **operands, struct function_emission_state *state)
+ {
+@@ -5329,6 +5401,9 @@ static const struct sm6_dx_opcode_info sm6_dx_op_table[] =
+     [DX_DERIV_FINEX                   ] = {"e", "R",    sm6_parser_emit_dx_unary},
+     [DX_DERIV_FINEY                   ] = {"e", "R",    sm6_parser_emit_dx_unary},
+     [DX_DISCARD                       ] = {"v", "1",    sm6_parser_emit_dx_discard},
++    [DX_DOT2                          ] = {"g", "RRRR", sm6_parser_emit_dx_dot},
++    [DX_DOT3                          ] = {"g", "RRRRRR", sm6_parser_emit_dx_dot},
++    [DX_DOT4                          ] = {"g", "RRRRRRRR", sm6_parser_emit_dx_dot},
+     [DX_EXP                           ] = {"g", "R",    sm6_parser_emit_dx_unary},
+     [DX_FABS                          ] = {"g", "R",    sm6_parser_emit_dx_fabs},
+     [DX_FIRST_BIT_HI                  ] = {"i", "m",    sm6_parser_emit_dx_unary},
+@@ -5356,6 +5431,7 @@ static const struct sm6_dx_opcode_info sm6_dx_op_table[] =
+     [DX_LEGACY_F32TOF16               ] = {"i", "f",    sm6_parser_emit_dx_unary},
+     [DX_LOAD_INPUT                    ] = {"o", "ii8i", sm6_parser_emit_dx_load_input},
+     [DX_LOG                           ] = {"g", "R",    sm6_parser_emit_dx_unary},
++    [DX_MAKE_DOUBLE                   ] = {"d", "ii",   sm6_parser_emit_dx_make_double},
+     [DX_RAW_BUFFER_LOAD               ] = {"o", "Hii8i", sm6_parser_emit_dx_raw_buffer_load},
+     [DX_RAW_BUFFER_STORE              ] = {"v", "Hiioooocc", sm6_parser_emit_dx_raw_buffer_store},
+     [DX_ROUND_NE                      ] = {"g", "R",    sm6_parser_emit_dx_unary},
+diff --git a/libs/vkd3d/libs/vkd3d-shader/fx.c b/libs/vkd3d/libs/vkd3d-shader/fx.c
+index 9424a5685a7..466908cd82b 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d/libs/vkd3d-shader/fx.c
+@@ -90,6 +90,7 @@ struct fx_write_context
+     int status;
+ 
+     bool child_effect;
++    bool include_empty_buffers;
+ 
+     const struct fx_write_context_ops *ops;
+ };
+@@ -191,6 +192,7 @@ static void fx_write_context_init(struct hlsl_ctx *ctx, const struct fx_write_co
+     list_init(&fx->types);
+ 
+     fx->child_effect = fx->ops->are_child_effects_supported && ctx->child_effect;
++    fx->include_empty_buffers = version == 4 && ctx->include_empty_buffers;
+ 
+     hlsl_block_init(&block);
+     hlsl_prepend_global_uniform_copy(fx->ctx, &block);
+@@ -1038,7 +1040,8 @@ static void write_fx_4_buffer(struct hlsl_buffer *b, struct fx_write_context *fx
+     put_u32(buffer, bind_point); /* Bind point */
+ 
+     put_u32(buffer, 0); /* Annotations count */
+-    /* FIXME: write annotations */
++    if (b->annotations)
++        hlsl_fixme(ctx, &b->loc, "Writing annotations for buffers is not implemented.");
+ 
+     count = 0;
+     size = 0;
+@@ -1064,7 +1067,9 @@ static void write_buffers(struct fx_write_context *fx)
+ 
+     LIST_FOR_EACH_ENTRY(buffer, &fx->ctx->buffers, struct hlsl_buffer, entry)
+     {
+-        if (!buffer->size)
++        if (!buffer->size && !fx->include_empty_buffers)
++            continue;
++        if (!strcmp(buffer->name, "$Params"))
+             continue;
+ 
+         write_fx_4_buffer(buffer, fx);
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.c b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+index cba954c988f..5638a03a8f5 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+@@ -2031,7 +2031,8 @@ struct hlsl_ir_function_decl *hlsl_new_func_decl(struct hlsl_ctx *ctx,
+ }
+ 
+ struct hlsl_buffer *hlsl_new_buffer(struct hlsl_ctx *ctx, enum hlsl_buffer_type type, const char *name,
+-        uint32_t modifiers, const struct hlsl_reg_reservation *reservation, const struct vkd3d_shader_location *loc)
++        uint32_t modifiers, const struct hlsl_reg_reservation *reservation, struct hlsl_scope *annotations,
++        const struct vkd3d_shader_location *loc)
+ {
+     struct hlsl_buffer *buffer;
+ 
+@@ -2042,6 +2043,7 @@ struct hlsl_buffer *hlsl_new_buffer(struct hlsl_ctx *ctx, enum hlsl_buffer_type
+     buffer->modifiers = modifiers;
+     if (reservation)
+         buffer->reservation = *reservation;
++    buffer->annotations = annotations;
+     buffer->loc = *loc;
+     list_add_tail(&ctx->buffers, &buffer->entry);
+     return buffer;
+@@ -3586,10 +3588,10 @@ static bool hlsl_ctx_init(struct hlsl_ctx *ctx, const struct vkd3d_shader_compil
+     list_init(&ctx->buffers);
+ 
+     if (!(ctx->globals_buffer = hlsl_new_buffer(ctx, HLSL_BUFFER_CONSTANT,
+-            hlsl_strdup(ctx, "$Globals"), 0, NULL, &ctx->location)))
++            hlsl_strdup(ctx, "$Globals"), 0, NULL, NULL, &ctx->location)))
+         return false;
+     if (!(ctx->params_buffer = hlsl_new_buffer(ctx, HLSL_BUFFER_CONSTANT,
+-            hlsl_strdup(ctx, "$Params"), 0, NULL, &ctx->location)))
++            hlsl_strdup(ctx, "$Params"), 0, NULL, NULL, &ctx->location)))
+         return false;
+     ctx->cur_buffer = ctx->globals_buffer;
+ 
+@@ -3620,6 +3622,10 @@ static bool hlsl_ctx_init(struct hlsl_ctx *ctx, const struct vkd3d_shader_compil
+                 ctx->warn_implicit_truncation = option->value;
+                 break;
+ 
++            case VKD3D_SHADER_COMPILE_OPTION_INCLUDE_EMPTY_BUFFERS_IN_EFFECTS:
++                ctx->include_empty_buffers = option->value;
++                break;
++
+             default:
+                 break;
+         }
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.h b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+index c6321f2ead2..aa9cb14fc8d 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.h
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+@@ -375,6 +375,7 @@ struct hlsl_attribute
+ #define HLSL_STORAGE_NOPERSPECTIVE       0x00008000
+ #define HLSL_STORAGE_LINEAR              0x00010000
+ #define HLSL_MODIFIER_SINGLE             0x00020000
++#define HLSL_MODIFIER_EXPORT             0x00040000
+ 
+ #define HLSL_TYPE_MODIFIERS_MASK     (HLSL_MODIFIER_PRECISE | HLSL_MODIFIER_VOLATILE | \
+                                       HLSL_MODIFIER_CONST | HLSL_MODIFIER_ROW_MAJOR | \
+@@ -806,6 +807,8 @@ struct hlsl_buffer
+      * If provided, it should be of type 'b' if type is HLSL_BUFFER_CONSTANT and 't' if type is
+      *   HLSL_BUFFER_TEXTURE. */
+     struct hlsl_reg_reservation reservation;
++    /* Scope that contains annotations for this buffer. */
++    struct hlsl_scope *annotations;
+     /* Item entry for hlsl_ctx.buffers */
+     struct list entry;
+ 
+@@ -925,6 +928,7 @@ struct hlsl_ctx
+ 
+     bool semantic_compat_mapping;
+     bool child_effect;
++    bool include_empty_buffers;
+     bool warn_implicit_truncation;
+ };
+ 
+@@ -1228,7 +1232,8 @@ struct hlsl_ir_node *hlsl_new_binary_expr(struct hlsl_ctx *ctx, enum hlsl_ir_exp
+         struct hlsl_ir_node *arg2);
+ struct hlsl_ir_node *hlsl_new_bool_constant(struct hlsl_ctx *ctx, bool b, const struct vkd3d_shader_location *loc);
+ struct hlsl_buffer *hlsl_new_buffer(struct hlsl_ctx *ctx, enum hlsl_buffer_type type, const char *name,
+-        uint32_t modifiers, const struct hlsl_reg_reservation *reservation, const struct vkd3d_shader_location *loc);
++        uint32_t modifiers, const struct hlsl_reg_reservation *reservation, struct hlsl_scope *annotations,
++        const struct vkd3d_shader_location *loc);
+ struct hlsl_ir_node *hlsl_new_call(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl *decl,
+         const struct vkd3d_shader_location *loc);
+ struct hlsl_ir_node *hlsl_new_cast(struct hlsl_ctx *ctx, struct hlsl_ir_node *node, struct hlsl_type *type,
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.l b/libs/vkd3d/libs/vkd3d-shader/hlsl.l
+index 600e2cf2c6a..88b917eff11 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.l
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.l
+@@ -88,6 +88,7 @@ DomainShader            {return KW_DOMAINSHADER;        }
+ do                      {return KW_DO;                  }
+ double                  {return KW_DOUBLE;              }
+ else                    {return KW_ELSE;                }
++export                  {return KW_EXPORT;              }
+ extern                  {return KW_EXTERN;              }
+ false                   {return KW_FALSE;               }
+ for                     {return KW_FOR;                 }
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.y b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+index 52c2176542c..e02e0c540f9 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.y
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+@@ -2091,24 +2091,23 @@ static void initialize_var_components(struct hlsl_ctx *ctx, struct hlsl_block *i
+     }
+ }
+ 
+-static bool type_has_object_components(struct hlsl_type *type, bool must_be_in_struct)
++static bool type_has_object_components(const struct hlsl_type *type)
+ {
+-    if (type->class == HLSL_CLASS_OBJECT)
+-        return !must_be_in_struct;
+     if (type->class == HLSL_CLASS_ARRAY)
+-        return type_has_object_components(type->e.array.type, must_be_in_struct);
++        return type_has_object_components(type->e.array.type);
+ 
+     if (type->class == HLSL_CLASS_STRUCT)
+     {
+-        unsigned int i;
+-
+-        for (i = 0; i < type->e.record.field_count; ++i)
++        for (unsigned int i = 0; i < type->e.record.field_count; ++i)
+         {
+-            if (type_has_object_components(type->e.record.fields[i].type, false))
++            if (type_has_object_components(type->e.record.fields[i].type))
+                 return true;
+         }
++
++        return false;
+     }
+-    return false;
++
++    return !hlsl_is_numeric_type(type);
+ }
+ 
+ static bool type_has_numeric_components(struct hlsl_type *type)
+@@ -2146,6 +2145,18 @@ static void check_invalid_in_out_modifiers(struct hlsl_ctx *ctx, unsigned int mo
+     }
+ }
+ 
++static void check_invalid_object_fields(struct hlsl_ctx *ctx, const struct hlsl_ir_var *var)
++{
++    const struct hlsl_type *type = var->data_type;
++
++    while (type->class == HLSL_CLASS_ARRAY)
++        type = type->e.array.type;
++
++    if (type->class == HLSL_CLASS_STRUCT && type_has_object_components(type))
++        hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
++                "Target profile doesn't support objects as struct members in uniform variables.");
++}
++
+ static void declare_var(struct hlsl_ctx *ctx, struct parse_variable_def *v)
+ {
+     struct hlsl_type *basic_type = v->basic_type;
+@@ -2271,12 +2282,8 @@ static void declare_var(struct hlsl_ctx *ctx, struct parse_variable_def *v)
+         if (!(modifiers & HLSL_STORAGE_STATIC))
+             var->storage_modifiers |= HLSL_STORAGE_UNIFORM;
+ 
+-        if (ctx->profile->major_version < 5 && (var->storage_modifiers & HLSL_STORAGE_UNIFORM) &&
+-                type_has_object_components(var->data_type, true))
+-        {
+-            hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
+-                    "Target profile doesn't support objects as struct members in uniform variables.");
+-        }
++        if (ctx->profile->major_version < 5 && (var->storage_modifiers & HLSL_STORAGE_UNIFORM))
++            check_invalid_object_fields(ctx, var);
+ 
+         if ((func = hlsl_get_first_func_decl(ctx, var->name)))
+         {
+@@ -2312,7 +2319,7 @@ static void declare_var(struct hlsl_ctx *ctx, struct parse_variable_def *v)
+     }
+ 
+     if ((var->storage_modifiers & HLSL_STORAGE_STATIC) && type_has_numeric_components(var->data_type)
+-            && type_has_object_components(var->data_type, false))
++            && type_has_object_components(var->data_type))
+     {
+         hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
+                 "Static variables cannot have both numeric and resource components.");
+@@ -2400,7 +2407,7 @@ static struct hlsl_block *initialize_vars(struct hlsl_ctx *ctx, struct list *var
+ 
+             /* Initialize statics to zero by default. */
+ 
+-            if (type_has_object_components(var->data_type, false))
++            if (type_has_object_components(var->data_type))
+             {
+                 free_parse_variable_def(v);
+                 continue;
+@@ -4358,22 +4365,7 @@ static struct hlsl_block *add_constructor(struct hlsl_ctx *ctx, struct hlsl_type
+         return NULL;
+ 
+     for (i = 0; i < params->args_count; ++i)
+-    {
+-        struct hlsl_ir_node *arg = params->args[i];
+-
+-        if (arg->data_type->class == HLSL_CLASS_OBJECT)
+-        {
+-            struct vkd3d_string_buffer *string;
+-
+-            if ((string = hlsl_type_to_string(ctx, arg->data_type)))
+-                hlsl_error(ctx, &arg->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
+-                        "Invalid type %s for constructor argument.", string->buffer);
+-            hlsl_release_string_buffer(ctx, string);
+-            continue;
+-        }
+-
+-        initialize_var_components(ctx, params->instrs, var, &idx, arg);
+-    }
++        initialize_var_components(ctx, params->instrs, var, &idx, params->args[i]);
+ 
+     if (!(load = hlsl_new_var_load(ctx, var, loc)))
+         return NULL;
+@@ -5349,6 +5341,7 @@ static void validate_uav_type(struct hlsl_ctx *ctx, enum hlsl_sampler_dim dim,
+ %token KW_DOMAINSHADER
+ %token KW_DOUBLE
+ %token KW_ELSE
++%token KW_EXPORT
+ %token KW_EXTERN
+ %token KW_FALSE
+ %token KW_FOR
+@@ -5673,12 +5666,12 @@ effect_group:
+         }
+ 
+ buffer_declaration:
+-      var_modifiers buffer_type any_identifier colon_attribute
++      var_modifiers buffer_type any_identifier colon_attribute annotations_opt
+         {
+             if ($4.semantic.name)
+                 hlsl_error(ctx, &@4, VKD3D_SHADER_ERROR_HLSL_INVALID_SEMANTIC, "Semantics are not allowed on buffers.");
+ 
+-            if (!(ctx->cur_buffer = hlsl_new_buffer(ctx, $2, $3, $1, &$4.reg_reservation, &@3)))
++            if (!(ctx->cur_buffer = hlsl_new_buffer(ctx, $2, $3, $1, &$4.reg_reservation, $5, &@3)))
+                 YYABORT;
+         }
+ 
+@@ -5977,9 +5970,9 @@ func_prototype_no_attrs:
+             /* Functions are unconditionally inlined. */
+             modifiers &= ~HLSL_MODIFIER_INLINE;
+ 
+-            if (modifiers & ~HLSL_MODIFIERS_MAJORITY_MASK)
++            if (modifiers & ~(HLSL_MODIFIERS_MAJORITY_MASK | HLSL_MODIFIER_EXPORT))
+                 hlsl_error(ctx, &@1, VKD3D_SHADER_ERROR_HLSL_INVALID_MODIFIER,
+-                        "Only majority modifiers are allowed on functions.");
++                        "Unexpected modifier used on a function.");
+             if (!(type = apply_type_modifiers(ctx, $2, &modifiers, true, &@1)))
+                 YYABORT;
+             if ((var = hlsl_get_var(ctx->globals, $3)))
+@@ -6876,6 +6869,10 @@ var_modifiers:
+         {
+             $$ = add_modifiers(ctx, $2, HLSL_MODIFIER_INLINE, &@1);
+         }
++    | KW_EXPORT var_modifiers
++        {
++            $$ = add_modifiers(ctx, $2, HLSL_MODIFIER_EXPORT, &@1);
++        }
+     | var_identifier var_modifiers
+         {
+             if (!strcmp($1, "precise"))
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+index 5c09ce04f5b..6f2de93767b 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+@@ -427,7 +427,10 @@ static void prepend_input_copy_recurse(struct hlsl_ctx *ctx, struct hlsl_block *
+             {
+                 field = &type->e.record.fields[i];
+                 if (hlsl_type_is_resource(field->type))
++                {
++                    hlsl_fixme(ctx, &field->loc, "Prepend uniform copies for resource components within structs.");
+                     continue;
++                }
+                 validate_field_semantic(ctx, field);
+                 semantic = &field->semantic;
+                 elem_semantic_index = semantic->index;
+@@ -5237,25 +5240,6 @@ static void parse_numthreads_attribute(struct hlsl_ctx *ctx, const struct hlsl_a
+     }
+ }
+ 
+-static bool type_has_object_components(struct hlsl_type *type)
+-{
+-    if (type->class == HLSL_CLASS_OBJECT)
+-        return true;
+-    if (type->class == HLSL_CLASS_ARRAY)
+-        return type_has_object_components(type->e.array.type);
+-    if (type->class == HLSL_CLASS_STRUCT)
+-    {
+-        unsigned int i;
+-
+-        for (i = 0; i < type->e.record.field_count; ++i)
+-        {
+-            if (type_has_object_components(type->e.record.fields[i].type))
+-                return true;
+-        }
+-    }
+-    return false;
+-}
+-
+ static void remove_unreachable_code(struct hlsl_ctx *ctx, struct hlsl_block *body)
+ {
+     struct hlsl_ir_node *instr, *next;
+@@ -5363,9 +5347,6 @@ int hlsl_emit_bytecode(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl *entry
+         }
+         else
+         {
+-            if (type_has_object_components(var->data_type))
+-                hlsl_fixme(ctx, &var->loc, "Prepend uniform copies for object components within structs.");
+-
+             if (hlsl_get_multiarray_element_type(var->data_type)->class != HLSL_CLASS_STRUCT
+                     && !var->semantic.name)
+             {
+diff --git a/libs/vkd3d/libs/vkd3d-shader/ir.c b/libs/vkd3d/libs/vkd3d-shader/ir.c
+index 4f0226187af..7230d0e8b61 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/ir.c
++++ b/libs/vkd3d/libs/vkd3d-shader/ir.c
+@@ -3627,32 +3627,6 @@ struct vsir_cfg_node_sorter
+     struct vsir_block_list available_blocks;
+ };
+ 
+-static enum vkd3d_result vsir_cfg_node_sorter_make_node_available(struct vsir_cfg_node_sorter *sorter, struct vsir_block *block)
+-{
+-    struct vsir_block_list *loop = NULL;
+-    struct vsir_cfg_node_sorter_stack_item *item;
+-    enum vkd3d_result ret;
+-
+-    if (sorter->cfg->loops_by_header[block->label - 1] != SIZE_MAX)
+-        loop = &sorter->cfg->loops[sorter->cfg->loops_by_header[block->label - 1]];
+-
+-    if ((ret = vsir_block_list_add_checked(&sorter->available_blocks, block)) < 0)
+-        return ret;
+-
+-    if (!loop)
+-        return VKD3D_OK;
+-
+-    if (!vkd3d_array_reserve((void **)&sorter->stack, &sorter->stack_capacity, sorter->stack_count + 1, sizeof(*sorter->stack)))
+-        return VKD3D_ERROR_OUT_OF_MEMORY;
+-
+-    item = &sorter->stack[sorter->stack_count++];
+-    item->loop = loop;
+-    item->seen_count = 0;
+-    item->begin = sorter->cfg->order.count;
+-
+-    return VKD3D_OK;
+-}
+-
+ /* Topologically sort the blocks according to the forward edges. By
+  * definition if the input CFG is reducible then its forward edges
+  * form a DAG, so a topological sorting exists. In order to compute it
+@@ -3727,7 +3701,7 @@ static enum vkd3d_result vsir_cfg_sort_nodes(struct vsir_cfg *cfg)
+ 
+     vsir_block_list_init(&sorter.available_blocks);
+ 
+-    if ((ret = vsir_cfg_node_sorter_make_node_available(&sorter, cfg->entry)) < 0)
++    if ((ret = vsir_block_list_add_checked(&sorter.available_blocks, cfg->entry)) < 0)
+         goto fail;
+ 
+     while (sorter.available_blocks.count != 0)
+@@ -3754,6 +3728,24 @@ static enum vkd3d_result vsir_cfg_sort_nodes(struct vsir_cfg *cfg)
+                 break;
+         }
+ 
++        /* If the node is a loop header, open the loop. */
++        if (sorter.cfg->loops_by_header[block->label - 1] != SIZE_MAX)
++        {
++            struct vsir_block_list *loop = &sorter.cfg->loops[sorter.cfg->loops_by_header[block->label - 1]];
++
++            if (loop)
++            {
++                if (!vkd3d_array_reserve((void **)&sorter.stack, &sorter.stack_capacity,
++                        sorter.stack_count + 1, sizeof(*sorter.stack)))
++                    return VKD3D_ERROR_OUT_OF_MEMORY;
++
++                inner_stack_item = &sorter.stack[sorter.stack_count++];
++                inner_stack_item->loop = loop;
++                inner_stack_item->seen_count = 0;
++                inner_stack_item->begin = sorter.cfg->order.count;
++            }
++        }
++
+         vsir_block_list_remove_index(&sorter.available_blocks, i);
+         block->order_pos = cfg->order.count;
+         if ((ret = vsir_block_list_add_checked(&cfg->order, block)) < 0)
+@@ -3795,7 +3787,7 @@ static enum vkd3d_result vsir_cfg_sort_nodes(struct vsir_cfg *cfg)
+ 
+             if (in_degrees[successor->label - 1] == 0)
+             {
+-                if ((ret = vsir_cfg_node_sorter_make_node_available(&sorter, successor)) < 0)
++                if ((ret = vsir_block_list_add_checked(&sorter.available_blocks, successor)) < 0)
+                     goto fail;
+             }
+         }
+@@ -4393,106 +4385,6 @@ fail:
+     return ret;
+ }
+ 
+-enum vkd3d_result vsir_program_normalise(struct vsir_program *program, uint64_t config_flags,
+-        const struct vkd3d_shader_compile_info *compile_info, struct vkd3d_shader_message_context *message_context)
+-{
+-    enum vkd3d_result result = VKD3D_OK;
+-
+-    remove_dcl_temps(program);
+-
+-    if ((result = vsir_program_lower_texkills(program)) < 0)
+-        return result;
+-
+-    if (program->shader_version.major >= 6)
+-    {
+-        struct vsir_cfg cfg;
+-
+-        if ((result = lower_switch_to_if_ladder(program)) < 0)
+-            return result;
+-
+-        if ((result = vsir_program_materialise_ssas_to_temps(program)) < 0)
+-            return result;
+-
+-        if ((result = vsir_cfg_init(&cfg, program, message_context)) < 0)
+-            return result;
+-
+-        vsir_cfg_compute_dominators(&cfg);
+-
+-        if ((result = vsir_cfg_compute_loops(&cfg)) < 0)
+-        {
+-            vsir_cfg_cleanup(&cfg);
+-            return result;
+-        }
+-
+-        if ((result = vsir_cfg_sort_nodes(&cfg)) < 0)
+-        {
+-            vsir_cfg_cleanup(&cfg);
+-            return result;
+-        }
+-
+-        if ((result = vsir_cfg_generate_synthetic_loop_intervals(&cfg)) < 0)
+-        {
+-            vsir_cfg_cleanup(&cfg);
+-            return result;
+-        }
+-
+-        if ((result = vsir_cfg_build_structured_program(&cfg)) < 0)
+-        {
+-            vsir_cfg_cleanup(&cfg);
+-            return result;
+-        }
+-
+-        if ((result = vsir_cfg_emit_structured_program(&cfg)) < 0)
+-        {
+-            vsir_cfg_cleanup(&cfg);
+-            return result;
+-        }
+-
+-        vsir_cfg_cleanup(&cfg);
+-    }
+-    else
+-    {
+-        if (program->shader_version.type != VKD3D_SHADER_TYPE_PIXEL)
+-        {
+-            if ((result = vsir_program_remap_output_signature(program, compile_info, message_context)) < 0)
+-                return result;
+-        }
+-
+-        if (program->shader_version.type == VKD3D_SHADER_TYPE_HULL)
+-        {
+-            if ((result = instruction_array_flatten_hull_shader_phases(&program->instructions)) < 0)
+-                return result;
+-
+-            if ((result = instruction_array_normalise_hull_shader_control_point_io(&program->instructions,
+-                    &program->input_signature)) < 0)
+-                return result;
+-        }
+-
+-        if ((result = vsir_program_normalise_io_registers(program)) < 0)
+-            return result;
+-
+-        if ((result = instruction_array_normalise_flat_constants(program)) < 0)
+-            return result;
+-
+-        remove_dead_code(program);
+-
+-        if ((result = vsir_program_normalise_combined_samplers(program, message_context)) < 0)
+-            return result;
+-    }
+-
+-    if ((result = vsir_program_flatten_control_flow_constructs(program, message_context)) < 0)
+-        return result;
+-
+-    if (TRACE_ON())
+-        vkd3d_shader_trace(program);
+-
+-    if ((result = vsir_program_validate(program, config_flags,
+-            compile_info->source_name, message_context)) < 0)
+-        return result;
+-
+-    return result;
+-}
+-
+ struct validation_context
+ {
+     struct vkd3d_shader_message_context *message_context;
+@@ -5357,3 +5249,103 @@ fail:
+ 
+     return VKD3D_ERROR_OUT_OF_MEMORY;
+ }
++
++enum vkd3d_result vsir_program_normalise(struct vsir_program *program, uint64_t config_flags,
++        const struct vkd3d_shader_compile_info *compile_info, struct vkd3d_shader_message_context *message_context)
++{
++    enum vkd3d_result result = VKD3D_OK;
++
++    remove_dcl_temps(program);
++
++    if ((result = vsir_program_lower_texkills(program)) < 0)
++        return result;
++
++    if (program->shader_version.major >= 6)
++    {
++        struct vsir_cfg cfg;
++
++        if ((result = lower_switch_to_if_ladder(program)) < 0)
++            return result;
++
++        if ((result = vsir_program_materialise_ssas_to_temps(program)) < 0)
++            return result;
++
++        if ((result = vsir_cfg_init(&cfg, program, message_context)) < 0)
++            return result;
++
++        vsir_cfg_compute_dominators(&cfg);
++
++        if ((result = vsir_cfg_compute_loops(&cfg)) < 0)
++        {
++            vsir_cfg_cleanup(&cfg);
++            return result;
++        }
++
++        if ((result = vsir_cfg_sort_nodes(&cfg)) < 0)
++        {
++            vsir_cfg_cleanup(&cfg);
++            return result;
++        }
++
++        if ((result = vsir_cfg_generate_synthetic_loop_intervals(&cfg)) < 0)
++        {
++            vsir_cfg_cleanup(&cfg);
++            return result;
++        }
++
++        if ((result = vsir_cfg_build_structured_program(&cfg)) < 0)
++        {
++            vsir_cfg_cleanup(&cfg);
++            return result;
++        }
++
++        if ((result = vsir_cfg_emit_structured_program(&cfg)) < 0)
++        {
++            vsir_cfg_cleanup(&cfg);
++            return result;
++        }
++
++        vsir_cfg_cleanup(&cfg);
++    }
++    else
++    {
++        if (program->shader_version.type != VKD3D_SHADER_TYPE_PIXEL)
++        {
++            if ((result = vsir_program_remap_output_signature(program, compile_info, message_context)) < 0)
++                return result;
++        }
++
++        if (program->shader_version.type == VKD3D_SHADER_TYPE_HULL)
++        {
++            if ((result = instruction_array_flatten_hull_shader_phases(&program->instructions)) < 0)
++                return result;
++
++            if ((result = instruction_array_normalise_hull_shader_control_point_io(&program->instructions,
++                    &program->input_signature)) < 0)
++                return result;
++        }
++
++        if ((result = vsir_program_normalise_io_registers(program)) < 0)
++            return result;
++
++        if ((result = instruction_array_normalise_flat_constants(program)) < 0)
++            return result;
++
++        remove_dead_code(program);
++
++        if ((result = vsir_program_normalise_combined_samplers(program, message_context)) < 0)
++            return result;
++    }
++
++    if ((result = vsir_program_flatten_control_flow_constructs(program, message_context)) < 0)
++        return result;
++
++    if (TRACE_ON())
++        vkd3d_shader_trace(program);
++
++    if ((result = vsir_program_validate(program, config_flags,
++            compile_info->source_name, message_context)) < 0)
++        return result;
++
++    return result;
++}
+-- 
+2.43.0
+
