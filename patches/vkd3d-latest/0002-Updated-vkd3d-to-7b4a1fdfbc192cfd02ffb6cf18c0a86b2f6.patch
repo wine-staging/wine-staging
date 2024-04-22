@@ -1,0 +1,1024 @@
+From 299d2898cbd133a56a365e62b5bb1688b0dc85a5 Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Tue, 23 Apr 2024 08:01:19 +1000
+Subject: [PATCH] Updated vkd3d to 7b4a1fdfbc192cfd02ffb6cf18c0a86b2f6eaeb4.
+
+---
+ libs/vkd3d/include/private/vkd3d_common.h     |  70 ++++++
+ libs/vkd3d/include/vkd3d.h                    | 115 +++++++++-
+ libs/vkd3d/libs/vkd3d-shader/dxil.c           | 205 ++++++++++++++++--
+ libs/vkd3d/libs/vkd3d-shader/glsl.c           |   1 +
+ libs/vkd3d/libs/vkd3d-shader/hlsl.h           |   2 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl.y           |  72 ++++--
+ libs/vkd3d/libs/vkd3d-shader/ir.c             |  14 +-
+ .../libs/vkd3d-shader/vkd3d_shader_private.h  |   5 +
+ libs/vkd3d/libs/vkd3d/vkd3d_private.h         |  84 -------
+ 9 files changed, 430 insertions(+), 138 deletions(-)
+
+diff --git a/libs/vkd3d/include/private/vkd3d_common.h b/libs/vkd3d/include/private/vkd3d_common.h
+index f9df47d339c..1da73bcfb2e 100644
+--- a/libs/vkd3d/include/private/vkd3d_common.h
++++ b/libs/vkd3d/include/private/vkd3d_common.h
+@@ -492,6 +492,76 @@ static inline void vkd3d_mutex_destroy(struct vkd3d_mutex *lock)
+ #endif
+ }
+ 
++struct vkd3d_cond
++{
++#ifdef _WIN32
++    CONDITION_VARIABLE cond;
++#else
++    pthread_cond_t cond;
++#endif
++};
++
++static inline void vkd3d_cond_init(struct vkd3d_cond *cond)
++{
++#ifdef _WIN32
++    InitializeConditionVariable(&cond->cond);
++#else
++    int ret;
++
++    if ((ret = pthread_cond_init(&cond->cond, NULL)))
++        ERR("Failed to initialise the condition variable, ret %d.\n", ret);
++#endif
++}
++
++static inline void vkd3d_cond_signal(struct vkd3d_cond *cond)
++{
++#ifdef _WIN32
++    WakeConditionVariable(&cond->cond);
++#else
++    int ret;
++
++    if ((ret = pthread_cond_signal(&cond->cond)))
++        ERR("Failed to signal the condition variable, ret %d.\n", ret);
++#endif
++}
++
++static inline void vkd3d_cond_broadcast(struct vkd3d_cond *cond)
++{
++#ifdef _WIN32
++    WakeAllConditionVariable(&cond->cond);
++#else
++    int ret;
++
++    if ((ret = pthread_cond_broadcast(&cond->cond)))
++        ERR("Failed to broadcast the condition variable, ret %d.\n", ret);
++#endif
++}
++
++static inline void vkd3d_cond_wait(struct vkd3d_cond *cond, struct vkd3d_mutex *lock)
++{
++#ifdef _WIN32
++    if (!SleepConditionVariableCS(&cond->cond, &lock->lock, INFINITE))
++        ERR("Failed to wait on the condition variable, error %lu.\n", GetLastError());
++#else
++    int ret;
++
++    if ((ret = pthread_cond_wait(&cond->cond, &lock->lock)))
++        ERR("Failed to wait on the condition variable, ret %d.\n", ret);
++#endif
++}
++
++static inline void vkd3d_cond_destroy(struct vkd3d_cond *cond)
++{
++#ifdef _WIN32
++    /* Nothing to do. */
++#else
++    int ret;
++
++    if ((ret = pthread_cond_destroy(&cond->cond)))
++        ERR("Failed to destroy the condition variable, ret %d.\n", ret);
++#endif
++}
++
+ static inline void vkd3d_parse_version(const char *version, int *major, int *minor)
+ {
+     *major = atoi(version);
+diff --git a/libs/vkd3d/include/vkd3d.h b/libs/vkd3d/include/vkd3d.h
+index aa68b70e1bf..71c56331d86 100644
+--- a/libs/vkd3d/include/vkd3d.h
++++ b/libs/vkd3d/include/vkd3d.h
+@@ -46,21 +46,37 @@ extern "C" {
+  * \since 1.0
+  */
+ 
++/** The type of a chained structure. */
+ enum vkd3d_structure_type
+ {
+-    /* 1.0 */
++    /** The structure is a vkd3d_instance_create_info structure. */
+     VKD3D_STRUCTURE_TYPE_INSTANCE_CREATE_INFO,
++    /** The structure is a vkd3d_device_create_info structure. */
+     VKD3D_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
++    /** The structure is a vkd3d_image_resource_create_info structure. */
+     VKD3D_STRUCTURE_TYPE_IMAGE_RESOURCE_CREATE_INFO,
+ 
+-    /* 1.1 */
++    /**
++     * The structure is a vkd3d_optional_instance_extensions_info structure.
++     * \since 1.1
++     */
+     VKD3D_STRUCTURE_TYPE_OPTIONAL_INSTANCE_EXTENSIONS_INFO,
+ 
+-    /* 1.2 */
++    /**
++     * The structure is a vkd3d_optional_device_extensions_info structure.
++     * \since 1.2
++     */
+     VKD3D_STRUCTURE_TYPE_OPTIONAL_DEVICE_EXTENSIONS_INFO,
++    /**
++     * The structure is a vkd3d_application_info structure.
++     * \since 1.2
++     */
+     VKD3D_STRUCTURE_TYPE_APPLICATION_INFO,
+ 
+-    /* 1.3 */
++    /**
++     * The structure is a vkd3d_host_time_domain_info structure.
++     * \since 1.3
++     */
+     VKD3D_STRUCTURE_TYPE_HOST_TIME_DOMAIN_INFO,
+ 
+     VKD3D_FORCE_32_BIT_ENUM(VKD3D_STRUCTURE_TYPE),
+@@ -93,54 +109,131 @@ typedef HRESULT (*PFN_vkd3d_join_thread)(void *thread);
+ 
+ struct vkd3d_instance;
+ 
++/**
++ * A chained structure containing instance creation parameters.
++ */
+ struct vkd3d_instance_create_info
+ {
++    /** Must be set to VKD3D_STRUCTURE_TYPE_INSTANCE_CREATE_INFO. */
+     enum vkd3d_structure_type type;
++    /** Optional pointer to a structure containing further parameters. */
+     const void *next;
+ 
++    /** An pointer to a function to signal events. */
+     PFN_vkd3d_signal_event pfn_signal_event;
++    /**
++     * An optional pointer to a function to create threads. If this is NULL vkd3d will use a
++     * function of its choice, depending on the platform. It must be NULL if and only if
++     * pfn_join_thread is NULL.
++     */
+     PFN_vkd3d_create_thread pfn_create_thread;
++    /**
++     * An optional pointer to a function to join threads. If this is NULL vkd3d will use a
++     * function of its choice, depending on the platform. It must be NULL if and only if
++     * pfn_create_thread is NULL.
++     */
+     PFN_vkd3d_join_thread pfn_join_thread;
++    /** The size of type WCHAR. It must be 2 or 4 and should normally be set to sizeof(WCHAR). */
+     size_t wchar_size;
+ 
+-    /* If set to NULL, libvkd3d loads libvulkan. */
++    /**
++     * A pointer to the vkGetInstanceProcAddr Vulkan function, which will be used to load all the
++     * other Vulkan functions. If set to NULL, vkd3d will search and use the Vulkan loader.
++     */
+     PFN_vkGetInstanceProcAddr pfn_vkGetInstanceProcAddr;
+ 
++    /**
++     * A list of Vulkan instance extensions to request. They are intended as required, so instance
++     * creation will fail if any of them is not available.
++     */
+     const char * const *instance_extensions;
++    /** The number of elements in the instance_extensions array. */
+     uint32_t instance_extension_count;
+ };
+ 
+-/* Extends vkd3d_instance_create_info. Available since 1.1. */
++/**
++ * A chained structure to specify optional instance extensions.
++ *
++ * This structure extends vkd3d_instance_create_info.
++ *
++ * \since 1.1
++ */
+ struct vkd3d_optional_instance_extensions_info
+ {
++    /** Must be set to VKD3D_STRUCTURE_TYPE_OPTIONAL_INSTANCE_EXTENSIONS_INFO. */
+     enum vkd3d_structure_type type;
++    /** Optional pointer to a structure containing further parameters. */
+     const void *next;
+ 
++    /**
++     * A list of optional Vulkan instance extensions to request. Instance creation does not fail if
++     * they are not available.
++     */
+     const char * const *extensions;
++    /** The number of elements in the extensions array. */
+     uint32_t extension_count;
+ };
+ 
+-/* Extends vkd3d_instance_create_info. Available since 1.2. */
++/**
++ * A chained structure to specify application information.
++ *
++ * This structure extends vkd3d_instance_create_info.
++ *
++ * \since 1.2
++ */
+ struct vkd3d_application_info
+ {
++    /** Must be set to VKD3D_STRUCTURE_TYPE_APPLICATION_INFO. */
+     enum vkd3d_structure_type type;
++    /** Optional pointer to a structure containing further parameters. */
+     const void *next;
+ 
++    /**
++     * The application's name, to be passed to the Vulkan implementation. If it is NULL, a name is
++     * computed from the process executable filename. If that cannot be done, the empty string is
++     * used.
++     */
+     const char *application_name;
++    /** The application's version, to be passed to the Vulkan implementation. */
+     uint32_t application_version;
+ 
+-    const char *engine_name; /* "vkd3d" if NULL */
+-    uint32_t engine_version; /* vkd3d version if engine_name is NULL */
+-
++    /**
++     * The engine name, to be passed to the Vulkan implementation. If it is NULL, "vkd3d" is used.
++     */
++    const char *engine_name;
++    /**
++     * The engine version, to be passed to the Vulkan implementation. If it is 0, the version is
++     * computed from the vkd3d library version.
++     */
++    uint32_t engine_version;
++
++    /**
++     * The vkd3d API version to use, to guarantee backward compatibility of the shared library. If
++     * this chained structure is not used then VKD3D_API_VERSION_1_0 is used.
++     */
+     enum vkd3d_api_version api_version;
+ };
+ 
+-/* Extends vkd3d_instance_create_info. Available since 1.3. */
++/**
++ * A chained structure to specify the host time domain.
++ *
++ * This structure extends vkd3d_instance_create_info.
++ *
++ * \since 1.3
++ */
+ struct vkd3d_host_time_domain_info
+ {
++    /** Must be set to VKD3D_STRUCTURE_TYPE_HOST_TIME_DOMAIN_INFO. */
+     enum vkd3d_structure_type type;
++    /** Optional pointer to a structure containing further parameters. */
+     const void *next;
+ 
++    /**
++     * The number of clock ticks per second, used for GetClockCalibration(). It should normally
++     * match the expected result of QueryPerformanceFrequency(). If this chained structure is not
++     * used then 10 millions is used, which means that each tick is a tenth of microsecond, or
++     * equivalently 100 nanoseconds.
++     */
+     uint64_t ticks_per_second;
+ };
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/dxil.c b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+index 220ba773887..d07d5adee70 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/dxil.c
++++ b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+@@ -419,6 +419,11 @@ enum dx_intrinsic_opcode
+     DX_FLATTENED_THREAD_ID_IN_GROUP =  96,
+     DX_MAKE_DOUBLE                  = 101,
+     DX_SPLIT_DOUBLE                 = 102,
++    DX_LOAD_OUTPUT_CONTROL_POINT    = 103,
++    DX_LOAD_PATCH_CONSTANT          = 104,
++    DX_DOMAIN_LOCATION              = 105,
++    DX_STORE_PATCH_CONSTANT         = 106,
++    DX_OUTPUT_CONTROL_POINT_ID      = 107,
+     DX_PRIMITIVE_ID                 = 108,
+     DX_LEGACY_F32TOF16              = 130,
+     DX_LEGACY_F16TOF32              = 131,
+@@ -799,6 +804,7 @@ struct sm6_parser
+ 
+     struct vkd3d_shader_dst_param *output_params;
+     struct vkd3d_shader_dst_param *input_params;
++    struct vkd3d_shader_dst_param *patch_constant_params;
+     uint32_t io_regs_declared[(VKD3DSPR_COUNT + 0x1f) / 0x20];
+ 
+     struct sm6_function *functions;
+@@ -2433,10 +2439,12 @@ static void register_index_address_init(struct vkd3d_shader_register_index *idx,
+     if (sm6_value_is_constant(address))
+     {
+         idx->offset = sm6_value_get_constant_uint(address);
++        idx->rel_addr = NULL;
+     }
+     else if (sm6_value_is_undef(address))
+     {
+         idx->offset = 0;
++        idx->rel_addr = NULL;
+     }
+     else
+     {
+@@ -2515,7 +2523,7 @@ static size_t sm6_parser_compute_max_value_count(struct sm6_parser *sm6,
+              * overestimate the value count somewhat, but this should be no problem. */
+             value_count = size_add_with_overflow_check(value_count, max(block->record_count, 1u) - 1);
+             sm6->value_capacity = max(sm6->value_capacity, value_count);
+-            sm6->functions[sm6->function_count].value_count = value_count;
++            sm6->functions[sm6->function_count++].value_count = value_count;
+             /* The value count returns to its previous value after handling a function. */
+             if (value_count < SIZE_MAX)
+                 value_count = old_value_count;
+@@ -3689,12 +3697,35 @@ static enum vkd3d_shader_register_type register_type_from_dxil_semantic_kind(
+ }
+ 
+ static void sm6_parser_init_signature(struct sm6_parser *sm6, const struct shader_signature *s,
+-        enum vkd3d_shader_register_type reg_type, struct vkd3d_shader_dst_param *params)
++        bool is_input, enum vkd3d_shader_register_type reg_type, struct vkd3d_shader_dst_param *params)
+ {
++    enum vkd3d_shader_type shader_type = sm6->p.program.shader_version.type;
++    bool is_patch_constant, is_control_point;
+     struct vkd3d_shader_dst_param *param;
+     const struct signature_element *e;
+     unsigned int i, count;
+ 
++    is_patch_constant = reg_type == VKD3DSPR_PATCHCONST;
++
++    is_control_point = false;
++    if (!is_patch_constant)
++    {
++        switch (shader_type)
++        {
++            case VKD3D_SHADER_TYPE_DOMAIN:
++            case VKD3D_SHADER_TYPE_GEOMETRY:
++                is_control_point = is_input;
++                break;
++
++            case VKD3D_SHADER_TYPE_HULL:
++                is_control_point = true;
++                break;
++
++            default:
++                break;
++        }
++    }
++
+     for (i = 0; i < s->element_count; ++i)
+     {
+         e = &s->elements[i];
+@@ -3709,8 +3740,18 @@ static void sm6_parser_init_signature(struct sm6_parser *sm6, const struct shade
+ 
+         dst_param_io_init(param, e, reg_type);
+         count = 0;
+-        if (e->register_count > 1)
++
++        if (is_control_point)
++        {
++            if (reg_type == VKD3DSPR_OUTPUT)
++                param->reg.idx[count].rel_addr = instruction_array_create_outpointid_param(&sm6->p.program.instructions);
++            param->reg.idx[count++].offset = 0;
++        }
++
++        if (e->register_count > 1 || (is_patch_constant && vsir_sysval_semantic_is_tess_factor(e->sysval_semantic)))
+             param->reg.idx[count++].offset = 0;
++
++        assert(count < ARRAY_SIZE(param->reg.idx));
+         param->reg.idx[count++].offset = i;
+         param->reg.idx_count = count;
+     }
+@@ -3718,12 +3759,21 @@ static void sm6_parser_init_signature(struct sm6_parser *sm6, const struct shade
+ 
+ static void sm6_parser_init_output_signature(struct sm6_parser *sm6, const struct shader_signature *output_signature)
+ {
+-    sm6_parser_init_signature(sm6, output_signature, VKD3DSPR_OUTPUT, sm6->output_params);
++    sm6_parser_init_signature(sm6, output_signature, false, VKD3DSPR_OUTPUT, sm6->output_params);
+ }
+ 
+ static void sm6_parser_init_input_signature(struct sm6_parser *sm6, const struct shader_signature *input_signature)
+ {
+-    sm6_parser_init_signature(sm6, input_signature, VKD3DSPR_INPUT, sm6->input_params);
++    sm6_parser_init_signature(sm6, input_signature, true, VKD3DSPR_INPUT, sm6->input_params);
++}
++
++static void sm6_parser_init_patch_constant_signature(struct sm6_parser *sm6,
++        const struct shader_signature *patch_constant_signature)
++{
++    bool is_input = sm6->p.program.shader_version.type == VKD3D_SHADER_TYPE_DOMAIN;
++
++    sm6_parser_init_signature(sm6, patch_constant_signature, is_input, VKD3DSPR_PATCHCONST,
++            sm6->patch_constant_params);
+ }
+ 
+ static const struct sm6_value *sm6_parser_next_function_definition(struct sm6_parser *sm6)
+@@ -4752,6 +4802,33 @@ static void sm6_parser_emit_dx_discard(struct sm6_parser *sm6, enum dx_intrinsic
+         src_param_init_from_value(src_param, operands[0]);
+ }
+ 
++static void sm6_parser_emit_dx_domain_location(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
++        const struct sm6_value **operands, struct function_emission_state *state)
++{
++    struct vkd3d_shader_instruction *ins = state->ins;
++    struct vkd3d_shader_src_param *src_param;
++    unsigned int component_idx;
++
++    vsir_instruction_init(ins, &sm6->p.location, VKD3DSIH_MOV);
++
++    if ((component_idx = sm6_value_get_constant_uint(operands[0])) >= 3)
++    {
++        WARN("Invalid component index %u.\n", component_idx);
++        vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_OPERAND,
++                "Invalid domain location component index %u.", component_idx);
++        component_idx = 0;
++    }
++
++    if (!(src_param = instruction_src_params_alloc(ins, 1, sm6)))
++        return;
++    sm6_parser_dcl_register_builtin(sm6, VKD3DSIH_DCL_INPUT, VKD3DSPR_TESSCOORD, VKD3D_DATA_FLOAT, 3);
++    vsir_register_init(&src_param->reg, VKD3DSPR_TESSCOORD, VKD3D_DATA_FLOAT, 0);
++    src_param->reg.dimension = VSIR_DIMENSION_VEC4;
++    src_param_init_scalar(src_param, component_idx);
++
++    instruction_dst_param_init_ssa_scalar(ins, sm6);
++}
++
+ static void sm6_parser_emit_dx_dot(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
+         const struct sm6_value **operands, struct function_emission_state *state)
+ {
+@@ -4989,18 +5066,43 @@ static void sm6_parser_emit_dx_tertiary(struct sm6_parser *sm6, enum dx_intrinsi
+ static void sm6_parser_emit_dx_load_input(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
+         const struct sm6_value **operands, struct function_emission_state *state)
+ {
++    bool is_control_point = op == DX_LOAD_OUTPUT_CONTROL_POINT;
++    bool is_patch_constant = op == DX_LOAD_PATCH_CONSTANT;
+     struct vkd3d_shader_instruction *ins = state->ins;
++    unsigned int count, row_index, column_index;
++    const struct vkd3d_shader_dst_param *params;
+     struct vkd3d_shader_src_param *src_param;
+     const struct shader_signature *signature;
+-    unsigned int row_index, column_index;
+     const struct signature_element *e;
+ 
+     row_index = sm6_value_get_constant_uint(operands[0]);
+     column_index = sm6_value_get_constant_uint(operands[2]);
+ 
++    if (is_control_point && operands[3]->is_undefined)
++    {
++        /* dxcompiler will compile source which does this, so let it pass. */
++        WARN("Control point id is undefined.\n");
++        vkd3d_shader_parser_warning(&sm6->p, VKD3D_SHADER_WARNING_DXIL_UNDEFINED_OPERAND,
++                "The index for a control point load is undefined.");
++    }
++
+     vsir_instruction_init(ins, &sm6->p.location, VKD3DSIH_MOV);
+ 
+-    signature = &sm6->p.program.input_signature;
++    if (is_patch_constant)
++    {
++        signature = &sm6->p.program.patch_constant_signature;
++        params = sm6->patch_constant_params;
++    }
++    else if (is_control_point)
++    {
++        signature = &sm6->p.program.output_signature;
++        params = sm6->output_params;
++    }
++    else
++    {
++        signature = &sm6->p.program.input_signature;
++        params = sm6->input_params;
++    }
+     if (row_index >= signature->element_count)
+     {
+         WARN("Invalid row index %u.\n", row_index);
+@@ -5012,10 +5114,18 @@ static void sm6_parser_emit_dx_load_input(struct sm6_parser *sm6, enum dx_intrin
+ 
+     if (!(src_param = instruction_src_params_alloc(ins, 1, sm6)))
+         return;
+-    src_param->reg = sm6->input_params[row_index].reg;
++    src_param->reg = params[row_index].reg;
+     src_param_init_scalar(src_param, column_index);
++    count = 0;
++
+     if (e->register_count > 1)
+-        register_index_address_init(&src_param->reg.idx[0], operands[1], sm6);
++        register_index_address_init(&src_param->reg.idx[count++], operands[1], sm6);
++
++    if (!is_patch_constant && !operands[3]->is_undefined)
++    {
++        assert(src_param->reg.idx_count > count);
++        register_index_address_init(&src_param->reg.idx[count], operands[3], sm6);
++    }
+ 
+     instruction_dst_param_init_ssa_scalar(ins, sm6);
+ }
+@@ -5040,6 +5150,12 @@ static void sm6_parser_emit_dx_make_double(struct sm6_parser *sm6, enum dx_intri
+     instruction_dst_param_init_ssa_scalar(ins, sm6);
+ }
+ 
++static void sm6_parser_emit_dx_output_control_point_id(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
++        const struct sm6_value **operands, struct function_emission_state *state)
++{
++    sm6_parser_emit_dx_input_register_mov(sm6, state->ins, VKD3DSPR_OUTPOINTID, VKD3D_DATA_UINT);
++}
++
+ static void sm6_parser_emit_dx_primitive_id(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
+         const struct sm6_value **operands, struct function_emission_state *state)
+ {
+@@ -5473,6 +5589,7 @@ static void sm6_parser_emit_dx_split_double(struct sm6_parser *sm6, enum dx_intr
+ static void sm6_parser_emit_dx_store_output(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
+         const struct sm6_value **operands, struct function_emission_state *state)
+ {
++    bool is_patch_constant = op == DX_STORE_PATCH_CONSTANT;
+     struct vkd3d_shader_instruction *ins = state->ins;
+     struct vkd3d_shader_src_param *src_param;
+     struct vkd3d_shader_dst_param *dst_param;
+@@ -5484,7 +5601,7 @@ static void sm6_parser_emit_dx_store_output(struct sm6_parser *sm6, enum dx_intr
+     row_index = sm6_value_get_constant_uint(operands[0]);
+     column_index = sm6_value_get_constant_uint(operands[2]);
+ 
+-    signature = &sm6->p.program.output_signature;
++    signature = is_patch_constant ? &sm6->p.program.patch_constant_signature : &sm6->p.program.output_signature;
+     if (row_index >= signature->element_count)
+     {
+         WARN("Invalid row index %u.\n", row_index);
+@@ -5516,7 +5633,7 @@ static void sm6_parser_emit_dx_store_output(struct sm6_parser *sm6, enum dx_intr
+     if (!(dst_param = instruction_dst_params_alloc(ins, 1, sm6)))
+         return;
+     dst_param_init_scalar(dst_param, column_index);
+-    dst_param->reg = sm6->output_params[row_index].reg;
++    dst_param->reg = is_patch_constant ? sm6->patch_constant_params[row_index].reg : sm6->output_params[row_index].reg;
+     if (e->register_count > 1)
+         register_index_address_init(&dst_param->reg.idx[0], operands[1], sm6);
+ 
+@@ -5736,6 +5853,7 @@ static const struct sm6_dx_opcode_info sm6_dx_op_table[] =
+     [DX_DERIV_FINEX                   ] = {"e", "R",    sm6_parser_emit_dx_unary},
+     [DX_DERIV_FINEY                   ] = {"e", "R",    sm6_parser_emit_dx_unary},
+     [DX_DISCARD                       ] = {"v", "1",    sm6_parser_emit_dx_discard},
++    [DX_DOMAIN_LOCATION               ] = {"f", "c",    sm6_parser_emit_dx_domain_location},
+     [DX_DOT2                          ] = {"g", "RRRR", sm6_parser_emit_dx_dot},
+     [DX_DOT3                          ] = {"g", "RRRRRR", sm6_parser_emit_dx_dot},
+     [DX_DOT4                          ] = {"g", "RRRRRRRR", sm6_parser_emit_dx_dot},
+@@ -5765,8 +5883,11 @@ static const struct sm6_dx_opcode_info sm6_dx_op_table[] =
+     [DX_LEGACY_F16TOF32               ] = {"f", "i",    sm6_parser_emit_dx_unary},
+     [DX_LEGACY_F32TOF16               ] = {"i", "f",    sm6_parser_emit_dx_unary},
+     [DX_LOAD_INPUT                    ] = {"o", "ii8i", sm6_parser_emit_dx_load_input},
++    [DX_LOAD_OUTPUT_CONTROL_POINT     ] = {"o", "ii8i", sm6_parser_emit_dx_load_input},
++    [DX_LOAD_PATCH_CONSTANT           ] = {"o", "ii8",  sm6_parser_emit_dx_load_input},
+     [DX_LOG                           ] = {"g", "R",    sm6_parser_emit_dx_unary},
+     [DX_MAKE_DOUBLE                   ] = {"d", "ii",   sm6_parser_emit_dx_make_double},
++    [DX_OUTPUT_CONTROL_POINT_ID       ] = {"i", "",     sm6_parser_emit_dx_output_control_point_id},
+     [DX_PRIMITIVE_ID                  ] = {"i", "",     sm6_parser_emit_dx_primitive_id},
+     [DX_RAW_BUFFER_LOAD               ] = {"o", "Hii8i", sm6_parser_emit_dx_raw_buffer_load},
+     [DX_RAW_BUFFER_STORE              ] = {"v", "Hiioooocc", sm6_parser_emit_dx_raw_buffer_store},
+@@ -5788,6 +5909,7 @@ static const struct sm6_dx_opcode_info sm6_dx_op_table[] =
+     [DX_SPLIT_DOUBLE                  ] = {"S", "d",    sm6_parser_emit_dx_split_double},
+     [DX_SQRT                          ] = {"g", "R",    sm6_parser_emit_dx_unary},
+     [DX_STORE_OUTPUT                  ] = {"v", "ii8o", sm6_parser_emit_dx_store_output},
++    [DX_STORE_PATCH_CONSTANT          ] = {"v", "ii8o", sm6_parser_emit_dx_store_output},
+     [DX_TAN                           ] = {"g", "R",    sm6_parser_emit_dx_unary},
+     [DX_TEX2DMS_GET_SAMPLE_POS        ] = {"o", "Hi",   sm6_parser_emit_dx_get_sample_pos},
+     [DX_TEXTURE_GATHER                ] = {"o", "HHffffiic", sm6_parser_emit_dx_texture_gather},
+@@ -7286,11 +7408,6 @@ static enum vkd3d_result sm6_parser_function_init(struct sm6_parser *sm6, const
+     struct sm6_block *code_block;
+     struct sm6_value *dst;
+ 
+-    if (sm6->function_count)
+-    {
+-        FIXME("Multiple functions are not supported yet.\n");
+-        return VKD3D_ERROR_INVALID_SHADER;
+-    }
+     if (!(function->declaration = sm6_parser_next_function_definition(sm6)))
+     {
+         WARN("Failed to find definition to match function body.\n");
+@@ -8976,10 +9093,15 @@ static enum vkd3d_result sm6_parser_signatures_init(struct sm6_parser *sm6, cons
+     {
+         return ret;
+     }
+-    /* TODO: patch constant signature in operand 2. */
++    if (m->u.node->operand_count > 1 && (ret = sm6_parser_read_signature(sm6, m->u.node->operands[2],
++            &sm6->p.program.patch_constant_signature, tessellator_domain)) < 0)
++    {
++        return ret;
++    }
+ 
+     sm6_parser_init_input_signature(sm6, &sm6->p.program.input_signature);
+     sm6_parser_init_output_signature(sm6, &sm6->p.program.output_signature);
++    sm6_parser_init_patch_constant_signature(sm6, &sm6->p.program.patch_constant_signature);
+ 
+     return VKD3D_OK;
+ }
+@@ -9509,9 +9631,10 @@ static struct sm6_function *sm6_parser_get_function(const struct sm6_parser *sm6
+ static enum vkd3d_result sm6_parser_init(struct sm6_parser *sm6, const char *source_name,
+         struct vkd3d_shader_message_context *message_context, struct dxbc_shader_desc *dxbc_desc)
+ {
++    size_t count, length, function_count, expected_function_count, byte_code_size = dxbc_desc->byte_code_size;
++    const struct shader_signature *patch_constant_signature = &sm6->p.program.patch_constant_signature;
+     const struct shader_signature *output_signature = &sm6->p.program.output_signature;
+     const struct shader_signature *input_signature = &sm6->p.program.input_signature;
+-    size_t count, length, function_count, byte_code_size = dxbc_desc->byte_code_size;
+     const struct vkd3d_shader_location location = {.source_name = source_name};
+     uint32_t version_token, dxil_version, token_count, magic;
+     const uint32_t *byte_code = dxbc_desc->byte_code;
+@@ -9674,7 +9797,9 @@ static enum vkd3d_result sm6_parser_init(struct sm6_parser *sm6, const char *sou
+     }
+ 
+     if (!(sm6->output_params = vsir_program_get_dst_params(&sm6->p.program, output_signature->element_count))
+-            || !(sm6->input_params = vsir_program_get_dst_params(&sm6->p.program, input_signature->element_count)))
++            || !(sm6->input_params = vsir_program_get_dst_params(&sm6->p.program, input_signature->element_count))
++            || !(sm6->patch_constant_params = vsir_program_get_dst_params(&sm6->p.program,
++            patch_constant_signature->element_count)))
+     {
+         ERR("Failed to allocate input/output parameters.\n");
+         vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_OUT_OF_MEMORY,
+@@ -9705,6 +9830,7 @@ static enum vkd3d_result sm6_parser_init(struct sm6_parser *sm6, const char *sou
+                 "Out of memory allocating DXIL value array.");
+         return VKD3D_ERROR_OUT_OF_MEMORY;
+     }
++    sm6->function_count = 0;
+     sm6->ssa_next_id = 1;
+ 
+     if ((ret = sm6_parser_globals_init(sm6)) < 0)
+@@ -9754,7 +9880,8 @@ static enum vkd3d_result sm6_parser_init(struct sm6_parser *sm6, const char *sou
+         return ret;
+     }
+ 
+-    if (!sm6_parser_require_space(sm6, output_signature->element_count + input_signature->element_count))
++    if (!sm6_parser_require_space(sm6, output_signature->element_count + input_signature->element_count
++            + patch_constant_signature->element_count))
+     {
+         vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_OUT_OF_MEMORY,
+                 "Out of memory emitting shader signature declarations.");
+@@ -9771,9 +9898,41 @@ static enum vkd3d_result sm6_parser_init(struct sm6_parser *sm6, const char *sou
+         return VKD3D_ERROR_INVALID_SHADER;
+     }
+ 
+-    assert(sm6->function_count == 1);
+-    if ((ret = sm6_function_emit_blocks(fn, sm6)) < 0)
+-        return ret;
++    if (version.type == VKD3D_SHADER_TYPE_HULL)
++    {
++        sm6_parser_add_instruction(sm6, VKD3DSIH_HS_CONTROL_POINT_PHASE);
++
++        if ((ret = sm6_function_emit_blocks(fn, sm6)) < 0)
++            return ret;
++
++        if (!(fn = sm6_parser_get_function(sm6, sm6->patch_constant_function)))
++        {
++            WARN("Failed to find patch constant function '%s'.\n", sm6->patch_constant_function);
++            vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_MODULE,
++                    "Failed to find the patch constant function '%s' for a hull shader.",
++                    sm6->patch_constant_function);
++            return VKD3D_ERROR_INVALID_SHADER;
++        }
++
++        sm6_parser_add_instruction(sm6, VKD3DSIH_HS_FORK_PHASE);
++        if ((ret = sm6_function_emit_blocks(fn, sm6)) < 0)
++            return ret;
++
++        expected_function_count = 2;
++    }
++    else
++    {
++        if ((ret = sm6_function_emit_blocks(fn, sm6)) < 0)
++            return ret;
++        expected_function_count = 1;
++    }
++
++    if (sm6->function_count > expected_function_count)
++    {
++        FIXME("%zu unhandled functions.\n", sm6->function_count - expected_function_count);
++        vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_MODULE,
++                "%zu functions were not emitted.", sm6->function_count - expected_function_count);
++    }
+ 
+     dxil_block_destroy(&sm6->root_block);
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/glsl.c b/libs/vkd3d/libs/vkd3d-shader/glsl.c
+index 3e8dd2c486b..3e482a5fc70 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/glsl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/glsl.c
+@@ -79,6 +79,7 @@ static void vkd3d_glsl_handle_instruction(struct vkd3d_glsl_generator *generator
+         case VKD3DSIH_DCL_INPUT:
+         case VKD3DSIH_DCL_OUTPUT:
+         case VKD3DSIH_DCL_OUTPUT_SIV:
++        case VKD3DSIH_NOP:
+             break;
+         case VKD3DSIH_RET:
+             shader_glsl_ret(generator, instruction);
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.h b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+index 7a8fe4de437..5e3010c4353 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.h
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+@@ -392,7 +392,7 @@ struct hlsl_attribute
+ struct hlsl_reg_reservation
+ {
+     char reg_type;
+-    unsigned int reg_index;
++    unsigned int reg_space, reg_index;
+ 
+     char offset_type;
+     unsigned int offset_index;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.y b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+index 0c196b77595..f99f322d8d1 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.y
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+@@ -1197,17 +1197,18 @@ static bool add_effect_group(struct hlsl_ctx *ctx, const char *name, struct hlsl
+     return true;
+ }
+ 
+-static struct hlsl_reg_reservation parse_reg_reservation(const char *reg_string)
++static bool parse_reservation_index(const char *string, char *type, uint32_t *index)
+ {
+-    struct hlsl_reg_reservation reservation = {0};
++    if (!sscanf(string + 1, "%u", index))
++        return false;
+ 
+-    if (!sscanf(reg_string + 1, "%u", &reservation.reg_index))
+-    {
+-        FIXME("Unsupported register reservation syntax.\n");
+-        return reservation;
+-    }
+-    reservation.reg_type = ascii_tolower(reg_string[0]);
+-    return reservation;
++    *type = ascii_tolower(string[0]);
++    return true;
++}
++
++static bool parse_reservation_space(const char *string, uint32_t *space)
++{
++    return !ascii_strncasecmp(string, "space", 5) && sscanf(string + 5, "%u", space);
+ }
+ 
+ static struct hlsl_reg_reservation parse_packoffset(struct hlsl_ctx *ctx, const char *reg_string,
+@@ -5675,8 +5676,8 @@ static bool state_block_add_entry(struct hlsl_state_block *state_block, struct h
+ %type <parameters> param_list
+ %type <parameters> parameters
+ 
+-%type <reg_reservation> register_opt
+-%type <reg_reservation> packoffset_opt
++%type <reg_reservation> register_reservation
++%type <reg_reservation> packoffset_reservation
+ 
+ %type <sampler_dim> texture_type texture_ms_type uav_type rov_type
+ 
+@@ -6300,12 +6301,12 @@ colon_attribute:
+             $$.reg_reservation.reg_type = 0;
+             $$.reg_reservation.offset_type = 0;
+         }
+-    | register_opt
++    | register_reservation
+         {
+             $$.semantic = (struct hlsl_semantic){0};
+             $$.reg_reservation = $1;
+         }
+-    | packoffset_opt
++    | packoffset_reservation
+         {
+             $$.semantic = (struct hlsl_semantic){0};
+             $$.reg_reservation = $1;
+@@ -6327,22 +6328,57 @@ semantic:
+         }
+ 
+ /* FIXME: Writemasks */
+-register_opt:
++register_reservation:
+       ':' KW_REGISTER '(' any_identifier ')'
+         {
+-            $$ = parse_reg_reservation($4);
++            memset(&$$, 0, sizeof($$));
++            if (!parse_reservation_index($4, &$$.reg_type, &$$.reg_index))
++                hlsl_error(ctx, &@4, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
++                        "Invalid register reservation '%s'.", $4);
++
+             vkd3d_free($4);
+         }
+     | ':' KW_REGISTER '(' any_identifier ',' any_identifier ')'
+         {
+-            FIXME("Ignoring shader target %s in a register reservation.\n", debugstr_a($4));
++            memset(&$$, 0, sizeof($$));
++            if (parse_reservation_index($6, &$$.reg_type, &$$.reg_index))
++            {
++                hlsl_fixme(ctx, &@4, "Reservation shader target %s.", $4);
++            }
++            else if (parse_reservation_space($6, &$$.reg_space))
++            {
++                if (!parse_reservation_index($4, &$$.reg_type, &$$.reg_index))
++                    hlsl_error(ctx, &@4, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
++                            "Invalid register reservation '%s'.", $4);
++            }
++            else
++            {
++                hlsl_error(ctx, &@6, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
++                        "Invalid register or space reservation '%s'.", $6);
++            }
++
+             vkd3d_free($4);
++            vkd3d_free($6);
++        }
++    | ':' KW_REGISTER '(' any_identifier ',' any_identifier ',' any_identifier ')'
++        {
++            hlsl_fixme(ctx, &@4, "Reservation shader target %s.", $4);
+ 
+-            $$ = parse_reg_reservation($6);
++            memset(&$$, 0, sizeof($$));
++            if (!parse_reservation_index($6, &$$.reg_type, &$$.reg_index))
++                hlsl_error(ctx, &@6, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
++                        "Invalid register reservation '%s'.", $6);
++
++            if (!parse_reservation_space($8, &$$.reg_space))
++                hlsl_error(ctx, &@8, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
++                        "Invalid register space reservation '%s'.", $8);
++
++            vkd3d_free($4);
+             vkd3d_free($6);
++            vkd3d_free($8);
+         }
+ 
+-packoffset_opt:
++packoffset_reservation:
+       ':' KW_PACKOFFSET '(' any_identifier ')'
+         {
+             $$ = parse_packoffset(ctx, $4, NULL, &@$);
+diff --git a/libs/vkd3d/libs/vkd3d-shader/ir.c b/libs/vkd3d/libs/vkd3d-shader/ir.c
+index eca18f4eb28..1f8d60c62ac 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/ir.c
++++ b/libs/vkd3d/libs/vkd3d-shader/ir.c
+@@ -636,11 +636,14 @@ static bool control_point_normaliser_is_in_control_point_phase(const struct cont
+     return normaliser->phase == VKD3DSIH_HS_CONTROL_POINT_PHASE;
+ }
+ 
+-static struct vkd3d_shader_src_param *instruction_array_create_outpointid_param(
++struct vkd3d_shader_src_param *instruction_array_create_outpointid_param(
+         struct vkd3d_shader_instruction_array *instructions)
+ {
+     struct vkd3d_shader_src_param *rel_addr;
+ 
++    if (instructions->outpointid_param)
++        return instructions->outpointid_param;
++
+     if (!(rel_addr = shader_src_param_allocator_get(&instructions->src_params, 1)))
+         return NULL;
+ 
+@@ -648,6 +651,7 @@ static struct vkd3d_shader_src_param *instruction_array_create_outpointid_param(
+     rel_addr->swizzle = 0;
+     rel_addr->modifiers = 0;
+ 
++    instructions->outpointid_param = rel_addr;
+     return rel_addr;
+ }
+ 
+@@ -3344,6 +3348,14 @@ static enum vkd3d_result vsir_cfg_init(struct vsir_cfg *cfg, struct vsir_program
+     enum vkd3d_result ret;
+     size_t i;
+ 
++    if (program->shader_version.type == VKD3D_SHADER_TYPE_HULL)
++    {
++        FIXME("Hull shaders are not supported.\n");
++        vkd3d_shader_error(message_context, NULL, VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED,
++                "The structurizer does not support hull shaders.");
++        return VKD3D_ERROR_INVALID_SHADER;
++    }
++
+     memset(cfg, 0, sizeof(*cfg));
+     cfg->message_context = message_context;
+     cfg->program = program;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+index 1f4320968d3..4434e6e98f2 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+@@ -202,6 +202,7 @@ enum vkd3d_shader_error
+     VKD3D_SHADER_WARNING_DXIL_INVALID_MASK              = 8307,
+     VKD3D_SHADER_WARNING_DXIL_INVALID_OPERATION         = 8308,
+     VKD3D_SHADER_WARNING_DXIL_IGNORING_ATTACHMENT       = 8309,
++    VKD3D_SHADER_WARNING_DXIL_UNDEFINED_OPERAND         = 8310,
+ 
+     VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED             = 9000,
+     VKD3D_SHADER_ERROR_VSIR_INVALID_HANDLER             = 9001,
+@@ -1300,6 +1301,8 @@ struct vkd3d_shader_instruction_array
+     struct vkd3d_shader_immediate_constant_buffer **icbs;
+     size_t icb_capacity;
+     size_t icb_count;
++
++    struct vkd3d_shader_src_param *outpointid_param;
+ };
+ 
+ bool shader_instruction_array_init(struct vkd3d_shader_instruction_array *instructions, unsigned int reserve);
+@@ -1310,6 +1313,8 @@ bool shader_instruction_array_add_icb(struct vkd3d_shader_instruction_array *ins
+         struct vkd3d_shader_immediate_constant_buffer *icb);
+ bool shader_instruction_array_clone_instruction(struct vkd3d_shader_instruction_array *instructions,
+         unsigned int dst, unsigned int src);
++struct vkd3d_shader_src_param *instruction_array_create_outpointid_param(
++        struct vkd3d_shader_instruction_array *instructions);
+ void shader_instruction_array_destroy(struct vkd3d_shader_instruction_array *instructions);
+ 
+ enum vkd3d_shader_config_flags
+diff --git a/libs/vkd3d/libs/vkd3d/vkd3d_private.h b/libs/vkd3d/libs/vkd3d/vkd3d_private.h
+index e0a7acb306d..5f60c8d90ad 100644
+--- a/libs/vkd3d/libs/vkd3d/vkd3d_private.h
++++ b/libs/vkd3d/libs/vkd3d/vkd3d_private.h
+@@ -24,10 +24,6 @@
+ #define VK_NO_PROTOTYPES
+ #define CONST_VTABLE
+ 
+-#ifdef _WIN32
+-# define _WIN32_WINNT 0x0600  /* for condition variables */
+-#endif
+-
+ #include "vkd3d_common.h"
+ #include "vkd3d_blob.h"
+ #include "vkd3d_memory.h"
+@@ -205,36 +201,6 @@ union vkd3d_thread_handle
+     void *handle;
+ };
+ 
+-struct vkd3d_cond
+-{
+-    CONDITION_VARIABLE cond;
+-};
+-
+-static inline void vkd3d_cond_init(struct vkd3d_cond *cond)
+-{
+-    InitializeConditionVariable(&cond->cond);
+-}
+-
+-static inline void vkd3d_cond_signal(struct vkd3d_cond *cond)
+-{
+-    WakeConditionVariable(&cond->cond);
+-}
+-
+-static inline void vkd3d_cond_broadcast(struct vkd3d_cond *cond)
+-{
+-    WakeAllConditionVariable(&cond->cond);
+-}
+-
+-static inline void vkd3d_cond_wait(struct vkd3d_cond *cond, struct vkd3d_mutex *lock)
+-{
+-    if (!SleepConditionVariableCS(&cond->cond, &lock->lock, INFINITE))
+-        ERR("Could not sleep on the condition variable, error %lu.\n", GetLastError());
+-}
+-
+-static inline void vkd3d_cond_destroy(struct vkd3d_cond *cond)
+-{
+-}
+-
+ static inline bool vkd3d_atomic_compare_exchange(unsigned int volatile *x, unsigned int cmp, unsigned int xchg)
+ {
+     return InterlockedCompareExchange((LONG volatile *)x, xchg, cmp) == cmp;
+@@ -265,56 +231,6 @@ union vkd3d_thread_handle
+     void *handle;
+ };
+ 
+-struct vkd3d_cond
+-{
+-    pthread_cond_t cond;
+-};
+-
+-static inline void vkd3d_cond_init(struct vkd3d_cond *cond)
+-{
+-    int ret;
+-
+-    ret = pthread_cond_init(&cond->cond, NULL);
+-    if (ret)
+-        ERR("Could not initialize the condition variable, error %d.\n", ret);
+-}
+-
+-static inline void vkd3d_cond_signal(struct vkd3d_cond *cond)
+-{
+-    int ret;
+-
+-    ret = pthread_cond_signal(&cond->cond);
+-    if (ret)
+-        ERR("Could not signal the condition variable, error %d.\n", ret);
+-}
+-
+-static inline void vkd3d_cond_broadcast(struct vkd3d_cond *cond)
+-{
+-    int ret;
+-
+-    ret = pthread_cond_broadcast(&cond->cond);
+-    if (ret)
+-        ERR("Could not broadcast the condition variable, error %d.\n", ret);
+-}
+-
+-static inline void vkd3d_cond_wait(struct vkd3d_cond *cond, struct vkd3d_mutex *lock)
+-{
+-    int ret;
+-
+-    ret = pthread_cond_wait(&cond->cond, &lock->lock);
+-    if (ret)
+-        ERR("Could not wait on the condition variable, error %d.\n", ret);
+-}
+-
+-static inline void vkd3d_cond_destroy(struct vkd3d_cond *cond)
+-{
+-    int ret;
+-
+-    ret = pthread_cond_destroy(&cond->cond);
+-    if (ret)
+-        ERR("Could not destroy the condition variable, error %d.\n", ret);
+-}
+-
+ # if HAVE_SYNC_BOOL_COMPARE_AND_SWAP
+ static inline bool vkd3d_atomic_compare_exchange(unsigned int volatile *x, unsigned int cmp, unsigned int xchg)
+ {
+-- 
+2.43.0
+
