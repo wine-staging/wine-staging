@@ -1,0 +1,153 @@
+From cda6dd1902e0113ad3730c1f696138b668bbfacb Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Thu, 16 May 2024 11:56:37 +1000
+Subject: [PATCH] Updated vkd3d to 061dc390367b4c83022d5fe1255f8d38f6b7ce9c.
+
+---
+ libs/vkd3d/libs/vkd3d-shader/hlsl.h         |  1 +
+ libs/vkd3d/libs/vkd3d-shader/hlsl.y         | 13 ++--
+ libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c | 69 ++++++++++++---------
+ 3 files changed, 47 insertions(+), 36 deletions(-)
+
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.h b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+index 08a017874ae..27814f3a56f 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.h
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+@@ -1250,6 +1250,7 @@ bool hlsl_clone_block(struct hlsl_ctx *ctx, struct hlsl_block *dst_block, const
+ 
+ void hlsl_dump_function(struct hlsl_ctx *ctx, const struct hlsl_ir_function_decl *func);
+ 
++void hlsl_run_const_passes(struct hlsl_ctx *ctx, struct hlsl_block *body);
+ int hlsl_emit_bytecode(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl *entry_func,
+         enum vkd3d_shader_target_type target_type, struct vkd3d_shader_code *out);
+ int hlsl_emit_effect_binary(struct hlsl_ctx *ctx, struct vkd3d_shader_code *out);
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.y b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+index c6b6219eb4b..9c1bdef926d 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.y
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+@@ -1293,7 +1293,7 @@ static unsigned int evaluate_static_expression_as_uint(struct hlsl_ctx *ctx, str
+     struct hlsl_ir_node *node;
+     struct hlsl_block expr;
+     unsigned int ret = 0;
+-    bool progress;
++    struct hlsl_src src;
+ 
+     LIST_FOR_EACH_ENTRY(node, &block->instrs, struct hlsl_ir_node, entry)
+     {
+@@ -1330,13 +1330,12 @@ static unsigned int evaluate_static_expression_as_uint(struct hlsl_ctx *ctx, str
+         return 0;
+     }
+ 
+-    do
+-    {
+-        progress = hlsl_transform_ir(ctx, hlsl_fold_constant_exprs, &expr, NULL);
+-        progress |= hlsl_copy_propagation_execute(ctx, &expr);
+-    } while (progress);
++    /* Wrap the node into a src to allow the reference to survive the multiple const passes. */
++    hlsl_src_from_node(&src, node_from_block(&expr));
++    hlsl_run_const_passes(ctx, &expr);
++    node = src.node;
++    hlsl_src_remove(&src);
+ 
+-    node = node_from_block(&expr);
+     if (node->type == HLSL_IR_CONSTANT)
+     {
+         constant = hlsl_ir_constant(node);
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+index 26179042082..27f16af51c5 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+@@ -5408,6 +5408,44 @@ static void remove_unreachable_code(struct hlsl_ctx *ctx, struct hlsl_block *bod
+     }
+ }
+ 
++void hlsl_run_const_passes(struct hlsl_ctx *ctx, struct hlsl_block *body)
++{
++    bool progress;
++
++    lower_ir(ctx, lower_matrix_swizzles, body);
++    lower_ir(ctx, lower_index_loads, body);
++
++    lower_ir(ctx, lower_broadcasts, body);
++    while (hlsl_transform_ir(ctx, fold_redundant_casts, body, NULL));
++    do
++    {
++        progress = hlsl_transform_ir(ctx, split_array_copies, body, NULL);
++        progress |= hlsl_transform_ir(ctx, split_struct_copies, body, NULL);
++    }
++    while (progress);
++    hlsl_transform_ir(ctx, split_matrix_copies, body, NULL);
++
++    lower_ir(ctx, lower_narrowing_casts, body);
++    lower_ir(ctx, lower_int_dot, body);
++    lower_ir(ctx, lower_int_division, body);
++    lower_ir(ctx, lower_int_modulus, body);
++    lower_ir(ctx, lower_int_abs, body);
++    lower_ir(ctx, lower_casts_to_bool, body);
++    lower_ir(ctx, lower_float_modulus, body);
++    hlsl_transform_ir(ctx, fold_redundant_casts, body, NULL);
++
++    do
++    {
++        progress = hlsl_transform_ir(ctx, hlsl_fold_constant_exprs, body, NULL);
++        progress |= hlsl_transform_ir(ctx, hlsl_fold_constant_identities, body, NULL);
++        progress |= hlsl_transform_ir(ctx, hlsl_fold_constant_swizzles, body, NULL);
++        progress |= hlsl_copy_propagation_execute(ctx, body);
++        progress |= hlsl_transform_ir(ctx, fold_swizzle_chains, body, NULL);
++        progress |= hlsl_transform_ir(ctx, remove_trivial_swizzles, body, NULL);
++        progress |= hlsl_transform_ir(ctx, remove_trivial_conditional_branches, body, NULL);
++    } while (progress);
++}
++
+ int hlsl_emit_bytecode(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl *entry_func,
+         enum vkd3d_shader_target_type target_type, struct vkd3d_shader_code *out)
+ {
+@@ -5416,7 +5454,6 @@ int hlsl_emit_bytecode(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl *entry
+     struct recursive_call_ctx recursive_call_ctx;
+     struct hlsl_ir_var *var;
+     unsigned int i;
+-    bool progress;
+ 
+     list_move_head(&body->instrs, &ctx->static_initializers.instrs);
+ 
+@@ -5494,35 +5531,9 @@ int hlsl_emit_bytecode(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl *entry
+     {
+         hlsl_transform_ir(ctx, lower_discard_neg, body, NULL);
+     }
+-    lower_ir(ctx, lower_broadcasts, body);
+-    while (hlsl_transform_ir(ctx, fold_redundant_casts, body, NULL));
+-    do
+-    {
+-        progress = hlsl_transform_ir(ctx, split_array_copies, body, NULL);
+-        progress |= hlsl_transform_ir(ctx, split_struct_copies, body, NULL);
+-    }
+-    while (progress);
+-    hlsl_transform_ir(ctx, split_matrix_copies, body, NULL);
+ 
+-    lower_ir(ctx, lower_narrowing_casts, body);
+-    lower_ir(ctx, lower_int_dot, body);
+-    lower_ir(ctx, lower_int_division, body);
+-    lower_ir(ctx, lower_int_modulus, body);
+-    lower_ir(ctx, lower_int_abs, body);
+-    lower_ir(ctx, lower_casts_to_bool, body);
+-    lower_ir(ctx, lower_float_modulus, body);
+-    hlsl_transform_ir(ctx, fold_redundant_casts, body, NULL);
+-    do
+-    {
+-        progress = hlsl_transform_ir(ctx, hlsl_fold_constant_exprs, body, NULL);
+-        progress |= hlsl_transform_ir(ctx, hlsl_fold_constant_identities, body, NULL);
+-        progress |= hlsl_transform_ir(ctx, hlsl_fold_constant_swizzles, body, NULL);
+-        progress |= hlsl_copy_propagation_execute(ctx, body);
+-        progress |= hlsl_transform_ir(ctx, fold_swizzle_chains, body, NULL);
+-        progress |= hlsl_transform_ir(ctx, remove_trivial_swizzles, body, NULL);
+-        progress |= hlsl_transform_ir(ctx, remove_trivial_conditional_branches, body, NULL);
+-    }
+-    while (progress);
++    hlsl_run_const_passes(ctx, body);
++
+     remove_unreachable_code(ctx, body);
+     hlsl_transform_ir(ctx, normalize_switch_cases, body, NULL);
+ 
+-- 
+2.43.0
+
