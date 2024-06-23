@@ -1,0 +1,206 @@
+From 0b6ce29e931e2b02b75a4d76c3810a1049e56d67 Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Sun, 23 Jun 2024 15:40:43 +1000
+Subject: [PATCH] Updated vkd3d to ccb6150aabc7cce9e26a39366c611f5a7da789e4.
+
+---
+ libs/vkd3d/libs/vkd3d-shader/d3dbc.c        |   2 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl.y         | 110 ++++++++++++++++++--
+ libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c |   4 +-
+ 3 files changed, 108 insertions(+), 8 deletions(-)
+
+diff --git a/libs/vkd3d/libs/vkd3d-shader/d3dbc.c b/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
+index 2290385da76..3665b99aed7 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
++++ b/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
+@@ -2582,7 +2582,7 @@ static void write_sm1_resource_load(struct hlsl_ctx *ctx, struct vkd3d_bytecode_
+ 
+         .srcs[0].type = D3DSPR_TEMP,
+         .srcs[0].reg = coords->reg.id,
+-        .srcs[0].swizzle = hlsl_swizzle_from_writemask(VKD3DSP_WRITEMASK_ALL),
++        .srcs[0].swizzle = hlsl_swizzle_from_writemask(coords->reg.writemask),
+ 
+         .srcs[1].type = D3DSPR_SAMPLER,
+         .srcs[1].reg = reg_id,
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.y b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+index a2c89b15e4a..9c75c87d36e 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.y
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+@@ -1878,12 +1878,57 @@ static bool invert_swizzle(uint32_t *swizzle, unsigned int *writemask, unsigned
+     return true;
+ }
+ 
++static bool invert_swizzle_matrix(uint32_t *swizzle, unsigned int *writemask, unsigned int *ret_width)
++{
++    /* swizzle is 8 bits per component, each component is (from LSB) 4 bits X, then 4 bits Y.
++     * components are indexed by their sources. i.e. the first component comes from the first
++     * component of the rhs. */
++    unsigned int i, j, bit = 0, inverted = 0, width, new_writemask = 0, new_swizzle = 0;
++
++    /* First, we filter the swizzle to remove components that aren't enabled by writemask. */
++    for (i = 0; i < 4; ++i)
++    {
++        if (*writemask & (1 << i))
++        {
++            unsigned int s = (*swizzle >> (i * 8)) & 0xff;
++            unsigned int x = s & 0xf, y = (s >> 4) & 0xf;
++            unsigned int idx = x + y * 4;
++            new_swizzle |= s << (bit++ * 8);
++            if (new_writemask & (1 << idx))
++                return false;
++            new_writemask |= 1 << idx;
++        }
++    }
++    width = bit;
++
++    /* Then we invert the swizzle. The resulting swizzle has 2 bits per component, because it's for the
++     * incoming vector. */
++    bit = 0;
++    for (i = 0; i < 16; ++i)
++    {
++        for (j = 0; j < width; ++j)
++        {
++            unsigned int s = (new_swizzle >> (j * 8)) & 0xff;
++            unsigned int x = s & 0xf, y = (s >> 4) & 0xf;
++            unsigned int idx = x + y * 4;
++            if (idx == i)
++                inverted |= j << (bit++ * 2);
++        }
++    }
++
++    *swizzle = inverted;
++    *writemask = new_writemask;
++    *ret_width = width;
++    return true;
++}
++
+ static struct hlsl_ir_node *add_assignment(struct hlsl_ctx *ctx, struct hlsl_block *block, struct hlsl_ir_node *lhs,
+         enum parse_assign_op assign_op, struct hlsl_ir_node *rhs)
+ {
+     struct hlsl_type *lhs_type = lhs->data_type;
+     struct hlsl_ir_node *copy;
+-    unsigned int writemask = 0;
++    unsigned int writemask = 0, width = 0;
++    bool matrix_writemask = false;
+ 
+     if (assign_op == ASSIGN_OP_SUB)
+     {
+@@ -1901,7 +1946,10 @@ static struct hlsl_ir_node *add_assignment(struct hlsl_ctx *ctx, struct hlsl_blo
+     }
+ 
+     if (hlsl_is_numeric_type(lhs_type))
++    {
+         writemask = (1 << lhs_type->dimx) - 1;
++        width = lhs_type->dimx;
++    }
+ 
+     if (!(rhs = add_implicit_conversion(ctx, block, rhs, lhs_type, &rhs->loc)))
+         return NULL;
+@@ -1918,12 +1966,24 @@ static struct hlsl_ir_node *add_assignment(struct hlsl_ctx *ctx, struct hlsl_blo
+             struct hlsl_ir_swizzle *swizzle = hlsl_ir_swizzle(lhs);
+             struct hlsl_ir_node *new_swizzle;
+             uint32_t s = swizzle->swizzle;
+-            unsigned int width;
+ 
+-            if (lhs->data_type->class == HLSL_CLASS_MATRIX)
+-                hlsl_fixme(ctx, &lhs->loc, "Matrix assignment with a writemask.");
++            assert(!matrix_writemask);
+ 
+-            if (!invert_swizzle(&s, &writemask, &width))
++            if (swizzle->val.node->data_type->class == HLSL_CLASS_MATRIX)
++            {
++                if (swizzle->val.node->type != HLSL_IR_LOAD && swizzle->val.node->type != HLSL_IR_INDEX)
++                {
++                    hlsl_fixme(ctx, &lhs->loc, "Unhandled source of matrix swizzle.");
++                    return NULL;
++                }
++                if (!invert_swizzle_matrix(&s, &writemask, &width))
++                {
++                    hlsl_error(ctx, &lhs->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_WRITEMASK, "Invalid writemask for matrix.");
++                    return NULL;
++                }
++                matrix_writemask = true;
++            }
++            else if (!invert_swizzle(&s, &writemask, &width))
+             {
+                 hlsl_error(ctx, &lhs->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_WRITEMASK, "Invalid writemask.");
+                 return NULL;
+@@ -1971,7 +2031,7 @@ static struct hlsl_ir_node *add_assignment(struct hlsl_ctx *ctx, struct hlsl_blo
+ 
+         dim_count = hlsl_sampler_dim_count(resource_type->sampler_dim);
+ 
+-        if (writemask != ((1u << resource_type->e.resource.format->dimx) - 1))
++        if (width != resource_type->e.resource.format->dimx * resource_type->e.resource.format->dimy)
+             hlsl_error(ctx, &lhs->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_WRITEMASK,
+                     "Resource store expressions must write to all components.");
+ 
+@@ -1987,12 +2047,50 @@ static struct hlsl_ir_node *add_assignment(struct hlsl_ctx *ctx, struct hlsl_blo
+         hlsl_block_add_instr(block, store);
+         hlsl_cleanup_deref(&resource_deref);
+     }
++    else if (matrix_writemask)
++    {
++        struct hlsl_deref deref;
++        unsigned int i, j, k = 0;
++
++        hlsl_init_deref_from_index_chain(ctx, &deref, lhs);
++
++        for (i = 0; i < lhs->data_type->dimy; ++i)
++        {
++            for (j = 0; j < lhs->data_type->dimx; ++j)
++            {
++                struct hlsl_ir_node *load;
++                struct hlsl_block store_block;
++                const unsigned int idx = i * 4 + j;
++                const unsigned int component = i * lhs->data_type->dimx + j;
++
++                if (!(writemask & (1 << idx)))
++                    continue;
++
++                if (!(load = hlsl_add_load_component(ctx, block, rhs, k++, &rhs->loc)))
++                {
++                    hlsl_cleanup_deref(&deref);
++                    return NULL;
++                }
++
++                if (!hlsl_new_store_component(ctx, &store_block, &deref, component, load))
++                {
++                    hlsl_cleanup_deref(&deref);
++                    return NULL;
++                }
++                hlsl_block_add_block(block, &store_block);
++            }
++        }
++
++        hlsl_cleanup_deref(&deref);
++    }
+     else if (lhs->type == HLSL_IR_INDEX && hlsl_index_is_noncontiguous(hlsl_ir_index(lhs)))
+     {
+         struct hlsl_ir_index *row = hlsl_ir_index(lhs);
+         struct hlsl_ir_node *mat = row->val.node;
+         unsigned int i, k = 0;
+ 
++        assert(!matrix_writemask);
++
+         for (i = 0; i < mat->data_type->dimx; ++i)
+         {
+             struct hlsl_ir_node *cell, *load, *store, *c;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+index 09066a6191a..36270b159a5 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+@@ -4188,8 +4188,10 @@ static struct hlsl_reg allocate_numeric_registers_for_type(struct hlsl_ctx *ctx,
+ {
+     unsigned int reg_size = type->reg_size[HLSL_REGSET_NUMERIC];
+ 
++    /* FIXME: We could potentially pack structs or arrays more efficiently... */
++
+     if (type->class <= HLSL_CLASS_VECTOR)
+-        return allocate_register(ctx, allocator, first_write, last_read, reg_size, type->dimx);
++        return allocate_register(ctx, allocator, first_write, last_read, type->dimx, type->dimx);
+     else
+         return allocate_range(ctx, allocator, first_write, last_read, reg_size);
+ }
+-- 
+2.43.0
+
