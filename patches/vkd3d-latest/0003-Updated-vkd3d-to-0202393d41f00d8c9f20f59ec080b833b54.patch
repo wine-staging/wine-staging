@@ -1,0 +1,398 @@
+From 017785c8b77bd331c1b0ed650654e254d906451a Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Wed, 17 Jul 2024 08:43:16 +1000
+Subject: [PATCH] Updated vkd3d to 0202393d41f00d8c9f20f59ec080b833b5436f5a.
+
+---
+ libs/vkd3d/libs/vkd3d-shader/d3dbc.c        |  20 +++
+ libs/vkd3d/libs/vkd3d-shader/hlsl.c         |   1 +
+ libs/vkd3d/libs/vkd3d-shader/hlsl.h         |   5 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c | 174 +++++++++++++++++++-
+ libs/vkd3d/libs/vkd3d-shader/ir.c           |  57 +++++++
+ 5 files changed, 248 insertions(+), 9 deletions(-)
+
+diff --git a/libs/vkd3d/libs/vkd3d-shader/d3dbc.c b/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
+index abfbd461b33..492ad9b69fb 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
++++ b/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
+@@ -2371,6 +2371,17 @@ static void d3dbc_write_per_component_unary_op(struct d3dbc_compiler *d3dbc,
+     }
+ }
+ 
++static void d3dbc_write_sincos(struct d3dbc_compiler *d3dbc, enum hlsl_ir_expr_op op,
++        const struct hlsl_reg *dst, const struct hlsl_reg *src)
++{
++    if (op == HLSL_OP1_COS_REDUCED)
++        assert(dst->writemask == VKD3DSP_WRITEMASK_0);
++    else /* HLSL_OP1_SIN_REDUCED */
++        assert(dst->writemask == VKD3DSP_WRITEMASK_1);
++
++    d3dbc_write_unary_op(d3dbc, D3DSIO_SINCOS, dst, src, 0, 0);
++}
++
+ static void d3dbc_write_expr(struct d3dbc_compiler *d3dbc, const struct hlsl_ir_node *instr)
+ {
+     const struct vkd3d_shader_version *version = &d3dbc->program->shader_version;
+@@ -2439,6 +2450,11 @@ static void d3dbc_write_expr(struct d3dbc_compiler *d3dbc, const struct hlsl_ir_
+             d3dbc_write_per_component_unary_op(d3dbc, instr, D3DSIO_RSQ);
+             break;
+ 
++        case HLSL_OP1_COS_REDUCED:
++        case HLSL_OP1_SIN_REDUCED:
++            d3dbc_write_sincos(d3dbc, expr->op, &instr->reg, &arg1->reg);
++            break;
++
+         case HLSL_OP2_ADD:
+             d3dbc_write_binary_op(d3dbc, D3DSIO_ADD, &instr->reg, &arg1->reg, &arg2->reg);
+             break;
+@@ -2499,6 +2515,10 @@ static void d3dbc_write_expr(struct d3dbc_compiler *d3dbc, const struct hlsl_ir_
+             d3dbc_write_dp2add(d3dbc, &instr->reg, &arg1->reg, &arg2->reg, &arg3->reg);
+             break;
+ 
++        case HLSL_OP3_MAD:
++            d3dbc_write_ternary_op(d3dbc, D3DSIO_MAD, &instr->reg, &arg1->reg, &arg2->reg, &arg3->reg);
++            break;
++
+         default:
+             hlsl_fixme(ctx, &instr->loc, "SM1 \"%s\" expression.", debug_hlsl_expr_op(expr->op));
+             break;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.c b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+index acf50869a40..1526d7b02a9 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+@@ -2849,6 +2849,7 @@ const char *debug_hlsl_expr_op(enum hlsl_ir_expr_op op)
+         [HLSL_OP3_CMP]         = "cmp",
+         [HLSL_OP3_DP2ADD]      = "dp2add",
+         [HLSL_OP3_TERNARY]     = "ternary",
++        [HLSL_OP3_MAD]         = "mad",
+     };
+ 
+     return op_names[op];
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.h b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+index 5832958712a..4411546e269 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.h
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+@@ -645,7 +645,7 @@ enum hlsl_ir_expr_op
+     HLSL_OP1_CAST,
+     HLSL_OP1_CEIL,
+     HLSL_OP1_COS,
+-    HLSL_OP1_COS_REDUCED,    /* Reduced range [-pi, pi] */
++    HLSL_OP1_COS_REDUCED,    /* Reduced range [-pi, pi], writes to .x */
+     HLSL_OP1_DSX,
+     HLSL_OP1_DSX_COARSE,
+     HLSL_OP1_DSX_FINE,
+@@ -666,7 +666,7 @@ enum hlsl_ir_expr_op
+     HLSL_OP1_SAT,
+     HLSL_OP1_SIGN,
+     HLSL_OP1_SIN,
+-    HLSL_OP1_SIN_REDUCED,    /* Reduced range [-pi, pi] */
++    HLSL_OP1_SIN_REDUCED,    /* Reduced range [-pi, pi], writes to .y */
+     HLSL_OP1_SQRT,
+     HLSL_OP1_TRUNC,
+ 
+@@ -699,6 +699,7 @@ enum hlsl_ir_expr_op
+      * CMP(a, b, c) returns 'b' if 'a' >= 0, and 'c' otherwise. It's used only for SM1-SM3 targets. */
+     HLSL_OP3_CMP,
+     HLSL_OP3_TERNARY,
++    HLSL_OP3_MAD,
+ };
+ 
+ #define HLSL_MAX_OPERANDS 3
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+index 02884df9d76..26386c0b8df 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+@@ -20,6 +20,7 @@
+ 
+ #include "hlsl.h"
+ #include <stdio.h>
++#include <math.h>
+ 
+ /* TODO: remove when no longer needed, only used for new_offset_instr_from_deref() */
+ static struct hlsl_ir_node *new_offset_from_path_index(struct hlsl_ctx *ctx, struct hlsl_block *block,
+@@ -3016,6 +3017,108 @@ static bool lower_floor(struct hlsl_ctx *ctx, struct hlsl_ir_node *instr, struct
+     return true;
+ }
+ 
++/* Lower SIN/COS to SINCOS for SM1.  */
++static bool lower_trig(struct hlsl_ctx *ctx, struct hlsl_ir_node *instr, struct hlsl_block *block)
++{
++    struct hlsl_ir_node *arg, *half, *two_pi, *reciprocal_two_pi, *neg_pi;
++    struct hlsl_constant_value half_value, two_pi_value, reciprocal_two_pi_value, neg_pi_value;
++    struct hlsl_ir_node *mad, *frc, *reduced;
++    struct hlsl_type *type;
++    struct hlsl_ir_expr *expr;
++    enum hlsl_ir_expr_op op;
++    struct hlsl_ir_node *sincos;
++    int i;
++
++    if (instr->type != HLSL_IR_EXPR)
++        return false;
++    expr = hlsl_ir_expr(instr);
++
++    if (expr->op == HLSL_OP1_SIN)
++        op = HLSL_OP1_SIN_REDUCED;
++    else if (expr->op == HLSL_OP1_COS)
++        op = HLSL_OP1_COS_REDUCED;
++    else
++        return false;
++
++    arg = expr->operands[0].node;
++    type = arg->data_type;
++
++    /* Reduce the range of the input angles to [-pi, pi]. */
++    for (i = 0; i < type->dimx; ++i)
++    {
++        half_value.u[i].f = 0.5;
++        two_pi_value.u[i].f = 2.0 * M_PI;
++        reciprocal_two_pi_value.u[i].f = 1.0 / (2.0 * M_PI);
++        neg_pi_value.u[i].f = -M_PI;
++    }
++
++    if (!(half = hlsl_new_constant(ctx, type, &half_value, &instr->loc))
++            || !(two_pi = hlsl_new_constant(ctx, type, &two_pi_value, &instr->loc))
++            || !(reciprocal_two_pi = hlsl_new_constant(ctx, type, &reciprocal_two_pi_value, &instr->loc))
++            || !(neg_pi = hlsl_new_constant(ctx, type, &neg_pi_value, &instr->loc)))
++        return false;
++    hlsl_block_add_instr(block, half);
++    hlsl_block_add_instr(block, two_pi);
++    hlsl_block_add_instr(block, reciprocal_two_pi);
++    hlsl_block_add_instr(block, neg_pi);
++
++    if (!(mad = hlsl_new_ternary_expr(ctx, HLSL_OP3_MAD, arg, reciprocal_two_pi, half)))
++        return false;
++    hlsl_block_add_instr(block, mad);
++    if (!(frc = hlsl_new_unary_expr(ctx, HLSL_OP1_FRACT, mad, &instr->loc)))
++        return false;
++    hlsl_block_add_instr(block, frc);
++    if (!(reduced = hlsl_new_ternary_expr(ctx, HLSL_OP3_MAD, frc, two_pi, neg_pi)))
++        return false;
++    hlsl_block_add_instr(block, reduced);
++
++    if (type->dimx == 1)
++    {
++        if (!(sincos = hlsl_new_unary_expr(ctx, op, reduced, &instr->loc)))
++            return false;
++        hlsl_block_add_instr(block, sincos);
++    }
++    else
++    {
++        struct hlsl_ir_node *comps[4] = {0};
++        struct hlsl_ir_var *var;
++        struct hlsl_deref var_deref;
++        struct hlsl_ir_load *var_load;
++
++        for (i = 0; i < type->dimx; ++i)
++        {
++            uint32_t s = hlsl_swizzle_from_writemask(1 << i);
++
++            if (!(comps[i] = hlsl_new_swizzle(ctx, s, 1, reduced, &instr->loc)))
++                return false;
++            hlsl_block_add_instr(block, comps[i]);
++        }
++
++        if (!(var = hlsl_new_synthetic_var(ctx, "sincos", type, &instr->loc)))
++            return false;
++        hlsl_init_simple_deref_from_var(&var_deref, var);
++
++        for (i = 0; i < type->dimx; ++i)
++        {
++            struct hlsl_block store_block;
++
++            if (!(sincos = hlsl_new_unary_expr(ctx, op, comps[i], &instr->loc)))
++                return false;
++            hlsl_block_add_instr(block, sincos);
++
++            if (!hlsl_new_store_component(ctx, &store_block, &var_deref, i, sincos))
++                return false;
++            hlsl_block_add_block(block, &store_block);
++        }
++
++        if (!(var_load = hlsl_new_load_index(ctx, &var_deref, NULL, &instr->loc)))
++            return false;
++        hlsl_block_add_instr(block, &var_load->node);
++    }
++
++    return true;
++}
++
+ static bool lower_logic_not(struct hlsl_ctx *ctx, struct hlsl_ir_node *instr, struct hlsl_block *block)
+ {
+     struct hlsl_ir_node *operands[HLSL_MAX_OPERANDS];
+@@ -4230,6 +4333,30 @@ static struct hlsl_reg allocate_register(struct hlsl_ctx *ctx, struct register_a
+     return ret;
+ }
+ 
++/* Allocate a register with writemask, while reserving reg_writemask. */
++static struct hlsl_reg allocate_register_with_masks(struct hlsl_ctx *ctx, struct register_allocator *allocator,
++        unsigned int first_write, unsigned int last_read, uint32_t reg_writemask, uint32_t writemask)
++{
++    struct hlsl_reg ret = {0};
++    uint32_t reg_idx;
++
++    assert((reg_writemask & writemask) == writemask);
++
++    for (reg_idx = 0;; ++reg_idx)
++    {
++        if ((get_available_writemask(allocator, first_write, last_read, reg_idx) & reg_writemask) == reg_writemask)
++            break;
++    }
++
++    record_allocation(ctx, allocator, reg_idx, reg_writemask, first_write, last_read);
++
++    ret.id = reg_idx;
++    ret.allocation_size = 1;
++    ret.writemask = writemask;
++    ret.allocated = true;
++    return ret;
++}
++
+ static bool is_range_available(const struct register_allocator *allocator,
+         unsigned int first_write, unsigned int last_read, uint32_t reg_idx, unsigned int reg_size)
+ {
+@@ -4433,6 +4560,44 @@ static void calculate_resource_register_counts(struct hlsl_ctx *ctx)
+     }
+ }
+ 
++static void allocate_instr_temp_register(struct hlsl_ctx *ctx,
++        struct hlsl_ir_node *instr, struct register_allocator *allocator)
++{
++    unsigned int reg_writemask = 0, dst_writemask = 0;
++
++    if (instr->reg.allocated || !instr->last_read)
++        return;
++
++    if (instr->type == HLSL_IR_EXPR)
++    {
++        switch (hlsl_ir_expr(instr)->op)
++        {
++            case HLSL_OP1_COS_REDUCED:
++                dst_writemask = VKD3DSP_WRITEMASK_0;
++                reg_writemask = ctx->profile->major_version < 3 ? (1 << 3) - 1 : VKD3DSP_WRITEMASK_0;
++                break;
++
++            case HLSL_OP1_SIN_REDUCED:
++                dst_writemask = VKD3DSP_WRITEMASK_1;
++                reg_writemask = ctx->profile->major_version < 3 ? (1 << 3) - 1 : VKD3DSP_WRITEMASK_1;
++                break;
++
++            default:
++                break;
++        }
++    }
++
++    if (reg_writemask)
++        instr->reg = allocate_register_with_masks(ctx, allocator,
++                instr->index, instr->last_read, reg_writemask, dst_writemask);
++    else
++        instr->reg = allocate_numeric_registers_for_type(ctx, allocator,
++                instr->index, instr->last_read, instr->data_type);
++
++    TRACE("Allocated anonymous expression @%u to %s (liveness %u-%u).\n", instr->index,
++            debug_register('r', instr->reg, instr->data_type), instr->index, instr->last_read);
++}
++
+ static void allocate_variable_temp_register(struct hlsl_ctx *ctx,
+         struct hlsl_ir_var *var, struct register_allocator *allocator)
+ {
+@@ -4472,13 +4637,7 @@ static void allocate_temp_registers_recurse(struct hlsl_ctx *ctx,
+         if (ctx->profile->major_version >= 4 && instr->type == HLSL_IR_CONSTANT)
+             continue;
+ 
+-        if (!instr->reg.allocated && instr->last_read)
+-        {
+-            instr->reg = allocate_numeric_registers_for_type(ctx, allocator, instr->index, instr->last_read,
+-                    instr->data_type);
+-            TRACE("Allocated anonymous expression @%u to %s (liveness %u-%u).\n", instr->index,
+-                    debug_register('r', instr->reg, instr->data_type), instr->index, instr->last_read);
+-        }
++        allocate_instr_temp_register(ctx, instr, allocator);
+ 
+         switch (instr->type)
+         {
+@@ -6050,6 +6209,7 @@ int hlsl_emit_bytecode(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl *entry
+         lower_ir(ctx, lower_round, body);
+         lower_ir(ctx, lower_ceil, body);
+         lower_ir(ctx, lower_floor, body);
++        lower_ir(ctx, lower_trig, body);
+         lower_ir(ctx, lower_comparison_operators, body);
+         lower_ir(ctx, lower_logic_not, body);
+         if (ctx->profile->type == VKD3D_SHADER_TYPE_PIXEL)
+diff --git a/libs/vkd3d/libs/vkd3d-shader/ir.c b/libs/vkd3d/libs/vkd3d-shader/ir.c
+index be9e4219d6a..9202c77cadb 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/ir.c
++++ b/libs/vkd3d/libs/vkd3d-shader/ir.c
+@@ -377,6 +377,58 @@ static enum vkd3d_result vsir_program_lower_precise_mad(struct vsir_program *pro
+     return VKD3D_OK;
+ }
+ 
++static enum vkd3d_result vsir_program_lower_sm1_sincos(struct vsir_program *program,
++        struct vkd3d_shader_instruction *sincos)
++{
++    struct vkd3d_shader_instruction_array *instructions = &program->instructions;
++    size_t pos = sincos - instructions->elements;
++    struct vkd3d_shader_instruction *ins;
++    unsigned int s;
++
++    if (sincos->dst_count != 1)
++        return VKD3D_OK;
++
++    if (!shader_instruction_array_insert_at(instructions, pos + 1, 1))
++        return VKD3D_ERROR_OUT_OF_MEMORY;
++
++    ins = &instructions->elements[pos + 1];
++
++    if (!(vsir_instruction_init_with_params(program, ins, &sincos->location, VKD3DSIH_SINCOS, 2, 1)))
++        return VKD3D_ERROR_OUT_OF_MEMORY;
++
++    ins->flags = sincos->flags;
++
++    *ins->src = *sincos->src;
++    /* Set the source swizzle to replicate the first component. */
++    s = vsir_swizzle_get_component(sincos->src->swizzle, 0);
++    ins->src->swizzle = vkd3d_shader_create_swizzle(s, s, s, s);
++
++    if (sincos->dst->write_mask & VKD3DSP_WRITEMASK_1)
++    {
++        ins->dst[0] = *sincos->dst;
++        ins->dst[0].write_mask = VKD3DSP_WRITEMASK_1;
++    }
++    else
++    {
++        vsir_dst_param_init(&ins->dst[0], VKD3DSPR_NULL, VKD3D_DATA_UNUSED, 0);
++    }
++
++    if (sincos->dst->write_mask & VKD3DSP_WRITEMASK_0)
++    {
++        ins->dst[1] = *sincos->dst;
++        ins->dst[1].write_mask = VKD3DSP_WRITEMASK_0;
++    }
++    else
++    {
++        vsir_dst_param_init(&ins->dst[1], VKD3DSPR_NULL, VKD3D_DATA_UNUSED, 0);
++    }
++
++    /* Make the original instruction no-op */
++    vkd3d_shader_instruction_make_nop(sincos);
++
++    return VKD3D_OK;
++}
++
+ static enum vkd3d_result vsir_program_lower_instructions(struct vsir_program *program,
+         struct vkd3d_shader_message_context *message_context)
+ {
+@@ -410,6 +462,11 @@ static enum vkd3d_result vsir_program_lower_instructions(struct vsir_program *pr
+                 vkd3d_shader_instruction_make_nop(ins);
+                 break;
+ 
++            case VKD3DSIH_SINCOS:
++                if ((ret = vsir_program_lower_sm1_sincos(program, ins)) < 0)
++                    return ret;
++                break;
++
+             default:
+                 break;
+         }
+-- 
+2.43.0
+
