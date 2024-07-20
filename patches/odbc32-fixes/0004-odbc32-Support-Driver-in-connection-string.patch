@@ -1,64 +1,53 @@
-From 02839f3df7ab1c8417a3ecd507a2b7c24dc6963f Mon Sep 17 00:00:00 2001
+From 9eb47396d1a2f5a9a5fe275a92a75ae6a1bbabec Mon Sep 17 00:00:00 2001
 From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
 Date: Fri, 12 Jul 2024 14:13:33 +1000
-Subject: [PATCH 04/15] odbc32: Support Driver in connection string
+Subject: [PATCH] odbc32: Support Driver in connection string
 
 ---
- dlls/odbc32/proxyodbc.c | 100 +++++++++++++++++++++++++++++++---------
- 1 file changed, 77 insertions(+), 23 deletions(-)
+ dlls/odbc32/proxyodbc.c | 100 ++++++++++++++++++++++++++++++----------
+ 1 file changed, 75 insertions(+), 25 deletions(-)
 
 diff --git a/dlls/odbc32/proxyodbc.c b/dlls/odbc32/proxyodbc.c
-index e8e08fb7d00..511fd8c9de3 100644
+index 54e0800128e..7c00cece863 100644
 --- a/dlls/odbc32/proxyodbc.c
 +++ b/dlls/odbc32/proxyodbc.c
-@@ -821,11 +821,20 @@ static WCHAR *strdupAW( const char *src )
-     return dst;
- }
- 
--static HKEY open_odbcini_key( HKEY root )
-+static HKEY open_odbcini_key( HKEY root, BOOL use_dsn )
- {
-     static const WCHAR sourcesW[] = L"Software\\ODBC\\ODBC.INI";
-+    static const WCHAR driversW[] = L"Software\\ODBC\\ODBCINST.INI";
-     HKEY key;
--    if (!RegCreateKeyExW( root, sourcesW, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &key, NULL )) return key;
-+
-+    if (use_dsn)
-+    {
-+        if (!RegCreateKeyExW( root, sourcesW, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &key, NULL )) return key;
-+    }
-+    else
-+    {
-+        if (!RegCreateKeyExW( root, driversW, 0, NULL, 0, KEY_ALL_ACCESS, NULL, &key, NULL )) return key;
-+    }
-     return NULL;
- }
- 
-@@ -839,12 +848,12 @@ static WCHAR *get_reg_value( HKEY key, const WCHAR *name )
+@@ -900,23 +900,28 @@ static HKEY open_odbcinst_key( void )
      return NULL;
  }
  
 -static WCHAR *get_driver_filename( const SQLWCHAR *source )
-+static WCHAR *get_driver_filename( const SQLWCHAR *source, BOOL use_dsn )
++static WCHAR *get_driver_filename( const SQLWCHAR *source, BOOL is_dsn )
  {
-     HKEY key_root, key_source;
-     WCHAR *ret = NULL;
+     HKEY key_sources, key_odbcinst, key_driver;
+     WCHAR *driver_name, *ret;
  
--    if (!(key_root = open_odbcini_key( HKEY_CURRENT_USER ))) return NULL;
-+    if (!(key_root = open_odbcini_key( HKEY_CURRENT_USER, use_dsn ))) return NULL;
-     if (!RegOpenKeyExW( key_root, source, 0, KEY_READ, &key_source ))
+-    if (!(key_sources = open_sources_key( HKEY_CURRENT_USER ))) return NULL;
+-    if (!(driver_name = get_reg_value( key_sources, source )))
++    if (is_dsn)
      {
-         ret = get_reg_value( key_source, L"Driver" );
-@@ -853,7 +862,7 @@ static WCHAR *get_driver_filename( const SQLWCHAR *source )
-     RegCloseKey( key_root );
-     if (ret) return ret;
+-        RegCloseKey( key_sources );
+-        if (!(key_sources = open_sources_key( HKEY_LOCAL_MACHINE ))) return NULL;
++        if (!(key_sources = open_sources_key( HKEY_CURRENT_USER ))) return NULL;
+         if (!(driver_name = get_reg_value( key_sources, source )))
+         {
+             RegCloseKey( key_sources );
+-            return NULL;
++            if (!(key_sources = open_sources_key( HKEY_LOCAL_MACHINE ))) return NULL;
++            if (!(driver_name = get_reg_value( key_sources, source )))
++            {
++                RegCloseKey( key_sources );
++                return NULL;
++            }
+         }
++        RegCloseKey( key_sources );
+     }
+-    RegCloseKey( key_sources );
++    else
++        driver_name = wcsdup(source);
  
--    if (!(key_root = open_odbcini_key( HKEY_LOCAL_MACHINE ))) return NULL;
-+    if (!(key_root = open_odbcini_key( HKEY_LOCAL_MACHINE, use_dsn ))) return NULL;
-     if (!RegOpenKeyExW( key_root, source, 0, KEY_READ, &key_source ))
+     if (!(key_odbcinst = open_odbcinst_key()) || RegOpenKeyExW( key_odbcinst, driver_name, 0, KEY_READ, &key_driver ))
      {
-         ret = get_reg_value( key_source, L"Driver" );
-@@ -987,7 +996,7 @@ SQLRETURN WINAPI SQLConnect(SQLHDBC ConnectionHandle, SQLCHAR *ServerName, SQLSM
+@@ -1086,7 +1091,7 @@ SQLRETURN WINAPI SQLConnect(SQLHDBC ConnectionHandle, SQLCHAR *ServerName, SQLSM
  
      if (!handle) return SQL_INVALID_HANDLE;
  
@@ -67,7 +56,7 @@ index e8e08fb7d00..511fd8c9de3 100644
      {
          WARN( "can't find driver filename\n" );
          goto done;
-@@ -2828,6 +2837,35 @@ static SQLRETURN browse_connect_unix_a( struct handle *handle, SQLCHAR *in_conn_
+@@ -2984,6 +2989,35 @@ static SQLRETURN browse_connect_unix_a( struct handle *handle, SQLCHAR *in_conn_
      return ODBC_CALL( SQLBrowseConnect, &params );
  }
  
@@ -103,15 +92,15 @@ index e8e08fb7d00..511fd8c9de3 100644
  /*************************************************************************
   *				SQLBrowseConnect           [ODBC32.055]
   */
-@@ -2837,6 +2875,7 @@ SQLRETURN WINAPI SQLBrowseConnect(SQLHDBC ConnectionHandle, SQLCHAR *InConnectio
+@@ -2993,6 +3027,7 @@ SQLRETURN WINAPI SQLBrowseConnect(SQLHDBC ConnectionHandle, SQLCHAR *InConnectio
      struct handle *handle = ConnectionHandle;
      WCHAR *datasource = NULL, *filename = NULL, *connection_string = strdupAW( (const char *)InConnectionString );
      SQLRETURN ret = SQL_ERROR;
-+    BOOL use_dsn = TRUE;
++    BOOL is_dsn = TRUE;
  
      TRACE("(ConnectionHandle %p, InConnectionString %s, StringLength1 %d, OutConnectionString %p, BufferLength, %d, "
            "StringLength2 %p)\n", ConnectionHandle, debugstr_sqlstr(InConnectionString, StringLength1),
-@@ -2844,13 +2883,16 @@ SQLRETURN WINAPI SQLBrowseConnect(SQLHDBC ConnectionHandle, SQLCHAR *InConnectio
+@@ -3000,13 +3035,16 @@ SQLRETURN WINAPI SQLBrowseConnect(SQLHDBC ConnectionHandle, SQLCHAR *InConnectio
  
      if (!handle) return SQL_INVALID_HANDLE;
  
@@ -120,7 +109,7 @@ index e8e08fb7d00..511fd8c9de3 100644
      {
 -        WARN( "can't find data source\n" );
 -        goto done;
-+        use_dsn = FALSE;
++        is_dsn = FALSE;
 +        if (!(datasource = get_driver( connection_string )))
 +        {
 +            WARN( "can't find data source\n" );
@@ -128,19 +117,19 @@ index e8e08fb7d00..511fd8c9de3 100644
 +        }
      }
 -    if (!(filename = get_driver_filename( datasource )))
-+    if (!(filename = get_driver_filename( datasource, use_dsn )))
++    if (!(filename = get_driver_filename( datasource, is_dsn )))
      {
          WARN( "can't find driver filename\n" );
          goto done;
-@@ -3567,6 +3609,7 @@ SQLRETURN WINAPI SQLDriverConnect(SQLHDBC ConnectionHandle, SQLHWND WindowHandle
+@@ -3809,6 +3847,7 @@ SQLRETURN WINAPI SQLDriverConnect(SQLHDBC ConnectionHandle, SQLHWND WindowHandle
      struct handle *handle = ConnectionHandle;
      WCHAR *datasource = NULL, *filename = NULL, *connection_string = strdupAW( (const char *)InConnectionString );
      SQLRETURN ret = SQL_ERROR;
-+    BOOL use_dsn = TRUE;
++    BOOL is_dsn = TRUE;
  
      TRACE("(ConnectionHandle %p, WindowHandle %p, InConnectionString %s, Length %d, OutConnectionString %p,"
            " BufferLength %d, Length2 %p, DriverCompletion %d)\n", ConnectionHandle, WindowHandle,
-@@ -3575,13 +3618,16 @@ SQLRETURN WINAPI SQLDriverConnect(SQLHDBC ConnectionHandle, SQLHWND WindowHandle
+@@ -3817,13 +3856,16 @@ SQLRETURN WINAPI SQLDriverConnect(SQLHDBC ConnectionHandle, SQLHWND WindowHandle
  
      if (!handle) return SQL_INVALID_HANDLE;
  
@@ -149,7 +138,7 @@ index e8e08fb7d00..511fd8c9de3 100644
      {
 -        WARN( "can't find data source\n" );
 -        goto done;
-+        use_dsn = FALSE;
++        is_dsn = FALSE;
 +        if (!(datasource = get_driver( connection_string )))
 +        {
 +            WARN( "can't find data source\n" );
@@ -157,11 +146,11 @@ index e8e08fb7d00..511fd8c9de3 100644
 +        }
      }
 -    if (!(filename = get_driver_filename( datasource )))
-+    if (!(filename = get_driver_filename( datasource, use_dsn )))
++    if (!(filename = get_driver_filename( datasource, is_dsn )))
      {
          WARN( "can't find driver filename\n" );
          goto done;
-@@ -3764,7 +3810,7 @@ SQLRETURN WINAPI SQLConnectW(SQLHDBC ConnectionHandle, WCHAR *ServerName, SQLSMA
+@@ -4022,7 +4064,7 @@ SQLRETURN WINAPI SQLConnectW(SQLHDBC ConnectionHandle, WCHAR *ServerName, SQLSMA
  
      if (!handle) return SQL_INVALID_HANDLE;
  
@@ -170,15 +159,15 @@ index e8e08fb7d00..511fd8c9de3 100644
      {
          WARN( "can't find driver filename\n" );
          goto done;
-@@ -4395,6 +4441,7 @@ SQLRETURN WINAPI SQLDriverConnectW(SQLHDBC ConnectionHandle, SQLHWND WindowHandl
+@@ -4714,6 +4756,7 @@ SQLRETURN WINAPI SQLDriverConnectW(SQLHDBC ConnectionHandle, SQLHWND WindowHandl
      struct handle *handle = ConnectionHandle;
      WCHAR *datasource, *filename = NULL;
      SQLRETURN ret = SQL_ERROR;
-+    BOOL use_dsn = TRUE;
++    BOOL is_dsn = TRUE;
  
      TRACE("(ConnectionHandle %p, WindowHandle %p, InConnectionString %s, Length %d, OutConnectionString %p,"
            " BufferLength %d, Length2 %p, DriverCompletion %d)\n", ConnectionHandle, WindowHandle,
-@@ -4403,13 +4450,16 @@ SQLRETURN WINAPI SQLDriverConnectW(SQLHDBC ConnectionHandle, SQLHWND WindowHandl
+@@ -4722,13 +4765,16 @@ SQLRETURN WINAPI SQLDriverConnectW(SQLHDBC ConnectionHandle, SQLHWND WindowHandl
  
      if (!handle) return SQL_INVALID_HANDLE;
  
@@ -187,7 +176,7 @@ index e8e08fb7d00..511fd8c9de3 100644
      {
 -        WARN( "can't find data source\n" );
 -        goto done;
-+        use_dsn = FALSE;
++        is_dsn = FALSE;
 +        if (!(datasource = get_driver( InConnectionString )))
 +        {
 +            WARN( "can't find data source\n" );
@@ -195,19 +184,19 @@ index e8e08fb7d00..511fd8c9de3 100644
 +        }
      }
 -    if (!(filename = get_driver_filename( datasource )))
-+    if (!(filename = get_driver_filename( datasource, use_dsn )))
++    if (!(filename = get_driver_filename( datasource, is_dsn )))
      {
          WARN( "can't find driver filename\n" );
          goto done;
-@@ -4701,6 +4751,7 @@ SQLRETURN WINAPI SQLBrowseConnectW(SQLHDBC ConnectionHandle, SQLWCHAR *InConnect
+@@ -5020,6 +5066,7 @@ SQLRETURN WINAPI SQLBrowseConnectW(SQLHDBC ConnectionHandle, SQLWCHAR *InConnect
      struct handle *handle = ConnectionHandle;
      WCHAR *datasource, *filename = NULL;
      SQLRETURN ret = SQL_ERROR;
-+    BOOL use_dsn = TRUE;
++    BOOL is_dsn = TRUE;
  
      TRACE("(ConnectionHandle %p, InConnectionString %s, StringLength1 %d, OutConnectionString %p, BufferLength %d, "
            "StringLength2 %p)\n", ConnectionHandle, debugstr_sqlwstr(InConnectionString, StringLength1), StringLength1,
-@@ -4708,13 +4759,16 @@ SQLRETURN WINAPI SQLBrowseConnectW(SQLHDBC ConnectionHandle, SQLWCHAR *InConnect
+@@ -5027,13 +5074,16 @@ SQLRETURN WINAPI SQLBrowseConnectW(SQLHDBC ConnectionHandle, SQLWCHAR *InConnect
  
      if (!handle) return SQL_INVALID_HANDLE;
  
@@ -216,7 +205,7 @@ index e8e08fb7d00..511fd8c9de3 100644
      {
 -        WARN( "can't find data source\n" );
 -        goto done;
-+        use_dsn = FALSE;
++        is_dsn = FALSE;
 +        if (!(datasource = get_driver( InConnectionString )))
 +        {
 +            WARN( "can't find data source\n" );
@@ -224,7 +213,7 @@ index e8e08fb7d00..511fd8c9de3 100644
 +        }
      }
 -    if (!(filename = get_driver_filename( datasource )))
-+    if (!(filename = get_driver_filename( datasource, use_dsn )))
++    if (!(filename = get_driver_filename( datasource, is_dsn )))
      {
          WARN( "can't find driver filename\n" );
          goto done;
