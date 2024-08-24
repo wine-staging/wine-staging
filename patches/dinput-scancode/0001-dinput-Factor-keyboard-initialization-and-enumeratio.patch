@@ -1,0 +1,175 @@
+From 77a518b61884ef4e06f4fe8b94dd5c855c5e8daf Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?R=C3=A9mi=20Bernon?= <rbernon@codeweavers.com>
+Date: Fri, 23 Aug 2024 08:49:13 +0200
+Subject: [PATCH] dinput: Factor keyboard initialization and enumeration loops.
+
+---
+ dlls/dinput/keyboard.c | 129 +++++++++++++++++++++++------------------
+ 1 file changed, 72 insertions(+), 57 deletions(-)
+
+diff --git a/dlls/dinput/keyboard.c b/dlls/dinput/keyboard.c
+index 8ec9dd47150..d1fa242574e 100644
+--- a/dlls/dinput/keyboard.c
++++ b/dlls/dinput/keyboard.c
+@@ -185,12 +185,79 @@ HRESULT keyboard_enum_device( DWORD type, DWORD flags, DIDEVICEINSTANCEW *instan
+     return DI_OK;
+ }
+ 
++static BOOL enum_object( struct keyboard *impl, const DIPROPHEADER *filter, DWORD flags, enum_object_callback callback,
++                         UINT index, DIDEVICEOBJECTINSTANCEW *instance, void *data )
++{
++    if (flags != DIDFT_ALL && !(flags & DIDFT_GETTYPE( instance->dwType ))) return DIENUM_CONTINUE;
++
++    switch (filter->dwHow)
++    {
++    case DIPH_DEVICE:
++        return callback( &impl->base, index, NULL, instance, data );
++    case DIPH_BYOFFSET:
++        if (filter->dwObj != instance->dwOfs) return DIENUM_CONTINUE;
++        return callback( &impl->base, index, NULL, instance, data );
++    case DIPH_BYID:
++        if ((filter->dwObj & 0x00ffffff) != (instance->dwType & 0x00ffffff)) return DIENUM_CONTINUE;
++        return callback( &impl->base, index, NULL, instance, data );
++    }
++
++    return DIENUM_CONTINUE;
++}
++
++static HRESULT enum_objects( struct keyboard *impl, const DIPROPHEADER *filter,
++                             DWORD flags, enum_object_callback callback, void *data )
++{
++    BYTE subtype = GET_DIDEVICE_SUBTYPE( impl->base.instance.dwDevType );
++    DIDEVICEOBJECTINSTANCEW instance =
++    {
++        .dwSize = sizeof(DIDEVICEOBJECTINSTANCEW),
++        .guidType = GUID_Key,
++        .dwOfs = DIK_ESCAPE,
++        .dwType = DIDFT_PSHBUTTON | DIDFT_MAKEINSTANCE( DIK_ESCAPE ),
++    };
++    DWORD index, i, dik;
++    BOOL ret;
++
++    for (i = 0, index = 0; i < 512; ++i)
++    {
++        if (!GetKeyNameTextW( i << 16, instance.tszName, ARRAY_SIZE(instance.tszName) )) continue;
++        if (!(dik = map_dik_code( i, 0, subtype, impl->base.dinput->dwVersion ))) continue;
++        instance.dwOfs = dik;
++        instance.dwType = DIDFT_PSHBUTTON | DIDFT_MAKEINSTANCE( dik );
++        ret = enum_object( impl, filter, flags, callback, index++, &instance, data );
++        if (ret != DIENUM_CONTINUE) return DIENUM_STOP;
++    }
++
++    return DIENUM_CONTINUE;
++}
++
++static BOOL init_object_properties( struct dinput_device *device, UINT index, struct hid_value_caps *caps,
++                                    const DIDEVICEOBJECTINSTANCEW *instance, void *data )
++{
++    struct object_properties *properties;
++    UINT dik = instance->dwOfs;
++
++    if (index == -1) return DIENUM_STOP;
++    properties = device->object_properties + index;
++
++    if (dik == DIK_NUMLOCK) properties->scan_code = 0x451de1;
++    else if (dik == DIK_PAUSE) properties->scan_code = 0x45;
++    else if (dik < 0x80) properties->scan_code = dik;
++    else properties->scan_code = (dik - 0x80) << 8 | 0x00e0;
++
++    return DIENUM_CONTINUE;
++}
++
+ HRESULT keyboard_create_device( struct dinput *dinput, const GUID *guid, IDirectInputDevice8W **out )
+ {
+-    DIDEVICEOBJECTINSTANCEW instance;
++    static const DIPROPHEADER filter =
++    {
++        .dwSize = sizeof(filter),
++        .dwHeaderSize = sizeof(filter),
++        .dwHow = DIPH_DEVICE,
++    };
+     struct keyboard *impl;
+-    DWORD i, index, dik;
+-    BYTE subtype;
+     HRESULT hr;
+ 
+     TRACE( "dinput %p, guid %s, out %p.\n", dinput, debugstr_guid( guid ), out );
+@@ -207,20 +274,9 @@ HRESULT keyboard_create_device( struct dinput *dinput, const GUID *guid, IDirect
+     impl->base.caps.dwFirmwareRevision = 100;
+     impl->base.caps.dwHardwareRevision = 100;
+     if (dinput->dwVersion >= 0x0800) impl->base.use_raw_input = TRUE;
+-    subtype = GET_DIDEVICE_SUBTYPE( impl->base.instance.dwDevType );
+ 
+     if (FAILED(hr = dinput_device_init_device_format( &impl->base.IDirectInputDevice8W_iface ))) goto failed;
+-
+-    for (i = 0, index = 0; i < 512; ++i)
+-    {
+-        if (!GetKeyNameTextW( i << 16, instance.tszName, ARRAY_SIZE(instance.tszName) )) continue;
+-        if (!(dik = map_dik_code( i, 0, subtype, impl->base.dinput->dwVersion ))) continue;
+-
+-        if (dik == DIK_NUMLOCK) impl->base.object_properties[index++].scan_code = 0x451de1;
+-        else if (dik == DIK_PAUSE) impl->base.object_properties[index++].scan_code = 0x45;
+-        else if (dik < 0x80) impl->base.object_properties[index++].scan_code = dik;
+-        else impl->base.object_properties[index++].scan_code = (dik - 0x80) << 8 | 0x00e0;
+-    }
++    enum_objects( impl, &filter, DIDFT_BUTTON, init_object_properties, NULL );
+ 
+     *out = &impl->base.IDirectInputDevice8W_iface;
+     return DI_OK;
+@@ -248,52 +304,11 @@ static HRESULT keyboard_unacquire( IDirectInputDevice8W *iface )
+     return DI_OK;
+ }
+ 
+-static BOOL try_enum_object( struct dinput_device *impl, const DIPROPHEADER *filter, DWORD flags, enum_object_callback callback,
+-                             UINT index, DIDEVICEOBJECTINSTANCEW *instance, void *data )
+-{
+-    if (flags != DIDFT_ALL && !(flags & DIDFT_GETTYPE( instance->dwType ))) return DIENUM_CONTINUE;
+-
+-    switch (filter->dwHow)
+-    {
+-    case DIPH_DEVICE:
+-        return callback( impl, index, NULL, instance, data );
+-    case DIPH_BYOFFSET:
+-        if (filter->dwObj != instance->dwOfs) return DIENUM_CONTINUE;
+-        return callback( impl, index, NULL, instance, data );
+-    case DIPH_BYID:
+-        if ((filter->dwObj & 0x00ffffff) != (instance->dwType & 0x00ffffff)) return DIENUM_CONTINUE;
+-        return callback( impl, index, NULL, instance, data );
+-    }
+-
+-    return DIENUM_CONTINUE;
+-}
+-
+ static HRESULT keyboard_enum_objects( IDirectInputDevice8W *iface, const DIPROPHEADER *filter,
+                                       DWORD flags, enum_object_callback callback, void *context )
+ {
+     struct keyboard *impl = impl_from_IDirectInputDevice8W( iface );
+-    BYTE subtype = GET_DIDEVICE_SUBTYPE( impl->base.instance.dwDevType );
+-    DIDEVICEOBJECTINSTANCEW instance =
+-    {
+-        .dwSize = sizeof(DIDEVICEOBJECTINSTANCEW),
+-        .guidType = GUID_Key,
+-        .dwOfs = DIK_ESCAPE,
+-        .dwType = DIDFT_PSHBUTTON | DIDFT_MAKEINSTANCE( DIK_ESCAPE ),
+-    };
+-    DWORD index, i, dik;
+-    BOOL ret;
+-
+-    for (i = 0, index = 0; i < 512; ++i)
+-    {
+-        if (!GetKeyNameTextW( i << 16, instance.tszName, ARRAY_SIZE(instance.tszName) )) continue;
+-        if (!(dik = map_dik_code( i, 0, subtype, impl->base.dinput->dwVersion ))) continue;
+-        instance.dwOfs = dik;
+-        instance.dwType = DIDFT_PSHBUTTON | DIDFT_MAKEINSTANCE( dik );
+-        ret = try_enum_object( &impl->base, filter, flags, callback, index++, &instance, context );
+-        if (ret != DIENUM_CONTINUE) return DIENUM_STOP;
+-    }
+-
+-    return DIENUM_CONTINUE;
++    return enum_objects( impl, filter, flags, callback, context );
+ }
+ 
+ static HRESULT keyboard_get_property( IDirectInputDevice8W *iface, DWORD property,
+-- 
+2.43.0
+
