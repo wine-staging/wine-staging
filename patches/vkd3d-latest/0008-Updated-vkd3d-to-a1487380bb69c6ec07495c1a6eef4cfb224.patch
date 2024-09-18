@@ -1,0 +1,1125 @@
+From 5456ac4fb585e584018d3d2a75d359f9cccb4eab Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Wed, 18 Sep 2024 11:57:45 +1000
+Subject: [PATCH] Updated vkd3d to a1487380bb69c6ec07495c1a6eef4cfb224710cb.
+
+---
+ libs/vkd3d/libs/vkd3d-shader/d3d_asm.c |   6 +-
+ libs/vkd3d/libs/vkd3d-shader/glsl.c    | 360 ++++++++++++++++++++++++-
+ libs/vkd3d/libs/vkd3d-shader/ir.c      | 284 ++++++++++---------
+ libs/vkd3d/libs/vkd3d-shader/msl.c     | 129 +++++++++
+ libs/vkd3d/libs/vkd3d-shader/tpf.c     | 106 +++++++-
+ 5 files changed, 743 insertions(+), 142 deletions(-)
+ create mode 100644 libs/vkd3d/libs/vkd3d-shader/msl.c
+
+diff --git a/libs/vkd3d/libs/vkd3d-shader/d3d_asm.c b/libs/vkd3d/libs/vkd3d-shader/d3d_asm.c
+index 77e9711300f..cfee053d49c 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/d3d_asm.c
++++ b/libs/vkd3d/libs/vkd3d-shader/d3d_asm.c
+@@ -79,7 +79,7 @@ static const char * const shader_opcode_names[] =
+     [VKD3DSIH_DCL_INDEXABLE_TEMP              ] = "dcl_indexableTemp",
+     [VKD3DSIH_DCL_INPUT                       ] = "dcl_input",
+     [VKD3DSIH_DCL_INPUT_CONTROL_POINT_COUNT   ] = "dcl_input_control_point_count",
+-    [VKD3DSIH_DCL_INPUT_PRIMITIVE             ] = "dcl_inputPrimitive",
++    [VKD3DSIH_DCL_INPUT_PRIMITIVE             ] = "dcl_inputprimitive",
+     [VKD3DSIH_DCL_INPUT_PS                    ] = "dcl_input_ps",
+     [VKD3DSIH_DCL_INPUT_PS_SGV                ] = "dcl_input_ps_sgv",
+     [VKD3DSIH_DCL_INPUT_PS_SIV                ] = "dcl_input_ps_siv",
+@@ -89,7 +89,7 @@ static const char * const shader_opcode_names[] =
+     [VKD3DSIH_DCL_OUTPUT                      ] = "dcl_output",
+     [VKD3DSIH_DCL_OUTPUT_CONTROL_POINT_COUNT  ] = "dcl_output_control_point_count",
+     [VKD3DSIH_DCL_OUTPUT_SIV                  ] = "dcl_output_siv",
+-    [VKD3DSIH_DCL_OUTPUT_TOPOLOGY             ] = "dcl_outputTopology",
++    [VKD3DSIH_DCL_OUTPUT_TOPOLOGY             ] = "dcl_outputtopology",
+     [VKD3DSIH_DCL_RESOURCE_RAW                ] = "dcl_resource_raw",
+     [VKD3DSIH_DCL_RESOURCE_STRUCTURED         ] = "dcl_resource_structured",
+     [VKD3DSIH_DCL_SAMPLER                     ] = "dcl_sampler",
+@@ -104,7 +104,7 @@ static const char * const shader_opcode_names[] =
+     [VKD3DSIH_DCL_UAV_RAW                     ] = "dcl_uav_raw",
+     [VKD3DSIH_DCL_UAV_STRUCTURED              ] = "dcl_uav_structured",
+     [VKD3DSIH_DCL_UAV_TYPED                   ] = "dcl_uav_typed",
+-    [VKD3DSIH_DCL_VERTICES_OUT                ] = "dcl_maxOutputVertexCount",
++    [VKD3DSIH_DCL_VERTICES_OUT                ] = "dcl_maxout",
+     [VKD3DSIH_DDIV                            ] = "ddiv",
+     [VKD3DSIH_DEF                             ] = "def",
+     [VKD3DSIH_DEFAULT                         ] = "default",
+diff --git a/libs/vkd3d/libs/vkd3d-shader/glsl.c b/libs/vkd3d/libs/vkd3d-shader/glsl.c
+index b0aacdfef65..f8fec6ac2bc 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/glsl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/glsl.c
+@@ -38,7 +38,16 @@ struct vkd3d_glsl_generator
+     struct vkd3d_shader_location location;
+     struct vkd3d_shader_message_context *message_context;
+     unsigned int indent;
++    const char *prefix;
+     bool failed;
++
++    struct shader_limits
++    {
++        unsigned int input_count;
++        unsigned int output_count;
++    } limits;
++    bool interstage_input;
++    bool interstage_output;
+ };
+ 
+ static void VKD3D_PRINTF_FUNC(3, 4) vkd3d_glsl_compiler_error(
+@@ -53,6 +62,27 @@ static void VKD3D_PRINTF_FUNC(3, 4) vkd3d_glsl_compiler_error(
+     generator->failed = true;
+ }
+ 
++static const char *shader_glsl_get_prefix(enum vkd3d_shader_type type)
++{
++    switch (type)
++    {
++        case VKD3D_SHADER_TYPE_VERTEX:
++            return "vs";
++        case VKD3D_SHADER_TYPE_HULL:
++            return "hs";
++        case VKD3D_SHADER_TYPE_DOMAIN:
++            return "ds";
++        case VKD3D_SHADER_TYPE_GEOMETRY:
++            return "gs";
++        case VKD3D_SHADER_TYPE_PIXEL:
++            return "ps";
++        case VKD3D_SHADER_TYPE_COMPUTE:
++            return "cs";
++        default:
++            return NULL;
++    }
++}
++
+ static void shader_glsl_print_indent(struct vkd3d_string_buffer *buffer, unsigned int indent)
+ {
+     vkd3d_string_buffer_printf(buffer, "%*s", 4 * indent, "");
+@@ -67,6 +97,42 @@ static void shader_glsl_print_register_name(struct vkd3d_string_buffer *buffer,
+             vkd3d_string_buffer_printf(buffer, "r[%u]", reg->idx[0].offset);
+             break;
+ 
++        case VKD3DSPR_INPUT:
++            if (reg->idx_count != 1)
++            {
++                vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                        "Internal compiler error: Unhandled input register index count %u.", reg->idx_count);
++                vkd3d_string_buffer_printf(buffer, "<unhandled register %#x>", reg->type);
++                break;
++            }
++            if (reg->idx[0].rel_addr)
++            {
++                vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                        "Internal compiler error: Unhandled input register indirect addressing.");
++                vkd3d_string_buffer_printf(buffer, "<unhandled register %#x>", reg->type);
++                break;
++            }
++            vkd3d_string_buffer_printf(buffer, "%s_in[%u]", gen->prefix, reg->idx[0].offset);
++            break;
++
++        case VKD3DSPR_OUTPUT:
++            if (reg->idx_count != 1)
++            {
++                vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                        "Internal compiler error: Unhandled output register index count %u.", reg->idx_count);
++                vkd3d_string_buffer_printf(buffer, "<unhandled register %#x>", reg->type);
++                break;
++            }
++            if (reg->idx[0].rel_addr)
++            {
++                vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                        "Internal compiler error: Unhandled output register indirect addressing.");
++                vkd3d_string_buffer_printf(buffer, "<unhandled register %#x>", reg->type);
++                break;
++            }
++            vkd3d_string_buffer_printf(buffer, "%s_out[%u]", gen->prefix, reg->idx[0].offset);
++            break;
++
+         default:
+             vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
+                     "Internal compiler error: Unhandled register type %#x.", reg->type);
+@@ -198,16 +264,130 @@ static void shader_glsl_mov(struct vkd3d_glsl_generator *gen, const struct vkd3d
+     glsl_dst_cleanup(&dst, &gen->string_buffers);
+ }
+ 
++static void shader_glsl_print_sysval_name(struct vkd3d_string_buffer *buffer, struct vkd3d_glsl_generator *gen,
++        enum vkd3d_shader_sysval_semantic sysval, unsigned int idx)
++{
++    switch (sysval)
++    {
++        case VKD3D_SHADER_SV_POSITION:
++            if (gen->program->shader_version.type == VKD3D_SHADER_TYPE_PIXEL
++                    || gen->program->shader_version.type == VKD3D_SHADER_TYPE_COMPUTE)
++            {
++                vkd3d_string_buffer_printf(buffer, "<unhandled sysval %#x>", sysval);
++                vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                        "Internal compiler error: Unhandled system value %#x.", sysval);
++            }
++            else
++            {
++                vkd3d_string_buffer_printf(buffer, "gl_Position");
++                if (idx)
++                    vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                            "Internal compiler error: Unhandled SV_POSITION index %u.", idx);
++            }
++            break;
++
++        default:
++            vkd3d_string_buffer_printf(buffer, "<unhandled sysval %#x>", sysval);
++            vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                    "Internal compiler error: Unhandled system value %#x.", sysval);
++            break;
++    }
++}
++
++static void shader_glsl_shader_prologue(struct vkd3d_glsl_generator *gen)
++{
++    const struct shader_signature *signature = &gen->program->input_signature;
++    struct vkd3d_string_buffer *buffer = gen->buffer;
++    const struct signature_element *e;
++    unsigned int i;
++
++    for (i = 0; i < signature->element_count; ++i)
++    {
++        e = &signature->elements[i];
++
++        if (e->target_location == SIGNATURE_TARGET_LOCATION_UNUSED)
++            continue;
++
++        shader_glsl_print_indent(buffer, gen->indent);
++        vkd3d_string_buffer_printf(buffer, "%s_in[%u]", gen->prefix, e->register_index);
++        shader_glsl_print_write_mask(buffer, e->mask);
++        if (e->sysval_semantic == VKD3D_SHADER_SV_NONE)
++        {
++            if (gen->interstage_input)
++            {
++                vkd3d_string_buffer_printf(buffer, " = shader_in.reg_%u", e->target_location);
++                if (e->target_location >= gen->limits.input_count)
++                    vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                            "Internal compiler error: Input element %u specifies target location %u, "
++                            "but only %u inputs are supported.",
++                            i, e->target_location, gen->limits.input_count);
++            }
++            else
++            {
++                vkd3d_string_buffer_printf(buffer, " = shader_in_%u", i);
++            }
++        }
++        else
++        {
++            vkd3d_string_buffer_printf(buffer, " = ");
++            shader_glsl_print_sysval_name(buffer, gen, e->sysval_semantic, e->semantic_index);
++        }
++        shader_glsl_print_write_mask(buffer, e->mask);
++        vkd3d_string_buffer_printf(buffer, ";\n");
++    }
++}
++
++static void shader_glsl_shader_epilogue(struct vkd3d_glsl_generator *gen)
++{
++    const struct shader_signature *signature = &gen->program->output_signature;
++    struct vkd3d_string_buffer *buffer = gen->buffer;
++    const struct signature_element *e;
++    unsigned int i;
++
++    for (i = 0; i < signature->element_count; ++i)
++    {
++        e = &signature->elements[i];
++
++        if (e->target_location == SIGNATURE_TARGET_LOCATION_UNUSED)
++            continue;
++
++        shader_glsl_print_indent(buffer, gen->indent);
++        if (e->sysval_semantic == VKD3D_SHADER_SV_NONE)
++        {
++            if (gen->interstage_output)
++            {
++                vkd3d_string_buffer_printf(buffer, "shader_out.reg_%u", e->target_location);
++                if (e->target_location >= gen->limits.output_count)
++                    vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                            "Internal compiler error: Output element %u specifies target location %u, "
++                            "but only %u outputs are supported.",
++                            i, e->target_location, gen->limits.output_count);
++            }
++            else
++            {
++                vkd3d_string_buffer_printf(buffer, "<unhandled output %u>", e->target_location);
++                vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                        "Internal compiler error: Unhandled output.");
++            }
++        }
++        else
++        {
++            shader_glsl_print_sysval_name(buffer, gen, e->sysval_semantic, e->semantic_index);
++        }
++        shader_glsl_print_write_mask(buffer, e->mask);
++        vkd3d_string_buffer_printf(buffer, " = %s_out[%u]", gen->prefix, e->register_index);
++        shader_glsl_print_write_mask(buffer, e->mask);
++        vkd3d_string_buffer_printf(buffer, ";\n");
++    }
++}
++
+ static void shader_glsl_ret(struct vkd3d_glsl_generator *gen, const struct vkd3d_shader_instruction *ins)
+ {
+     const struct vkd3d_shader_version *version = &gen->program->shader_version;
+ 
+-    /*
+-    * TODO: Implement in_subroutine
+-    * TODO: shader_glsl_generate_shader_epilogue(generator);
+-    */
+     if (version->major >= 4)
+     {
++        shader_glsl_shader_epilogue(gen);
+         shader_glsl_print_indent(gen->buffer, gen->indent);
+         vkd3d_string_buffer_printf(gen->buffer, "return;\n");
+     }
+@@ -237,13 +417,144 @@ static void vkd3d_glsl_handle_instruction(struct vkd3d_glsl_generator *gen,
+     }
+ }
+ 
++static void shader_glsl_generate_interface_block(struct vkd3d_string_buffer *buffer,
++        const char *type, unsigned int count)
++{
++    unsigned int i;
++
++    vkd3d_string_buffer_printf(buffer, "%s shader_in_out\n{\n", type);
++    for (i = 0; i < count; ++i)
++    {
++        vkd3d_string_buffer_printf(buffer, "    vec4 reg_%u;\n", i);
++    }
++    vkd3d_string_buffer_printf(buffer, "} shader_%s;\n", type);
++}
++
++static void shader_glsl_generate_input_declarations(struct vkd3d_glsl_generator *gen)
++{
++    const struct shader_signature *signature = &gen->program->input_signature;
++    struct vkd3d_string_buffer *buffer = gen->buffer;
++    const struct signature_element *e;
++    unsigned int i;
++
++    if (!gen->interstage_input)
++    {
++        for (i = 0; i < signature->element_count; ++i)
++        {
++            e = &signature->elements[i];
++
++            if (e->target_location == SIGNATURE_TARGET_LOCATION_UNUSED)
++                continue;
++
++            if (e->sysval_semantic)
++            {
++                vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                        "Internal compiler error: Unhandled system value %#x.", e->sysval_semantic);
++                continue;
++            }
++
++            if (e->component_type != VKD3D_SHADER_COMPONENT_FLOAT)
++            {
++                vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                        "Internal compiler error: Unhandled component type %#x.", e->component_type);
++                continue;
++            }
++
++            if (e->min_precision != VKD3D_SHADER_MINIMUM_PRECISION_NONE)
++            {
++                vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                        "Internal compiler error: Unhandled minimum precision %#x.", e->min_precision);
++                continue;
++            }
++
++            if (e->interpolation_mode != VKD3DSIM_NONE)
++            {
++                vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                        "Internal compiler error: Unhandled interpolation mode %#x.", e->interpolation_mode);
++                continue;
++            }
++
++            vkd3d_string_buffer_printf(buffer,
++                    "layout(location = %u) in vec4 shader_in_%u;\n", e->target_location, i);
++        }
++    }
++    else if (gen->limits.input_count)
++    {
++        shader_glsl_generate_interface_block(buffer, "in", gen->limits.input_count);
++    }
++    vkd3d_string_buffer_printf(buffer, "\n");
++}
++
++static void shader_glsl_generate_output_declarations(struct vkd3d_glsl_generator *gen)
++{
++    const struct shader_signature *signature = &gen->program->output_signature;
++    struct vkd3d_string_buffer *buffer = gen->buffer;
++    const struct signature_element *e;
++    unsigned int i;
++
++    if (!gen->interstage_output)
++    {
++        for (i = 0; i < signature->element_count; ++i)
++        {
++            e = &signature->elements[i];
++
++            if (e->target_location == SIGNATURE_TARGET_LOCATION_UNUSED)
++                continue;
++
++            if (e->sysval_semantic != VKD3D_SHADER_SV_TARGET)
++            {
++                vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                        "Internal compiler error: Unhandled system value %#x.", e->sysval_semantic);
++                continue;
++            }
++
++            if (e->component_type != VKD3D_SHADER_COMPONENT_FLOAT)
++            {
++                vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                        "Internal compiler error: Unhandled component type %#x.", e->component_type);
++                continue;
++            }
++
++            if (e->min_precision != VKD3D_SHADER_MINIMUM_PRECISION_NONE)
++            {
++                vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                        "Internal compiler error: Unhandled minimum precision %#x.", e->min_precision);
++                continue;
++            }
++
++            if (e->interpolation_mode != VKD3DSIM_NONE)
++            {
++                vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                        "Internal compiler error: Unhandled interpolation mode %#x.", e->interpolation_mode);
++                continue;
++            }
++
++            vkd3d_string_buffer_printf(buffer,
++                    "layout(location = %u) out vec4 shader_out_%u;\n", e->target_location, i);
++        }
++    }
++    else if (gen->limits.output_count)
++    {
++        shader_glsl_generate_interface_block(buffer, "out", gen->limits.output_count);
++    }
++    vkd3d_string_buffer_printf(buffer, "\n");
++}
++
+ static void shader_glsl_generate_declarations(struct vkd3d_glsl_generator *gen)
+ {
+     const struct vsir_program *program = gen->program;
+     struct vkd3d_string_buffer *buffer = gen->buffer;
+ 
++    shader_glsl_generate_input_declarations(gen);
++    shader_glsl_generate_output_declarations(gen);
++
++    if (gen->limits.input_count)
++        vkd3d_string_buffer_printf(buffer, "vec4 %s_in[%u];\n", gen->prefix, gen->limits.input_count);
++    if (gen->limits.output_count)
++        vkd3d_string_buffer_printf(buffer, "vec4 %s_out[%u];\n", gen->prefix, gen->limits.output_count);
+     if (program->temp_count)
+-        vkd3d_string_buffer_printf(buffer, "vec4 r[%u];\n\n", program->temp_count);
++        vkd3d_string_buffer_printf(buffer, "vec4 r[%u];\n", program->temp_count);
++    vkd3d_string_buffer_printf(buffer, "\n");
+ }
+ 
+ static int vkd3d_glsl_generator_generate(struct vkd3d_glsl_generator *gen, struct vkd3d_shader_code *out)
+@@ -264,6 +575,7 @@ static int vkd3d_glsl_generator_generate(struct vkd3d_glsl_generator *gen, struc
+     vkd3d_string_buffer_printf(buffer, "void main()\n{\n");
+ 
+     ++gen->indent;
++    shader_glsl_shader_prologue(gen);
+     for (i = 0; i < instructions->count; ++i)
+     {
+         vkd3d_glsl_handle_instruction(gen, &instructions->elements[i]);
+@@ -294,14 +606,52 @@ static void vkd3d_glsl_generator_cleanup(struct vkd3d_glsl_generator *gen)
+     vkd3d_string_buffer_cache_cleanup(&gen->string_buffers);
+ }
+ 
++static void shader_glsl_init_limits(struct vkd3d_glsl_generator *gen, const struct vkd3d_shader_version *version)
++{
++    struct shader_limits *limits = &gen->limits;
++
++    if (version->major < 4 || version->major >= 6)
++        vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                "Internal compiler error: Unhandled shader version %u.%u.", version->major, version->minor);
++
++    switch (version->type)
++    {
++        case VKD3D_SHADER_TYPE_VERTEX:
++            limits->input_count = 32;
++            limits->output_count = 32;
++            break;
++        case VKD3D_SHADER_TYPE_PIXEL:
++            limits->input_count = 32;
++            limits->output_count = 8;
++            break;
++        default:
++            vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                    "Internal compiler error: Unhandled shader type %#x.", version->type);
++            limits->input_count = 0;
++            limits->output_count = 0;
++            break;
++    }
++}
++
+ static void vkd3d_glsl_generator_init(struct vkd3d_glsl_generator *gen,
+         struct vsir_program *program, struct vkd3d_shader_message_context *message_context)
+ {
++    enum vkd3d_shader_type type = program->shader_version.type;
++
+     memset(gen, 0, sizeof(*gen));
+     gen->program = program;
+     vkd3d_string_buffer_cache_init(&gen->string_buffers);
+     gen->buffer = vkd3d_string_buffer_get(&gen->string_buffers);
+     gen->message_context = message_context;
++    if (!(gen->prefix = shader_glsl_get_prefix(type)))
++    {
++        vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                "Internal compiler error: Unhandled shader type %#x.", type);
++        gen->prefix = "unknown";
++    }
++    shader_glsl_init_limits(gen, &program->shader_version);
++    gen->interstage_input = type != VKD3D_SHADER_TYPE_VERTEX;
++    gen->interstage_output = type != VKD3D_SHADER_TYPE_PIXEL;
+ }
+ 
+ int glsl_compile(struct vsir_program *program, uint64_t config_flags,
+diff --git a/libs/vkd3d/libs/vkd3d-shader/ir.c b/libs/vkd3d/libs/vkd3d-shader/ir.c
+index 1efb7106e71..9e06b94e2eb 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/ir.c
++++ b/libs/vkd3d/libs/vkd3d-shader/ir.c
+@@ -6153,6 +6153,21 @@ static void vsir_validator_push_block(struct validation_context *ctx, enum vkd3d
+     ctx->blocks[ctx->depth++] = opcode;
+ }
+ 
++static void vsir_validate_hull_shader_phase(struct validation_context *ctx,
++        const struct vkd3d_shader_instruction *instruction)
++{
++    if (ctx->program->shader_version.type != VKD3D_SHADER_TYPE_HULL)
++        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_HANDLER,
++                "Phase instruction %#x is only valid in a hull shader.",
++                instruction->opcode);
++    if (ctx->depth != 0)
++        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_CONTROL_FLOW,
++                "Phase instruction %#x must appear to top level.",
++                instruction->opcode);
++    ctx->phase = instruction->opcode;
++    ctx->dcl_temps_found = false;
++}
++
+ static void vsir_validate_branch(struct validation_context *ctx, const struct vkd3d_shader_instruction *instruction)
+ {
+     size_t i;
+@@ -6193,6 +6208,54 @@ static void vsir_validate_branch(struct validation_context *ctx, const struct vk
+                         instruction->src[i].reg.type);
+         }
+     }
++
++    ctx->inside_block = false;
++}
++
++static void vsir_validate_dcl_gs_instances(struct validation_context *ctx,
++        const struct vkd3d_shader_instruction *instruction)
++{
++    if (!instruction->declaration.count || instruction->declaration.count > 32)
++        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_GS, "GS instance count %u is invalid.",
++                instruction->declaration.count);
++}
++
++static void vsir_validate_dcl_hs_max_tessfactor(struct validation_context *ctx,
++        const struct vkd3d_shader_instruction *instruction)
++{
++    /* Exclude non-finite values. */
++    if (!(instruction->declaration.max_tessellation_factor >= 1.0f
++            && instruction->declaration.max_tessellation_factor <= 64.0f))
++        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_TESSELLATION,
++                "Max tessellation factor %f is invalid.",
++                instruction->declaration.max_tessellation_factor);
++}
++
++static void vsir_validate_dcl_input_primitive(struct validation_context *ctx,
++        const struct vkd3d_shader_instruction *instruction)
++{
++    if (instruction->declaration.primitive_type.type == VKD3D_PT_UNDEFINED
++            || instruction->declaration.primitive_type.type >= VKD3D_PT_COUNT)
++        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_GS, "GS input primitive %u is invalid.",
++                instruction->declaration.primitive_type.type);
++}
++
++static void vsir_validate_dcl_output_control_point_count(struct validation_context *ctx,
++        const struct vkd3d_shader_instruction *instruction)
++{
++    if (!instruction->declaration.count || instruction->declaration.count > 32)
++        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_TESSELLATION,
++                "Output control point count %u is invalid.",
++                instruction->declaration.count);
++}
++
++static void vsir_validate_dcl_output_topology(struct validation_context *ctx,
++        const struct vkd3d_shader_instruction *instruction)
++{
++    if (instruction->declaration.primitive_type.type == VKD3D_PT_UNDEFINED
++            || instruction->declaration.primitive_type.type >= VKD3D_PT_COUNT)
++        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_GS, "GS output primitive %u is invalid.",
++                instruction->declaration.primitive_type.type);
+ }
+ 
+ static void vsir_validate_dcl_temps(struct validation_context *ctx,
+@@ -6208,6 +6271,45 @@ static void vsir_validate_dcl_temps(struct validation_context *ctx,
+     ctx->dcl_temps_found = true;
+ }
+ 
++static void vsir_validate_dcl_tessellator_domain(struct validation_context *ctx,
++        const struct vkd3d_shader_instruction *instruction)
++{
++    if (instruction->declaration.tessellator_domain == VKD3D_TESSELLATOR_DOMAIN_INVALID
++            || instruction->declaration.tessellator_domain >= VKD3D_TESSELLATOR_DOMAIN_COUNT)
++        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_TESSELLATION,
++                "Tessellator domain %#x is invalid.", instruction->declaration.tessellator_domain);
++}
++
++static void vsir_validate_dcl_tessellator_output_primitive(struct validation_context *ctx,
++        const struct vkd3d_shader_instruction *instruction)
++{
++    if (!instruction->declaration.tessellator_output_primitive
++            || instruction->declaration.tessellator_output_primitive
++            > VKD3D_SHADER_TESSELLATOR_OUTPUT_TRIANGLE_CCW)
++        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_TESSELLATION,
++                "Tessellator output primitive %#x is invalid.",
++                instruction->declaration.tessellator_output_primitive);
++}
++
++static void vsir_validate_dcl_tessellator_partitioning(struct validation_context *ctx,
++        const struct vkd3d_shader_instruction *instruction)
++{
++    if (!instruction->declaration.tessellator_partitioning
++            || instruction->declaration.tessellator_partitioning
++            > VKD3D_SHADER_TESSELLATOR_PARTITIONING_FRACTIONAL_EVEN)
++        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_TESSELLATION,
++                "Tessellator partitioning %#x is invalid.",
++                instruction->declaration.tessellator_partitioning);
++}
++
++static void vsir_validate_dcl_vertices_out(struct validation_context *ctx,
++        const struct vkd3d_shader_instruction *instruction)
++{
++    if (instruction->declaration.count > 1024)
++        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_GS, "GS output vertex count %u is invalid.",
++                instruction->declaration.count);
++}
++
+ static void vsir_validate_else(struct validation_context *ctx, const struct vkd3d_shader_instruction *instruction)
+ {
+     vsir_validate_cf_type(ctx, instruction, VSIR_CF_STRUCTURED);
+@@ -6278,6 +6380,11 @@ static void vsir_validate_label(struct validation_context *ctx, const struct vkd
+         validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_REGISTER_TYPE,
+                 "Invalid register of type %#x in a LABEL instruction, expected LABEL.",
+                 instruction->src[0].reg.type);
++
++    if (ctx->inside_block)
++        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_CONTROL_FLOW,
++                "Invalid LABEL instruction inside a block.");
++    ctx->inside_block = true;
+ }
+ 
+ static void vsir_validate_loop(struct validation_context *ctx, const struct vkd3d_shader_instruction *instruction)
+@@ -6359,6 +6466,7 @@ static void vsir_validate_rep(struct validation_context *ctx, const struct vkd3d
+ 
+ static void vsir_validate_ret(struct validation_context *ctx, const struct vkd3d_shader_instruction *instruction)
+ {
++    ctx->inside_block = false;
+ }
+ 
+ static void vsir_validate_switch(struct validation_context *ctx, const struct vkd3d_shader_instruction *instruction)
+@@ -6412,6 +6520,8 @@ static void vsir_validate_switch_monolithic(struct validation_context *ctx,
+                     "Invalid label register for case %u of type %#x in monolithic SWITCH instruction, "
+                     "expected LABEL.", i, instruction->src[value_idx].reg.type);
+     }
++
++    ctx->inside_block = false;
+ }
+ 
+ struct vsir_validator_instruction_desc
+@@ -6423,23 +6533,36 @@ struct vsir_validator_instruction_desc
+ 
+ static const struct vsir_validator_instruction_desc vsir_validator_instructions[] =
+ {
+-    [VKD3DSIH_BRANCH] =            {0, ~0u, vsir_validate_branch},
+-    [VKD3DSIH_DCL_TEMPS] =         {0,   0, vsir_validate_dcl_temps},
+-    [VKD3DSIH_ELSE] =              {0,   0, vsir_validate_else},
+-    [VKD3DSIH_ENDIF] =             {0,   0, vsir_validate_endif},
+-    [VKD3DSIH_ENDLOOP] =           {0,   0, vsir_validate_endloop},
+-    [VKD3DSIH_ENDREP] =            {0,   0, vsir_validate_endrep},
+-    [VKD3DSIH_ENDSWITCH] =         {0,   0, vsir_validate_endswitch},
+-    [VKD3DSIH_IF] =                {0,   1, vsir_validate_if},
+-    [VKD3DSIH_IFC] =               {0,   2, vsir_validate_ifc},
+-    [VKD3DSIH_LABEL] =             {0,   1, vsir_validate_label},
+-    [VKD3DSIH_LOOP] =              {0, ~0u, vsir_validate_loop},
+-    [VKD3DSIH_NOP] =               {0,   0, vsir_validate_nop},
+-    [VKD3DSIH_PHI] =               {1, ~0u, vsir_validate_phi},
+-    [VKD3DSIH_REP] =               {0,   1, vsir_validate_rep},
+-    [VKD3DSIH_RET] =               {0,   0, vsir_validate_ret},
+-    [VKD3DSIH_SWITCH] =            {0,   1, vsir_validate_switch},
+-    [VKD3DSIH_SWITCH_MONOLITHIC] = {0, ~0u, vsir_validate_switch_monolithic},
++    [VKD3DSIH_BRANCH] =                           {0, ~0u, vsir_validate_branch},
++    [VKD3DSIH_HS_CONTROL_POINT_PHASE] =           {0,   0, vsir_validate_hull_shader_phase},
++    [VKD3DSIH_HS_DECLS] =                         {0,   0, vsir_validate_hull_shader_phase},
++    [VKD3DSIH_HS_FORK_PHASE] =                    {0,   0, vsir_validate_hull_shader_phase},
++    [VKD3DSIH_HS_JOIN_PHASE] =                    {0,   0, vsir_validate_hull_shader_phase},
++    [VKD3DSIH_DCL_GS_INSTANCES] =                 {0,   0, vsir_validate_dcl_gs_instances},
++    [VKD3DSIH_DCL_HS_MAX_TESSFACTOR] =            {0,   0, vsir_validate_dcl_hs_max_tessfactor},
++    [VKD3DSIH_DCL_INPUT_PRIMITIVE] =              {0,   0, vsir_validate_dcl_input_primitive},
++    [VKD3DSIH_DCL_OUTPUT_CONTROL_POINT_COUNT] =   {0,   0, vsir_validate_dcl_output_control_point_count},
++    [VKD3DSIH_DCL_OUTPUT_TOPOLOGY] =              {0,   0, vsir_validate_dcl_output_topology},
++    [VKD3DSIH_DCL_TEMPS] =                        {0,   0, vsir_validate_dcl_temps},
++    [VKD3DSIH_DCL_TESSELLATOR_DOMAIN] =           {0,   0, vsir_validate_dcl_tessellator_domain},
++    [VKD3DSIH_DCL_TESSELLATOR_OUTPUT_PRIMITIVE] = {0,   0, vsir_validate_dcl_tessellator_output_primitive},
++    [VKD3DSIH_DCL_TESSELLATOR_PARTITIONING] =     {0,   0, vsir_validate_dcl_tessellator_partitioning},
++    [VKD3DSIH_DCL_VERTICES_OUT] =                 {0,   0, vsir_validate_dcl_vertices_out},
++    [VKD3DSIH_ELSE] =                             {0,   0, vsir_validate_else},
++    [VKD3DSIH_ENDIF] =                            {0,   0, vsir_validate_endif},
++    [VKD3DSIH_ENDLOOP] =                          {0,   0, vsir_validate_endloop},
++    [VKD3DSIH_ENDREP] =                           {0,   0, vsir_validate_endrep},
++    [VKD3DSIH_ENDSWITCH] =                        {0,   0, vsir_validate_endswitch},
++    [VKD3DSIH_IF] =                               {0,   1, vsir_validate_if},
++    [VKD3DSIH_IFC] =                              {0,   2, vsir_validate_ifc},
++    [VKD3DSIH_LABEL] =                            {0,   1, vsir_validate_label},
++    [VKD3DSIH_LOOP] =                             {0, ~0u, vsir_validate_loop},
++    [VKD3DSIH_NOP] =                              {0,   0, vsir_validate_nop},
++    [VKD3DSIH_PHI] =                              {1, ~0u, vsir_validate_phi},
++    [VKD3DSIH_REP] =                              {0,   1, vsir_validate_rep},
++    [VKD3DSIH_RET] =                              {0,   0, vsir_validate_ret},
++    [VKD3DSIH_SWITCH] =                           {0,   1, vsir_validate_switch},
++    [VKD3DSIH_SWITCH_MONOLITHIC] =                {0, ~0u, vsir_validate_switch_monolithic},
+ };
+ 
+ static void vsir_validate_instruction(struct validation_context *ctx)
+@@ -6462,121 +6585,40 @@ static void vsir_validate_instruction(struct validation_context *ctx)
+                 instruction->opcode);
+     }
+ 
+-    switch (instruction->opcode)
++    if (version->type == VKD3D_SHADER_TYPE_HULL && ctx->phase == VKD3DSIH_INVALID)
+     {
+-        case VKD3DSIH_HS_DECLS:
+-        case VKD3DSIH_HS_CONTROL_POINT_PHASE:
+-        case VKD3DSIH_HS_FORK_PHASE:
+-        case VKD3DSIH_HS_JOIN_PHASE:
+-            vsir_validate_dst_count(ctx, instruction, 0);
+-            vsir_validate_src_count(ctx, instruction, 0);
+-            if (version->type != VKD3D_SHADER_TYPE_HULL)
+-                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_HANDLER,
+-                        "Phase instruction %#x is only valid in a hull shader.",
+-                        instruction->opcode);
+-            if (ctx->depth != 0)
+-                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_CONTROL_FLOW,
+-                        "Phase instruction %#x must appear to top level.",
+-                        instruction->opcode);
+-            ctx->phase = instruction->opcode;
+-            ctx->dcl_temps_found = false;
+-            return;
+-
+-        case VKD3DSIH_DCL_HS_MAX_TESSFACTOR:
+-            /* Exclude non-finite values. */
+-            if (!(instruction->declaration.max_tessellation_factor >= 1.0f
+-                    && instruction->declaration.max_tessellation_factor <= 64.0f))
+-                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_TESSELLATION, "Max tessellation factor %f is invalid.",
+-                        instruction->declaration.max_tessellation_factor);
+-            return;
+-
+-        case VKD3DSIH_DCL_INPUT_PRIMITIVE:
+-            if (instruction->declaration.primitive_type.type == VKD3D_PT_UNDEFINED
+-                    || instruction->declaration.primitive_type.type >= VKD3D_PT_COUNT)
+-                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_GS, "GS input primitive %u is invalid.",
+-                        instruction->declaration.primitive_type.type);
+-            return;
+-
+-        case VKD3DSIH_DCL_VERTICES_OUT:
+-            if (instruction->declaration.count > 1024)
+-                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_GS, "GS output vertex count %u is invalid.",
+-                        instruction->declaration.count);
+-            return;
+-
+-        case VKD3DSIH_DCL_OUTPUT_TOPOLOGY:
+-            if (instruction->declaration.primitive_type.type == VKD3D_PT_UNDEFINED
+-                    || instruction->declaration.primitive_type.type >= VKD3D_PT_COUNT)
+-                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_GS, "GS output primitive %u is invalid.",
+-                        instruction->declaration.primitive_type.type);
+-            return;
+-
+-        case VKD3DSIH_DCL_GS_INSTANCES:
+-            if (!instruction->declaration.count || instruction->declaration.count > 32)
+-                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_GS, "GS instance count %u is invalid.",
+-                        instruction->declaration.count);
+-            return;
+-
+-        case VKD3DSIH_DCL_OUTPUT_CONTROL_POINT_COUNT:
+-            if (!instruction->declaration.count || instruction->declaration.count > 32)
+-                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_TESSELLATION, "Output control point count %u is invalid.",
+-                        instruction->declaration.count);
+-            return;
+-
+-        case VKD3DSIH_DCL_TESSELLATOR_DOMAIN:
+-            if (instruction->declaration.tessellator_domain == VKD3D_TESSELLATOR_DOMAIN_INVALID
+-                    || instruction->declaration.tessellator_domain >= VKD3D_TESSELLATOR_DOMAIN_COUNT)
+-                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_TESSELLATION,
+-                        "Tessellator domain %#x is invalid.", instruction->declaration.tessellator_domain);
+-            return;
+-
+-        case VKD3DSIH_DCL_TESSELLATOR_OUTPUT_PRIMITIVE:
+-            if (!instruction->declaration.tessellator_output_primitive
+-                    || instruction->declaration.tessellator_output_primitive > VKD3D_SHADER_TESSELLATOR_OUTPUT_TRIANGLE_CCW)
+-                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_TESSELLATION,
+-                        "Tessellator output primitive %#x is invalid.", instruction->declaration.tessellator_output_primitive);
+-            return;
+-
+-        case VKD3DSIH_DCL_TESSELLATOR_PARTITIONING:
+-            if (!instruction->declaration.tessellator_partitioning
+-                    || instruction->declaration.tessellator_partitioning > VKD3D_SHADER_TESSELLATOR_PARTITIONING_FRACTIONAL_EVEN)
+-                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_TESSELLATION,
+-                        "Tessellator partitioning %#x is invalid.", instruction->declaration.tessellator_partitioning);
+-            return;
++        switch (instruction->opcode)
++        {
++            case VKD3DSIH_NOP:
++            case VKD3DSIH_HS_DECLS:
++            case VKD3DSIH_HS_CONTROL_POINT_PHASE:
++            case VKD3DSIH_HS_FORK_PHASE:
++            case VKD3DSIH_HS_JOIN_PHASE:
++                break;
+ 
+-        default:
+-            break;
++            default:
++                if (!vsir_instruction_is_dcl(instruction))
++                    validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_HANDLER,
++                            "Instruction %#x appear before any phase instruction in a hull shader.",
++                            instruction->opcode);
++                break;
++        }
+     }
+ 
+-    /* Only DCL instructions may occur outside hull shader phases. */
+-    if (!vsir_instruction_is_dcl(instruction) && version->type == VKD3D_SHADER_TYPE_HULL
+-            && ctx->phase == VKD3DSIH_INVALID)
+-        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_HANDLER,
+-                "Instruction %#x appear before any phase instruction in a hull shader.",
+-                instruction->opcode);
+-
+-    if (ctx->program->cf_type == VSIR_CF_BLOCKS && !vsir_instruction_is_dcl(instruction)
+-            && instruction->opcode != VKD3DSIH_NOP)
++    if (ctx->program->cf_type == VSIR_CF_BLOCKS && !ctx->inside_block)
+     {
+         switch (instruction->opcode)
+         {
++            case VKD3DSIH_NOP:
+             case VKD3DSIH_LABEL:
+-                if (ctx->inside_block)
+-                    validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_CONTROL_FLOW, "Invalid LABEL instruction inside a block.");
+-                ctx->inside_block = true;
+-                break;
+-
+-            case VKD3DSIH_RET:
+-            case VKD3DSIH_BRANCH:
+-            case VKD3DSIH_SWITCH_MONOLITHIC:
+-                if (!ctx->inside_block)
+-                    validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_CONTROL_FLOW,
+-                            "Invalid instruction %#x outside any block.",
+-                            instruction->opcode);
+-                ctx->inside_block = false;
++            case VKD3DSIH_HS_DECLS:
++            case VKD3DSIH_HS_CONTROL_POINT_PHASE:
++            case VKD3DSIH_HS_FORK_PHASE:
++            case VKD3DSIH_HS_JOIN_PHASE:
+                 break;
+ 
+             default:
+-                if (!ctx->inside_block)
++                if (!vsir_instruction_is_dcl(instruction))
+                     validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_CONTROL_FLOW,
+                             "Invalid instruction %#x outside any block.",
+                             instruction->opcode);
+diff --git a/libs/vkd3d/libs/vkd3d-shader/msl.c b/libs/vkd3d/libs/vkd3d-shader/msl.c
+new file mode 100644
+index 00000000000..2923494feed
+--- /dev/null
++++ b/libs/vkd3d/libs/vkd3d-shader/msl.c
+@@ -0,0 +1,129 @@
++/*
++ * Copyright 2024 Feifan He for CodeWeavers
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#include "vkd3d_shader_private.h"
++
++struct msl_generator
++{
++    struct vsir_program *program;
++    struct vkd3d_string_buffer_cache string_buffers;
++    struct vkd3d_string_buffer *buffer;
++    struct vkd3d_shader_location location;
++    struct vkd3d_shader_message_context *message_context;
++    unsigned int indent;
++};
++
++static void VKD3D_PRINTF_FUNC(3, 4) msl_compiler_error(struct msl_generator *gen,
++        enum vkd3d_shader_error error, const char *fmt, ...)
++{
++    va_list args;
++
++    va_start(args, fmt);
++    vkd3d_shader_verror(gen->message_context, &gen->location, error, fmt, args);
++    va_end(args);
++}
++
++static void msl_print_indent(struct vkd3d_string_buffer *buffer, unsigned int indent)
++{
++    vkd3d_string_buffer_printf(buffer, "%*s", 4 * indent, "");
++}
++
++
++static void msl_unhandled(struct msl_generator *gen, const struct vkd3d_shader_instruction *ins)
++{
++    msl_print_indent(gen->buffer, gen->indent);
++    vkd3d_string_buffer_printf(gen->buffer, "/* <unhandled instruction %#x> */\n", ins->opcode);
++    msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
++            "Internal compiler error: Unhandled instruction %#x.", ins->opcode);
++}
++
++static void msl_handle_instruction(struct msl_generator *gen, const struct vkd3d_shader_instruction *ins)
++{
++    gen->location = ins->location;
++
++    switch (ins->opcode)
++    {
++        case VKD3DSIH_NOP:
++            break;
++        default:
++            msl_unhandled(gen, ins);
++            break;
++    }
++}
++
++static void msl_generator_generate(struct msl_generator *gen)
++{
++    const struct vkd3d_shader_instruction_array *instructions = &gen->program->instructions;
++    unsigned int i;
++
++    MESSAGE("Generating a MSL shader. This is unsupported; you get to keep all the pieces if it breaks.\n");
++
++    vkd3d_string_buffer_printf(gen->buffer, "/* Generated by %s. */\n\n", vkd3d_shader_get_version(NULL, NULL));
++
++    vkd3d_string_buffer_printf(gen->buffer, "void shader_main()\n{\n");
++
++    ++gen->indent;
++    for (i = 0; i < instructions->count; ++i)
++    {
++        msl_handle_instruction(gen, &instructions->elements[i]);
++    }
++
++    vkd3d_string_buffer_printf(gen->buffer, "}\n");
++
++    if (TRACE_ON())
++        vkd3d_string_buffer_trace(gen->buffer);
++}
++
++static void msl_generator_cleanup(struct msl_generator *gen)
++{
++    vkd3d_string_buffer_release(&gen->string_buffers, gen->buffer);
++    vkd3d_string_buffer_cache_cleanup(&gen->string_buffers);
++}
++
++static int msl_generator_init(struct msl_generator *gen, struct vsir_program *program,
++        struct vkd3d_shader_message_context *message_context)
++{
++    memset(gen, 0, sizeof(*gen));
++    gen->program = program;
++    vkd3d_string_buffer_cache_init(&gen->string_buffers);
++    if (!(gen->buffer = vkd3d_string_buffer_get(&gen->string_buffers)))
++    {
++        vkd3d_string_buffer_cache_cleanup(&gen->string_buffers);
++        return VKD3D_ERROR_OUT_OF_MEMORY;
++    }
++    gen->message_context = message_context;
++
++    return VKD3D_OK;
++}
++
++int msl_compile(struct vsir_program *program, uint64_t config_flags,
++        const struct vkd3d_shader_compile_info *compile_info, struct vkd3d_shader_message_context *message_context)
++{
++    struct msl_generator generator;
++    int ret;
++
++    if ((ret = vsir_program_transform(program, config_flags, compile_info, message_context)) < 0)
++        return ret;
++
++    if ((ret = msl_generator_init(&generator, program, message_context)) < 0)
++        return ret;
++    msl_generator_generate(&generator);
++    msl_generator_cleanup(&generator);
++
++    return VKD3D_ERROR_INVALID_SHADER;
++}
+diff --git a/libs/vkd3d/libs/vkd3d-shader/tpf.c b/libs/vkd3d/libs/vkd3d-shader/tpf.c
+index a9d6c9e7c13..48efe1e2d72 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/tpf.c
++++ b/libs/vkd3d/libs/vkd3d-shader/tpf.c
+@@ -635,6 +635,16 @@ enum vkd3d_sm4_stat_field
+     VKD3D_STAT_SAMPLE_BIAS,
+     VKD3D_STAT_LOAD,
+     VKD3D_STAT_STORE,
++    VKD3D_STAT_DCL_VERTICES_OUT,
++    VKD3D_STAT_DCL_INPUT_PRIMITIVE,
++    VKD3D_STAT_DCL_OUTPUT_TOPOLOGY,
++    VKD3D_STAT_DCL_GS_INSTANCES,
++    VKD3D_STAT_BITWISE,
++    VKD3D_STAT_ATOMIC,
++    VKD3D_STAT_TESS_DOMAIN,
++    VKD3D_STAT_TESS_PARTITIONING,
++    VKD3D_STAT_TESS_OUTPUT_PRIMITIVE,
++    VKD3D_STAT_TESS_CONTROL_POINT_COUNT,
+     VKD3D_STAT_COUNT,
+ };
+ 
+@@ -1809,6 +1819,44 @@ static void init_sm4_lookup_tables(struct vkd3d_sm4_lookup_tables *lookup)
+         {VKD3D_SM5_OP_STORE_UAV_TYPED, VKD3D_STAT_STORE},
+         {VKD3D_SM5_OP_STORE_RAW,       VKD3D_STAT_STORE},
+         {VKD3D_SM5_OP_STORE_STRUCTURED,VKD3D_STAT_STORE},
++
++        {VKD3D_SM4_OP_DCL_VERTICES_OUT,    VKD3D_STAT_DCL_VERTICES_OUT},
++        {VKD3D_SM4_OP_DCL_INPUT_PRIMITIVE, VKD3D_STAT_DCL_INPUT_PRIMITIVE},
++        {VKD3D_SM4_OP_DCL_OUTPUT_TOPOLOGY, VKD3D_STAT_DCL_OUTPUT_TOPOLOGY},
++        {VKD3D_SM5_OP_DCL_GS_INSTANCES,    VKD3D_STAT_DCL_GS_INSTANCES},
++
++        {VKD3D_SM4_OP_AND, VKD3D_STAT_BITWISE},
++        {VKD3D_SM4_OP_NOT, VKD3D_STAT_BITWISE},
++        {VKD3D_SM4_OP_OR,  VKD3D_STAT_BITWISE},
++        {VKD3D_SM4_OP_XOR, VKD3D_STAT_BITWISE},
++
++        {VKD3D_SM5_OP_ATOMIC_AND,          VKD3D_STAT_ATOMIC},
++        {VKD3D_SM5_OP_ATOMIC_OR,           VKD3D_STAT_ATOMIC},
++        {VKD3D_SM5_OP_ATOMIC_XOR,          VKD3D_STAT_ATOMIC},
++        {VKD3D_SM5_OP_ATOMIC_CMP_STORE,    VKD3D_STAT_ATOMIC},
++        {VKD3D_SM5_OP_ATOMIC_IADD,         VKD3D_STAT_ATOMIC},
++        {VKD3D_SM5_OP_ATOMIC_IMAX,         VKD3D_STAT_ATOMIC},
++        {VKD3D_SM5_OP_ATOMIC_IMIN,         VKD3D_STAT_ATOMIC},
++        {VKD3D_SM5_OP_ATOMIC_UMAX,         VKD3D_STAT_ATOMIC},
++        {VKD3D_SM5_OP_ATOMIC_UMIN,         VKD3D_STAT_ATOMIC},
++        {VKD3D_SM5_OP_IMM_ATOMIC_ALLOC,    VKD3D_STAT_ATOMIC},
++        {VKD3D_SM5_OP_IMM_ATOMIC_CONSUME,  VKD3D_STAT_ATOMIC},
++        {VKD3D_SM5_OP_IMM_ATOMIC_IADD,     VKD3D_STAT_ATOMIC},
++        {VKD3D_SM5_OP_IMM_ATOMIC_AND,      VKD3D_STAT_ATOMIC},
++        {VKD3D_SM5_OP_IMM_ATOMIC_OR,       VKD3D_STAT_ATOMIC},
++        {VKD3D_SM5_OP_IMM_ATOMIC_XOR,      VKD3D_STAT_ATOMIC},
++        {VKD3D_SM5_OP_IMM_ATOMIC_EXCH,     VKD3D_STAT_ATOMIC},
++        {VKD3D_SM5_OP_IMM_ATOMIC_CMP_EXCH, VKD3D_STAT_ATOMIC},
++        {VKD3D_SM5_OP_IMM_ATOMIC_IMAX,     VKD3D_STAT_ATOMIC},
++        {VKD3D_SM5_OP_IMM_ATOMIC_IMIN,     VKD3D_STAT_ATOMIC},
++        {VKD3D_SM5_OP_IMM_ATOMIC_UMAX,     VKD3D_STAT_ATOMIC},
++        {VKD3D_SM5_OP_IMM_ATOMIC_UMIN,     VKD3D_STAT_ATOMIC},
++
++        {VKD3D_SM5_OP_DCL_TESSELLATOR_DOMAIN, VKD3D_STAT_TESS_DOMAIN},
++        {VKD3D_SM5_OP_DCL_TESSELLATOR_PARTITIONING, VKD3D_STAT_TESS_PARTITIONING},
++        {VKD3D_SM5_OP_DCL_TESSELLATOR_OUTPUT_PRIMITIVE, VKD3D_STAT_TESS_OUTPUT_PRIMITIVE},
++        {VKD3D_SM5_OP_DCL_INPUT_CONTROL_POINT_COUNT, VKD3D_STAT_TESS_CONTROL_POINT_COUNT},
++        {VKD3D_SM5_OP_DCL_OUTPUT_CONTROL_POINT_COUNT, VKD3D_STAT_TESS_CONTROL_POINT_COUNT},
+     };
+ 
+     memset(lookup, 0, sizeof(*lookup));
+@@ -4353,8 +4401,9 @@ static void sm4_write_src_register(const struct tpf_writer *tpf, const struct vk
+ 
+ static void write_sm4_instruction(const struct tpf_writer *tpf, const struct sm4_instruction *instr)
+ {
++    enum vkd3d_shader_type shader_type = tpf->ctx->profile->type;
++    uint32_t token = instr->opcode | instr->extra_bits, opcode;
+     struct vkd3d_bytecode_buffer *buffer = tpf->buffer;
+-    uint32_t token = instr->opcode | instr->extra_bits;
+     enum vkd3d_sm4_stat_field stat_field;
+     unsigned int size, i, j;
+     size_t token_position;
+@@ -4391,8 +4440,39 @@ static void write_sm4_instruction(const struct tpf_writer *tpf, const struct sm4
+ 
+     ++tpf->stat->fields[VKD3D_STAT_INSTR_COUNT];
+ 
+-    stat_field = get_stat_field_from_sm4_opcode(&tpf->lookup, instr->opcode & VKD3D_SM4_OPCODE_MASK);
+-    ++tpf->stat->fields[stat_field];
++    opcode = instr->opcode & VKD3D_SM4_OPCODE_MASK;
++    stat_field = get_stat_field_from_sm4_opcode(&tpf->lookup, opcode);
++
++    switch (opcode)
++    {
++        case VKD3D_SM4_OP_DCL_OUTPUT_TOPOLOGY:
++        case VKD3D_SM4_OP_DCL_INPUT_PRIMITIVE:
++            tpf->stat->fields[stat_field] = (instr->opcode & VKD3D_SM4_PRIMITIVE_TYPE_MASK)
++                    >> VKD3D_SM4_PRIMITIVE_TYPE_SHIFT;
++            break;
++        case VKD3D_SM4_OP_DCL_VERTICES_OUT:
++        case VKD3D_SM5_OP_DCL_GS_INSTANCES:
++            tpf->stat->fields[stat_field] = instr->idx[0];
++            break;
++        case VKD3D_SM5_OP_DCL_TESSELLATOR_DOMAIN:
++        case VKD3D_SM5_OP_DCL_TESSELLATOR_PARTITIONING:
++        case VKD3D_SM5_OP_DCL_TESSELLATOR_OUTPUT_PRIMITIVE:
++            tpf->stat->fields[stat_field] = (instr->opcode & VKD3D_SM5_TESSELLATOR_MASK) >> VKD3D_SM5_TESSELLATOR_SHIFT;
++            break;
++        case VKD3D_SM5_OP_DCL_INPUT_CONTROL_POINT_COUNT:
++        case VKD3D_SM5_OP_DCL_OUTPUT_CONTROL_POINT_COUNT:
++            if ((shader_type == VKD3D_SHADER_TYPE_HULL && opcode == VKD3D_SM5_OP_DCL_OUTPUT_CONTROL_POINT_COUNT)
++                    || (shader_type == VKD3D_SHADER_TYPE_DOMAIN
++                            && opcode == VKD3D_SM5_OP_DCL_INPUT_CONTROL_POINT_COUNT))
++            {
++                tpf->stat->fields[stat_field] = (instr->opcode & VKD3D_SM5_CONTROL_POINT_COUNT_MASK)
++                        >> VKD3D_SM5_CONTROL_POINT_COUNT_SHIFT;
++            }
++            break;
++        default:
++            ++tpf->stat->fields[stat_field];
++    }
++
+ }
+ 
+ static bool encode_texel_offset_as_aoffimmi(struct sm4_instruction *instr,
+@@ -6349,23 +6429,23 @@ static void write_sm4_stat(struct hlsl_ctx *ctx, const struct sm4_stat *stat, st
+     put_u32(&buffer, stat->fields[VKD3D_STAT_MOV]);
+     put_u32(&buffer, stat->fields[VKD3D_STAT_MOVC]);
+     put_u32(&buffer, stat->fields[VKD3D_STAT_CONV]);
+-    put_u32(&buffer, 0); /* Bitwise instructions */
+-    put_u32(&buffer, 0); /* Input primitive */
+-    put_u32(&buffer, 0); /* GS output topology */
+-    put_u32(&buffer, 0); /* GS max output vertex count */
++    put_u32(&buffer, stat->fields[VKD3D_STAT_BITWISE]);
++    put_u32(&buffer, stat->fields[VKD3D_STAT_DCL_INPUT_PRIMITIVE]);
++    put_u32(&buffer, stat->fields[VKD3D_STAT_DCL_OUTPUT_TOPOLOGY]);
++    put_u32(&buffer, stat->fields[VKD3D_STAT_DCL_VERTICES_OUT]);
+     put_u32(&buffer, 0); /* Unknown */
+     put_u32(&buffer, 0); /* Unknown */
+     put_u32(&buffer, 0); /* Sample frequency */
+ 
+     if (hlsl_version_ge(ctx, 5, 0))
+     {
+-        put_u32(&buffer, 0); /* GS instance count */
+-        put_u32(&buffer, 0); /* Control point count */
+-        put_u32(&buffer, 0); /* HS output primitive */
+-        put_u32(&buffer, 0); /* HS partitioning */
+-        put_u32(&buffer, 0); /* Tessellator domain */
++        put_u32(&buffer, stat->fields[VKD3D_STAT_DCL_GS_INSTANCES]);
++        put_u32(&buffer, stat->fields[VKD3D_STAT_TESS_CONTROL_POINT_COUNT]);
++        put_u32(&buffer, stat->fields[VKD3D_STAT_TESS_OUTPUT_PRIMITIVE]);
++        put_u32(&buffer, stat->fields[VKD3D_STAT_TESS_PARTITIONING]);
++        put_u32(&buffer, stat->fields[VKD3D_STAT_TESS_DOMAIN]);
+         put_u32(&buffer, 0); /* Barrier instructions */
+-        put_u32(&buffer, 0); /* Interlocked instructions */
++        put_u32(&buffer, stat->fields[VKD3D_STAT_ATOMIC]);
+         put_u32(&buffer, stat->fields[VKD3D_STAT_STORE]);
+     }
+ 
+-- 
+2.45.2
+
