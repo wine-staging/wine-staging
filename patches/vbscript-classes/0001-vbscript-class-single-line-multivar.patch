@@ -1,0 +1,190 @@
+From fb57e3e8a5f16dc50f29e089595132c3c8b1b1a6 Mon Sep 17 00:00:00 2001
+From: Francis De Brabandere <francisdb@gmail.com>
+Date: Mon, 23 Dec 2024 18:34:04 +0100
+Subject: [PATCH 1/3] vbscript: redim without dim
+
+---
+ dlls/vbscript/compile.c       |  7 +++++++
+ dlls/vbscript/interp.c        | 25 ++++++++++++++++++++++---
+ dlls/vbscript/tests/lang.vbs  | 27 +++++++++++++++++++++++++++
+ dlls/vbscript/vbscript_defs.h |  1 +
+ 4 files changed, 57 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/vbscript/compile.c b/dlls/vbscript/compile.c
+index baddc51d7e4..d2260aedb6e 100644
+--- a/dlls/vbscript/compile.c
++++ b/dlls/vbscript/compile.c
+@@ -1173,6 +1173,13 @@ static HRESULT compile_redim_statement(compile_ctx_t *ctx, redim_statement_t *st
+     HRESULT hres;
+ 
+     while(1) {
++        for (function_decl_t *func = ctx->func_decls; func; func = func->next) {
++            if (!wcsicmp(func->name, decl->identifier)) {
++                /* compilation error: Name redefined */
++                return MAKE_VBSERROR(VBS_COMPILE_ERROR);
++            }
++        }
++
+         hres = compile_args(ctx, decl->dims, &arg_cnt);
+         if(FAILED(hres))
+             return hres;
+diff --git a/dlls/vbscript/interp.c b/dlls/vbscript/interp.c
+index 937cdaf1c8c..32cf90971a7 100644
+--- a/dlls/vbscript/interp.c
++++ b/dlls/vbscript/interp.c
+@@ -1316,9 +1316,28 @@ static HRESULT interp_redim(exec_ctx_t *ctx)
+         return hres;
+     }
+ 
+-    if(ref.type != REF_VAR) {
+-        FIXME("got ref.type = %d\n", ref.type);
+-        return E_FAIL;
++    switch(ref.type) {
++        case REF_DISP:
++        case REF_OBJ:
++        case REF_CONST:
++            return MAKE_VBSERROR(VBSE_ILLEGAL_ASSIGNMENT);
++
++        case REF_FUNC:
++            /* Unreachable: Compiler should have thrown a compilation error: Name redefined */
++            return E_FAIL;
++
++        case REF_NONE:
++            ref.type = REF_VAR;
++            hres = add_dynamic_var(ctx, identifier, FALSE, &ref.u.v);
++            /* Fall through to REF_VAR case */
++
++        case REF_VAR:
++            /* all ok */
++            break;
++
++        default:
++            FIXME("!!!!!!got ref.type = %d\n", ref.type);
++            return E_FAIL;
+     }
+ 
+     v = ref.u.v;
+diff --git a/dlls/vbscript/tests/lang.vbs b/dlls/vbscript/tests/lang.vbs
+index 3c6ce656f1c..023af27f939 100644
+--- a/dlls/vbscript/tests/lang.vbs
++++ b/dlls/vbscript/tests/lang.vbs
+@@ -1701,6 +1701,33 @@ e = err.number
+ on error goto 0
+ ok e = 9, "e = " & e ' VBSE_OUT_OF_BOUNDS, can only change rightmost dimension
+ 
++' Redim without Dim should work, even in explicit mode
++redim toCreateArr(3)
++ok ubound(toCreateArr) = 3, "ubound(toCreateArr) = " & ubound(toCreateArr)
++toCreateArr(3) = 10
++ok toCreateArr(3) = 10, "toCreateArr(3) = " & toCreateArr(3)
++
++on error resume next
++const redimConst = 3
++redim redimConst(3)
++' REF_CONST -> runtime error: Type mismatch: 'redimConst'
++ok err.number = 501, "redim <const> err.number = " & err.number
++err.clear
++redim err(3)
++' REF_DISP -> runtime error: Object doesn't support this property or method
++ok err.number = 501, "redim <err> err.number = " & err.number
++err.clear
++' TODO where should we put this compilation error test?
++' Sub redimSub
++' End Sub
++' redim redimSub(3)
++' ' REF_FUNC -> compilation error: Name redefined
++' todo_wine_ok err.number = -1, "redim <sub> err.number = " & err.number
++' err.clear
++' ' TODO how do we test the REF_OBJ case?
++on error goto 0
++
++
+ sub TestReDimFixed
+     on error resume next
+ 
+diff --git a/dlls/vbscript/vbscript_defs.h b/dlls/vbscript/vbscript_defs.h
+index 139b71255a0..c32a94c7e85 100644
+--- a/dlls/vbscript/vbscript_defs.h
++++ b/dlls/vbscript/vbscript_defs.h
+@@ -267,6 +267,7 @@
+ #define VBSE_INVALID_DLL_FUNCTION_NAME    453
+ #define VBSE_INVALID_TYPELIB_VARIABLE     458
+ #define VBSE_SERVER_NOT_FOUND             462
++#define VBSE_ILLEGAL_ASSIGNMENT           501
+ #define VBSE_UNQUALIFIED_REFERENCE        505
+ 
+ #define VBS_COMPILE_ERROR                4096
+-- 
+GitLab
+
+
+From 39b5672f5b4f41097229ddf9ba72061b56537a70 Mon Sep 17 00:00:00 2001
+From: Francis De Brabandere <francisdb@gmail.com>
+Date: Wed, 8 Jan 2025 17:59:49 +0100
+Subject: [PATCH 2/3] vbscript: trying test the compile error
+
+---
+ dlls/vbscript/tests/run.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/dlls/vbscript/tests/run.c b/dlls/vbscript/tests/run.c
+index 8aaafbedf54..3d2ad2a6e7b 100644
+--- a/dlls/vbscript/tests/run.c
++++ b/dlls/vbscript/tests/run.c
+@@ -2765,6 +2765,18 @@ static void test_parse_errors(void)
+             "    throwInt &h87001234&\n"
+             "end if\n",
+             2, 1
++        },
++        {
++			/* redim of sub on windows fails with
++               compilation error: Name redefined
++			   TODO how can we validate that this code throws a "compilation error: Name redefined"?
++			   TODO this code fails even without the compile.c redim collision check???
++				 but somehow the commented part in lang.vbs would not fail???
++			*/
++            "sub redimSub\n"
++            "end sub\n"
++            L"redim redimSub(3)\n",
++             2, 0
+         }
+     };
+     HRESULT hres;
+-- 
+GitLab
+
+
+From 9b72ec47965d17d93475651f0d2dafa598133c1f Mon Sep 17 00:00:00 2001
+From: Francis De Brabandere <francisdb@gmail.com>
+Date: Wed, 8 Jan 2025 18:01:48 +0100
+Subject: [PATCH 3/3] vbscript: trying test the compile error
+
+---
+ dlls/vbscript/tests/run.c | 10 +++++-----
+ 1 file changed, 5 insertions(+), 5 deletions(-)
+
+diff --git a/dlls/vbscript/tests/run.c b/dlls/vbscript/tests/run.c
+index 3d2ad2a6e7b..89c73d51fdb 100644
+--- a/dlls/vbscript/tests/run.c
++++ b/dlls/vbscript/tests/run.c
+@@ -2767,12 +2767,12 @@ static void test_parse_errors(void)
+             2, 1
+         },
+         {
+-			/* redim of sub on windows fails with
++            /* redim of sub on windows fails with
+                compilation error: Name redefined
+-			   TODO how can we validate that this code throws a "compilation error: Name redefined"?
+-			   TODO this code fails even without the compile.c redim collision check???
+-				 but somehow the commented part in lang.vbs would not fail???
+-			*/
++               TODO how can we validate that this code throws a "compilation error: Name redefined"?
++               TODO this code fails even without the compile.c redim collision check???
++                 but somehow the commented part in lang.vbs would not fail???
++            */
+             "sub redimSub\n"
+             "end sub\n"
+             L"redim redimSub(3)\n",
+-- 
+GitLab
+
