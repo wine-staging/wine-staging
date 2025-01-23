@@ -1,0 +1,346 @@
+From 68227ee19646a7c98f1b1e6eed72a7a6a2a21fc1 Mon Sep 17 00:00:00 2001
+From: Torge Matthies <tmatthies@codeweavers.com>
+Date: Fri, 25 Oct 2024 10:47:31 +0200
+Subject: [PATCH] mf: Implement and use HttpSchemePlugin.
+
+---
+ dlls/mf/main.c           |  2 ++
+ dlls/mf/mf.idl           |  6 ++++++
+ dlls/mf/mf.rgs           | 16 ++++++++++++++--
+ dlls/mf/mf_private.h     |  1 +
+ dlls/mf/scheme_handler.c | 33 +++++++++++++++++++++++++++++++++
+ dlls/mf/tests/mf.c       | 38 ++++----------------------------------
+ dlls/mfplat/mfplat.spec  |  3 +++
+ dlls/mfplat/network.c    |  5 +++++
+ 8 files changed, 68 insertions(+), 36 deletions(-)
+
+diff --git a/dlls/mf/main.c b/dlls/mf/main.c
+index e74a4ae8e4c..120343a1be2 100644
+--- a/dlls/mf/main.c
++++ b/dlls/mf/main.c
+@@ -549,6 +549,7 @@ static const IClassFactoryVtbl class_factory_vtbl =
+ };
+ 
+ static struct class_factory file_scheme_handler_factory = { { &class_factory_vtbl }, file_scheme_handler_construct };
++static struct class_factory http_scheme_handler_factory = { { &class_factory_vtbl }, http_scheme_handler_construct };
+ static struct class_factory urlmon_scheme_handler_factory = { { &class_factory_vtbl }, urlmon_scheme_handler_construct };
+ 
+ static const struct class_object
+@@ -559,6 +560,7 @@ static const struct class_object
+ class_objects[] =
+ {
+     { &CLSID_FileSchemePlugin, &file_scheme_handler_factory.IClassFactory_iface },
++    { &CLSID_HttpSchemePlugin, &http_scheme_handler_factory.IClassFactory_iface },
+     { &CLSID_UrlmonSchemePlugin, &urlmon_scheme_handler_factory.IClassFactory_iface },
+ };
+ 
+diff --git a/dlls/mf/mf.idl b/dlls/mf/mf.idl
+index 4f5ef36c965..ca05a991ca9 100644
+--- a/dlls/mf/mf.idl
++++ b/dlls/mf/mf.idl
+@@ -25,6 +25,12 @@
+ ]
+ coclass FileSchemePlugin { }
+ 
++[
++    threading(both),
++    uuid(44cb442b-9da9-49df-b3fd-023777b16e50)
++]
++coclass HttpSchemePlugin {}
++
+ [
+     threading(both),
+     uuid(9ec4b4f9-3029-45ad-947b-344de2a249e2)
+diff --git a/dlls/mf/mf.rgs b/dlls/mf/mf.rgs
+index f06576baccb..778b07e65ed 100644
+--- a/dlls/mf/mf.rgs
++++ b/dlls/mf/mf.rgs
+@@ -14,11 +14,23 @@ HKLM
+                     }
+                     'http:'
+                     {
+-                        val '{9ec4b4f9-3029-45ad-947b-344de2a249e2}' = s 'Urlmon Scheme Handler'
++                        val '{44cb442b-9da9-49df-b3fd-023777b16e50}' = s 'Http Scheme Handler'
+                     }
+                     'https:'
+                     {
+-                        val '{9ec4b4f9-3029-45ad-947b-344de2a249e2}' = s 'Urlmon Scheme Handler'
++                        val '{44cb442b-9da9-49df-b3fd-023777b16e50}' = s 'Http Scheme Handler'
++                    }
++                    'httpd:'
++                    {
++                        val '{44cb442b-9da9-49df-b3fd-023777b16e50}' = s 'Http Scheme Handler'
++                    }
++                    'httpsd:'
++                    {
++                        val '{44cb442b-9da9-49df-b3fd-023777b16e50}' = s 'Http Scheme Handler'
++                    }
++                    'mms:'
++                    {
++                        val '{44cb442b-9da9-49df-b3fd-023777b16e50}' = s 'Http Scheme Handler'
+                     }
+                 }
+             }
+diff --git a/dlls/mf/mf_private.h b/dlls/mf/mf_private.h
+index 1f2ef17a8c9..adb35e14194 100644
+--- a/dlls/mf/mf_private.h
++++ b/dlls/mf/mf_private.h
+@@ -114,6 +114,7 @@ static inline const char *debugstr_propvar(const PROPVARIANT *v)
+ }
+ 
+ extern HRESULT file_scheme_handler_construct(REFIID riid, void **obj);
++extern HRESULT http_scheme_handler_construct(REFIID riid, void **obj);
+ extern HRESULT urlmon_scheme_handler_construct(REFIID riid, void **obj);
+ 
+ extern BOOL mf_is_sample_copier_transform(IMFTransform *transform);
+diff --git a/dlls/mf/scheme_handler.c b/dlls/mf/scheme_handler.c
+index 7e92748aeb9..3cd16319b2a 100644
+--- a/dlls/mf/scheme_handler.c
++++ b/dlls/mf/scheme_handler.c
+@@ -483,6 +483,39 @@ HRESULT file_scheme_handler_construct(REFIID riid, void **obj)
+     return hr;
+ }
+ 
++WINAPI HRESULT __wine_create_http_bytestream(const WCHAR *url, void **out);
++
++static HRESULT http_stream_create(const WCHAR *url, DWORD flags, IMFByteStream **out)
++{
++    if (flags & MF_RESOLUTION_WRITE)
++        return E_INVALIDARG;
++
++    return __wine_create_http_bytestream(url, (void **)out);
++}
++
++HRESULT http_scheme_handler_construct(REFIID riid, void **obj)
++{
++    struct scheme_handler *handler;
++    HRESULT hr;
++
++    TRACE("%s, %p.\n", debugstr_guid(riid), obj);
++
++    if (!(handler = calloc(1, sizeof(*handler))))
++        return E_OUTOFMEMORY;
++
++    handler->IMFSchemeHandler_iface.lpVtbl = &scheme_handler_vtbl;
++    handler->IMFAsyncCallback_iface.lpVtbl = &scheme_handler_callback_vtbl;
++    handler->refcount = 1;
++    list_init(&handler->results);
++    InitializeCriticalSection(&handler->cs);
++    handler->create_stream = http_stream_create;
++
++    hr = IMFSchemeHandler_QueryInterface(&handler->IMFSchemeHandler_iface, riid, obj);
++    IMFSchemeHandler_Release(&handler->IMFSchemeHandler_iface);
++
++    return hr;
++}
++
+ static HRESULT urlmon_stream_create(const WCHAR *url, DWORD flags, IMFByteStream **out)
+ {
+     IMFAttributes *attributes;
+diff --git a/dlls/mf/tests/mf.c b/dlls/mf/tests/mf.c
+index 61daaf35741..39dfe3ca1b2 100644
+--- a/dlls/mf/tests/mf.c
++++ b/dlls/mf/tests/mf.c
+@@ -5384,7 +5384,6 @@ static void test_scheme_resolvers(void)
+     for (i = 0; i < ARRAY_SIZE(urls); i++)
+     {
+         hr = IMFSourceResolver_CreateObjectFromURL(resolver, urls[i], MF_RESOLUTION_BYTESTREAM, NULL, &type, &object);
+-        todo_wine_if(i >= 2)
+         ok(hr == S_OK, "got hr %#lx\n", hr);
+         if (hr != S_OK)
+             continue;
+@@ -5408,7 +5407,6 @@ static void test_scheme_resolvers(void)
+         hr = IMFAttributes_GetItem(attributes, &MF_BYTESTREAM_CONTENT_TYPE, NULL);
+         ok(hr == S_OK, "got hr %#lx\n", hr);
+         hr = IMFAttributes_GetItem(attributes, &MF_BYTESTREAM_LAST_MODIFIED_TIME, NULL);
+-        todo_wine
+         ok(hr == S_OK, "got hr %#lx\n", hr);
+         IMFAttributes_Release(attributes);
+ 
+@@ -5416,8 +5414,7 @@ static void test_scheme_resolvers(void)
+         ok(hr == S_OK, "got hr %#lx\n", hr);
+         hr = IMFByteStream_GetCapabilities(byte_stream, &caps);
+         ok(hr == S_OK, "got hr %#lx\n", hr);
+-        todo_wine
+-        ok(caps == (expect_caps | MFBYTESTREAM_IS_PARTIALLY_DOWNLOADED)
++        ok(caps == expect_caps || caps == (expect_caps | MFBYTESTREAM_IS_PARTIALLY_DOWNLOADED)
+                 || caps == (expect_caps | MFBYTESTREAM_DOES_NOT_USE_NETWORK),
+                 "got caps %#lx\n", caps);
+         hr = IMFByteStream_GetLength(byte_stream, &length);
+@@ -5436,35 +5433,25 @@ static void test_scheme_resolvers(void)
+     ok(hr == MF_E_UNSUPPORTED_BYTESTREAM_TYPE, "got hr %#lx\n", hr);
+ 
+     hr = IMFSourceResolver_CreateObjectFromURL(resolver, L"http://test.winehq.bla/tests/test.mp3", MF_RESOLUTION_BYTESTREAM, NULL, &type, &object);
+-    todo_wine
+     ok(hr == NS_E_SERVER_NOT_FOUND, "got hr %#lx\n", hr);
+     hr = IMFSourceResolver_CreateObjectFromURL(resolver, L"https://test.winehq.bla/tests/test.mp3", MF_RESOLUTION_BYTESTREAM, NULL, &type, &object);
+-    todo_wine
+     ok(hr == WININET_E_NAME_NOT_RESOLVED, "got hr %#lx\n", hr);
+     hr = IMFSourceResolver_CreateObjectFromURL(resolver, L"httpd://test.winehq.bla/tests/test.mp3", MF_RESOLUTION_BYTESTREAM, NULL, &type, &object);
+-    todo_wine
+     ok(hr == WININET_E_NAME_NOT_RESOLVED, "got hr %#lx\n", hr);
+     hr = IMFSourceResolver_CreateObjectFromURL(resolver, L"httpsd://test.winehq.bla/tests/test.mp3", MF_RESOLUTION_BYTESTREAM, NULL, &type, &object);
+-    todo_wine
+     ok(hr == WININET_E_NAME_NOT_RESOLVED, "got hr %#lx\n", hr);
+     hr = IMFSourceResolver_CreateObjectFromURL(resolver, L"mms://test.winehq.bla/tests/test.mp3", MF_RESOLUTION_BYTESTREAM, NULL, &type, &object);
+-    todo_wine
+     ok(hr == WININET_E_NAME_NOT_RESOLVED, "got hr %#lx\n", hr);
+ 
+     hr = IMFSourceResolver_CreateObjectFromURL(resolver, L"http://test.winehq.org/tests/invalid.mp3", MF_RESOLUTION_BYTESTREAM, NULL, &type, &object);
+-    todo_wine
+     ok(hr == NS_E_FILE_NOT_FOUND, "got hr %#lx\n", hr);
+     hr = IMFSourceResolver_CreateObjectFromURL(resolver, L"https://test.winehq.org/tests/invalid.mp3", MF_RESOLUTION_BYTESTREAM, NULL, &type, &object);
+-    todo_wine
+     ok(hr == NS_E_FILE_NOT_FOUND, "got hr %#lx\n", hr);
+     hr = IMFSourceResolver_CreateObjectFromURL(resolver, L"httpd://test.winehq.org/tests/invalid.mp3", MF_RESOLUTION_BYTESTREAM, NULL, &type, &object);
+-    todo_wine
+     ok(hr == NS_E_FILE_NOT_FOUND, "got hr %#lx\n", hr);
+     hr = IMFSourceResolver_CreateObjectFromURL(resolver, L"httpsd://test.winehq.org/tests/invalid.mp3", MF_RESOLUTION_BYTESTREAM, NULL, &type, &object);
+-    todo_wine
+     ok(hr == NS_E_FILE_NOT_FOUND, "got hr %#lx\n", hr);
+     hr = IMFSourceResolver_CreateObjectFromURL(resolver, L"mms://test.winehq.org/tests/invalid.mp3", MF_RESOLUTION_BYTESTREAM, NULL, &type, &object);
+-    todo_wine
+     ok(hr == MF_E_UNSUPPORTED_BYTESTREAM_TYPE, "got hr %#lx\n", hr);
+ 
+     IMFSourceResolver_Release(resolver);
+@@ -6828,7 +6815,6 @@ static void test_network_bytestream(void)
+     obj_type = (MF_OBJECT_TYPE)0xdeadbeef;
+     object = NULL;
+     hr = IMFSourceResolver_CreateObjectFromURL(resolver, L"http://nonexistent.url/file.mp4", MF_RESOLUTION_BYTESTREAM, NULL, &obj_type, &object);
+-    todo_wine
+     ok(hr == NS_E_SERVER_NOT_FOUND, "Got hr %#lx.\n", hr);
+     ok(obj_type == MF_OBJECT_INVALID, "Unexpected obj_type %#x.\n", obj_type);
+     if (object) IUnknown_Release(object);
+@@ -6836,9 +6822,7 @@ static void test_network_bytestream(void)
+     obj_type = (MF_OBJECT_TYPE)0xdeadbeef;
+     object = NULL;
+     hr = IMFSourceResolver_CreateObjectFromURL(resolver, L"http://test.winehq.org/tests/invalid.mp3", MF_RESOLUTION_BYTESTREAM, NULL, &obj_type, &object);
+-    todo_wine
+     ok(hr == NS_E_FILE_NOT_FOUND, "Got hr %#lx.\n", hr);
+-    todo_wine
+     ok(obj_type == MF_OBJECT_INVALID, "Unexpected obj_type %#x.\n", obj_type);
+     if (object) IUnknown_Release(object);
+ 
+@@ -6861,7 +6845,6 @@ static void test_network_bytestream(void)
+ 
+         hr = IMFAttributes_GetCount(attr, &count);
+         ok(hr == S_OK, "Got hr %#lx\n", hr);
+-        todo_wine
+         ok(count == 3, "count = %u\n", count);
+ 
+         PropVariantInit(&var);
+@@ -6870,7 +6853,6 @@ static void test_network_bytestream(void)
+         ok(hr == S_OK, "Got hr %#lx\n", hr);
+         ok(IsEqualGUID(&key, &MF_BYTESTREAM_EFFECTIVE_URL), "Got key %s\n", debugstr_guid(&key));
+         ok(var.vt == VT_LPWSTR, "Got type %d\n", var.vt);
+-        todo_wine
+         ok(!lstrcmpW(var.pwszVal, EFFECTIVE_URL), "Got value %s\n", var.pszVal);
+         memset(&key, 0, sizeof(key));
+         PropVariantClear(&var);
+@@ -6879,21 +6861,15 @@ static void test_network_bytestream(void)
+         ok(hr == S_OK, "Got hr %#lx\n", hr);
+         ok(IsEqualGUID(&key, &MF_BYTESTREAM_CONTENT_TYPE), "Got key %s\n", debugstr_guid(&key));
+         ok(var.vt == VT_LPWSTR, "Got type %d\n", var.vt);
+-        todo_wine
+         ok(!lstrcmpW(var.pwszVal, CONTENT_TYPE), "Got value %s\n", var.pszVal);
+         memset(&key, 0, sizeof(key));
+         PropVariantClear(&var);
+ 
+         hr = IMFAttributes_GetItemByIndex(attr, 2, &key, &var);
+-        todo_wine
+         ok(hr == S_OK, "Got hr %#lx\n", hr);
+-        todo_wine
+         ok(IsEqualGUID(&key, &MF_BYTESTREAM_LAST_MODIFIED_TIME), "Got key %s\n", debugstr_guid(&key));
+-        todo_wine
+         ok(var.vt == (VT_VECTOR | VT_I1 | VT_NULL), "Got type %d\n", var.vt);
+-        todo_wine
+         ok(var.blob.cbSize == sizeof(LAST_MODIFIED_TIME), "Got size %lu\n", var.blob.cbSize);
+-        todo_wine
+         ok(var.blob.pBlobData != NULL, "Got NULL value\n");
+         if (var.blob.cbSize == sizeof(LAST_MODIFIED_TIME) && var.blob.pBlobData)
+             ok(!memcmp(var.blob.pBlobData, LAST_MODIFIED_TIME, sizeof(LAST_MODIFIED_TIME)), "Got wrong value\n");
+@@ -6912,9 +6888,7 @@ static void test_network_bytestream(void)
+ 
+     ptr = NULL;
+     hr = IUnknown_QueryInterface(object, &IID_IMFByteStreamCacheControl, &ptr);
+-    todo_wine
+     ok(hr == S_OK, "Got hr %#lx.\n", hr);
+-    todo_wine
+     ok(ptr != NULL, "Got NULL ptr.\n");
+     if (SUCCEEDED(hr) && ptr)
+     {
+@@ -6929,9 +6903,7 @@ static void test_network_bytestream(void)
+ 
+     ptr = NULL;
+     hr = IUnknown_QueryInterface(object, &IID_IMFByteStreamBuffering, &ptr);
+-    todo_wine
+     ok(hr == S_OK, "Got hr %#lx.\n", hr);
+-    todo_wine
+     ok(ptr != NULL, "Got NULL ptr.\n");
+     if (SUCCEEDED(hr) && ptr)
+     {
+@@ -6998,9 +6970,7 @@ static void test_network_bytestream(void)
+ 
+     ptr = NULL;
+     hr = IUnknown_QueryInterface(object, &IID_IMFByteStreamTimeSeek, &ptr);
+-    todo_wine
+     ok(hr == S_OK, "Got hr %#lx.\n", hr);
+-    todo_wine
+     ok(ptr != NULL, "Got NULL ptr.\n");
+     if (SUCCEEDED(hr) && ptr)
+     {
+@@ -7059,6 +7029,9 @@ static void test_network_bytestream(void)
+         ok(hr == E_NOTIMPL, "Got hr %#lx.\n", hr);
+         ok(written == 0, "written = %lu\n", written);
+ 
++        hr = IMFByteStream_BeginWrite((IMFByteStream*)object, tmp, 1000, (void *)(DWORD_PTR)0xdeadbeef, NULL);
++        ok(hr == E_NOTIMPL, "Got hr %#lx.\n", hr);
++
+         free(tmp);
+ 
+         hr = IMFByteStream_GetLength((IMFByteStream*)object, &len);
+@@ -7066,7 +7039,6 @@ static void test_network_bytestream(void)
+         ok(len != 0, "len = %I64u\n", len);
+ 
+         hr = IMFByteStream_Flush((IMFByteStream*)object);
+-        todo_wine
+         ok(hr == S_OK, "Got hr %#lx\n", hr);
+     }
+ 
+@@ -7094,9 +7066,7 @@ static void test_network_bytestream(void)
+ 
+     ptr = NULL;
+     hr = IUnknown_QueryInterface(object, &IID_IMFMediaEventGenerator, &ptr);
+-    todo_wine
+     ok(hr == S_OK, "Got hr %#lx.\n", hr);
+-    todo_wine
+     ok(ptr != NULL, "Got NULL ptr.\n");
+     if (SUCCEEDED(hr) && ptr)
+     {
+diff --git a/dlls/mfplat/mfplat.spec b/dlls/mfplat/mfplat.spec
+index 7b356f9f457..f55f49b7e8c 100644
+--- a/dlls/mfplat/mfplat.spec
++++ b/dlls/mfplat/mfplat.spec
+@@ -181,3 +181,6 @@
+ @ stdcall -ret64 MFllMulDiv(int64 int64 int64 int64)
+ @ stub PropVariantFromStream
+ @ stub PropVariantToStream
++
++# Wine extension
++@ stdcall __wine_create_http_bytestream(wstr ptr)
+diff --git a/dlls/mfplat/network.c b/dlls/mfplat/network.c
+index d9a2981f5a7..2369dbf31fd 100644
+--- a/dlls/mfplat/network.c
++++ b/dlls/mfplat/network.c
+@@ -2012,3 +2012,8 @@ error:
+         hr = MF_E_UNSUPPORTED_BYTESTREAM_TYPE;
+     return hr;
+ }
++
++WINAPI HRESULT __wine_create_http_bytestream(const WCHAR *url, void **out)
++{
++    return create_http_bytestream(url, out);
++}
+-- 
+2.45.2
+
