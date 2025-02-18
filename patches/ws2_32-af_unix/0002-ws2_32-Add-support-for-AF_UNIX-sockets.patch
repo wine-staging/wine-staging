@@ -1,0 +1,506 @@
+From 9bffa2d6f3a270a2d0b3f72da0f5cdfa549abfe4 Mon Sep 17 00:00:00 2001
+From: Ally Sommers <dropbear.sh@gmail.com>
+Date: Thu, 30 Jan 2025 23:47:16 +0100
+Subject: [PATCH] ws2_32: Add support for AF_UNIX sockets.
+
+This commit additionally modifies wineserver's sock_ioctl to handle the
+provided pathname by changing directories and then returning after the
+native call. This is NOT threadsafe, but wineserver is not
+multithreaded.
+---
+ dlls/ntdll/unix/socket.c     |   4 +
+ dlls/ws2_32/socket.c         |  83 +++++++++++++++++--
+ dlls/ws2_32/ws2_32_private.h |  13 +++
+ server/sock.c                | 152 ++++++++++++++++++++++++++++++++---
+ 4 files changed, 238 insertions(+), 14 deletions(-)
+
+diff --git a/dlls/ntdll/unix/socket.c b/dlls/ntdll/unix/socket.c
+index a02194f843f..a0c5969c82f 100644
+--- a/dlls/ntdll/unix/socket.c
++++ b/dlls/ntdll/unix/socket.c
+@@ -67,6 +67,8 @@
+ # define HAS_IRDA
+ #endif
+ 
++#include <sys/un.h>
++
+ #include "ntstatus.h"
+ #define WIN32_NO_STATUS
+ #include "windef.h"
+@@ -78,6 +80,7 @@
+ #include "ws2tcpip.h"
+ #include "wsipx.h"
+ #include "af_irda.h"
++#include "afunix.h"
+ #include "wine/afd.h"
+ 
+ #include "unix_private.h"
+@@ -106,6 +109,7 @@ union unix_sockaddr
+ #ifdef HAS_IRDA
+     struct sockaddr_irda irda;
+ #endif
++    struct sockaddr_un un;
+ };
+ 
+ struct async_recv_ioctl
+diff --git a/dlls/ws2_32/socket.c b/dlls/ws2_32/socket.c
+index eb84558cbac..c2521d7645f 100644
+--- a/dlls/ws2_32/socket.c
++++ b/dlls/ws2_32/socket.c
+@@ -167,6 +167,19 @@ static const WSAPROTOCOL_INFOW supported_protocols[] =
+         .dwMessageSize = UINT_MAX,
+         .szProtocol = L"SPX II",
+     },
++    {
++        .dwServiceFlags1 = XP1_GUARANTEED_DELIVERY | XP1_GUARANTEED_ORDER | XP1_IFS_HANDLES,
++        .dwProviderFlags = PFL_MATCHES_PROTOCOL_ZERO,
++        .ProviderId = {0xa00943d9, 0x9c2e, 0x4633, {0x9b, 0x59, 0x00, 0x57, 0xa3, 0x16, 0x09, 0x94}},
++        .dwCatalogEntryId = 1007,
++        .ProtocolChain.ChainLen = 1,
++        .iVersion = 2,
++        .iAddressFamily = AF_UNIX,
++        .iMaxSockAddr = sizeof(struct sockaddr_un),
++        .iMinSockAddr = offsetof(struct sockaddr_un, sun_path),
++        .iSocketType = SOCK_STREAM,
++        .szProtocol = L"AF_UNIX",
++    },
+ };
+ 
+ DECLARE_CRITICAL_SECTION(cs_socket_list);
+@@ -226,6 +239,11 @@ const char *debugstr_sockaddr( const struct sockaddr *a )
+                                 addr,
+                                 ((const SOCKADDR_IRDA *)a)->irdaServiceName);
+     }
++    case AF_UNIX:
++    {
++        return wine_dbg_sprintf("{ family AF_UNIX, path %s }",
++                                ((const SOCKADDR_UN *)a)->sun_path);
++    }
+     default:
+         return wine_dbg_sprintf("{ family %d }", a->sa_family);
+     }
+@@ -1106,6 +1124,10 @@ int WINAPI bind( SOCKET s, const struct sockaddr *addr, int len )
+     HANDLE sync_event;
+     NTSTATUS status;
+ 
++    const int bind_len = len;
++    char *unix_path = NULL;
++    int unix_varargs_size = 0;
++
+     TRACE( "socket %#Ix, addr %s\n", s, debugstr_sockaddr(addr) );
+ 
+     if (!addr)
+@@ -1148,6 +1170,14 @@ int WINAPI bind( SOCKET s, const struct sockaddr *addr, int len )
+             }
+             break;
+ 
++        case AF_UNIX:
++            if (len < offsetof(struct sockaddr_un, sun_path))
++            {
++                SetLastError( WSAEFAULT );
++                return -1;
++            }
++            break;
++
+         default:
+             FIXME( "unknown protocol %u\n", addr->sa_family );
+             SetLastError( WSAEAFNOSUPPORT );
+@@ -1156,7 +1186,29 @@ int WINAPI bind( SOCKET s, const struct sockaddr *addr, int len )
+ 
+     if (!(sync_event = get_sync_event())) return -1;
+ 
+-    params = malloc( sizeof(int) + len );
++    if (addr->sa_family == AF_UNIX && *addr->sa_data)
++    {
++        struct sockaddr_un sun = { 0 };
++        WCHAR *sun_pathW;
++        memcpy(&sun, addr, len);
++        if (strlen( sun.sun_path ))
++        {
++            sun_pathW = strdupAtoW( sun.sun_path );
++            unix_path = wine_get_unix_file_name( sun_pathW );
++            free( sun_pathW );
++            if (!unix_path)
++                return SOCKET_ERROR;
++        }
++        else
++        {
++            unix_path = malloc(1);
++            *unix_path = '\0';
++        }
++        len = sizeof(sun);
++        unix_varargs_size = strlen( unix_path );
++    }
++
++    params = malloc( sizeof(int) + len + unix_varargs_size );
+     ret_addr = malloc( len );
+     if (!params || !ret_addr)
+     {
+@@ -1166,10 +1218,14 @@ int WINAPI bind( SOCKET s, const struct sockaddr *addr, int len )
+         return -1;
+     }
+     params->unknown = 0;
+-    memcpy( &params->addr, addr, len );
++    if (addr->sa_family == AF_UNIX)
++        memset( &params->addr, 0, len );
++    memcpy( &params->addr, addr, bind_len );
++    if (unix_path)
++        memcpy( (char *)&params->addr + len, unix_path, unix_varargs_size );
+ 
+     status = NtDeviceIoControlFile( (HANDLE)s, sync_event, NULL, NULL, &io, IOCTL_AFD_BIND,
+-                                    params, sizeof(int) + len, ret_addr, len );
++                                    params, sizeof(int) + len + unix_varargs_size, ret_addr, len );
+     if (status == STATUS_PENDING)
+     {
+         if (WaitForSingleObject( sync_event, INFINITE ) == WAIT_FAILED)
+@@ -1182,6 +1238,7 @@ int WINAPI bind( SOCKET s, const struct sockaddr *addr, int len )
+ 
+     free( params );
+     free( ret_addr );
++    free( unix_path );
+ 
+     SetLastError( NtStatusToWSAError( status ) );
+     return status ? -1 : 0;
+@@ -1222,11 +1279,24 @@ int WINAPI connect( SOCKET s, const struct sockaddr *addr, int len )
+     HANDLE sync_event;
+     NTSTATUS status;
+ 
++    char *unix_path = NULL;
++    int unix_varargs_size = 0;
++
+     TRACE( "socket %#Ix, addr %s, len %d\n", s, debugstr_sockaddr(addr), len );
+ 
+     if (!(sync_event = get_sync_event())) return -1;
+ 
+-    if (!(params = malloc( sizeof(*params) + len )))
++    if (addr->sa_family == AF_UNIX && *addr->sa_data)
++    {
++        WCHAR *sun_pathW = strdupAtoW(addr->sa_data);
++        unix_path = wine_get_unix_file_name(sun_pathW);
++        free(sun_pathW);
++        if (!unix_path)
++            return SOCKET_ERROR;
++        unix_varargs_size = strlen(unix_path);
++    }
++
++    if (!(params = malloc( sizeof(*params) + len + unix_varargs_size )))
+     {
+         SetLastError( ERROR_NOT_ENOUGH_MEMORY );
+         return -1;
+@@ -1234,10 +1304,13 @@ int WINAPI connect( SOCKET s, const struct sockaddr *addr, int len )
+     params->addr_len = len;
+     params->synchronous = TRUE;
+     memcpy( params + 1, addr, len );
++    if (unix_path)
++        memcpy( (char *)(params + 1) + len, unix_path, unix_varargs_size );
+ 
+     status = NtDeviceIoControlFile( (HANDLE)s, sync_event, NULL, NULL, &io, IOCTL_AFD_WINE_CONNECT,
+-                                    params, sizeof(*params) + len, NULL, 0 );
++                                    params, sizeof(*params) + len + unix_varargs_size, NULL, 0 );
+     free( params );
++    free( unix_path );
+     if (status == STATUS_PENDING)
+     {
+         if (wait_event_alertable( sync_event ) == WAIT_FAILED) return -1;
+diff --git a/dlls/ws2_32/ws2_32_private.h b/dlls/ws2_32/ws2_32_private.h
+index 9e116de814d..5708ae60d91 100644
+--- a/dlls/ws2_32/ws2_32_private.h
++++ b/dlls/ws2_32/ws2_32_private.h
+@@ -44,6 +44,7 @@
+ #include "mstcpip.h"
+ #include "af_irda.h"
+ #include "winnt.h"
++#include "afunix.h"
+ #define USE_WC_PREFIX   /* For CMSG_DATA */
+ #include "iphlpapi.h"
+ #include "ip2string.h"
+@@ -71,6 +72,18 @@ static inline char *strdupWtoA( const WCHAR *str )
+     return ret;
+ }
+ 
++static inline WCHAR *strdupAtoW( const char *str )
++{
++    WCHAR *ret = NULL;
++    if (str)
++    {
++        DWORD len = MultiByteToWideChar(CP_ACP, 0, str, -1, NULL, 0);
++        if ((ret = malloc( len * sizeof(WCHAR) )))
++            MultiByteToWideChar(CP_ACP, 0, str, -1, ret, len);
++    }
++    return ret;
++}
++
+ static const char magic_loopback_addr[] = {127, 12, 34, 56};
+ 
+ const char *debugstr_sockaddr( const struct sockaddr *addr );
+diff --git a/server/sock.c b/server/sock.c
+index 2bb027a563c..8262898c436 100644
+--- a/server/sock.c
++++ b/server/sock.c
+@@ -87,6 +87,8 @@
+ # define HAS_IRDA
+ #endif
+ 
++#include <sys/un.h>
++
+ #include "ntstatus.h"
+ #define WIN32_NO_STATUS
+ #include "windef.h"
+@@ -98,6 +100,7 @@
+ #include "tcpmib.h"
+ #include "wsipx.h"
+ #include "af_irda.h"
++#include "afunix.h"
+ #include "wine/afd.h"
+ #include "wine/rbtree.h"
+ 
+@@ -135,6 +138,7 @@ union win_sockaddr
+     struct WS_sockaddr_in6 in6;
+     struct WS_sockaddr_ipx ipx;
+     SOCKADDR_IRDA irda;
++    struct WS_sockaddr_un un;
+ };
+ 
+ union unix_sockaddr
+@@ -148,6 +152,7 @@ union unix_sockaddr
+ #ifdef HAS_IRDA
+     struct sockaddr_irda irda;
+ #endif
++    struct sockaddr_un un;
+ };
+ 
+ static struct list poll_list = LIST_INIT( poll_list );
+@@ -696,6 +701,9 @@ static socklen_t get_unix_sockaddr_any( union unix_sockaddr *uaddr, int ws_famil
+             uaddr->irda.sir_family = AF_IRDA;
+             return sizeof(uaddr->irda);
+ #endif
++        case WS_AF_UNIX:
++            uaddr->un.sun_family = AF_UNIX;
++            return sizeof(uaddr->un);
+         default:
+             return 0;
+     }
+@@ -1796,6 +1804,7 @@ static int get_unix_family( int family )
+ #ifdef AF_IRDA
+         case WS_AF_IRDA: return AF_IRDA;
+ #endif
++        case WS_AF_UNIX: return AF_UNIX;
+         case WS_AF_UNSPEC: return AF_UNSPEC;
+         default: return -1;
+     }
+@@ -2594,8 +2603,13 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
+ 
+         if (listen( unix_fd, params->backlog ) < 0)
+         {
+-            set_error( sock_get_ntstatus( errno ) );
+-            return;
++            /* Due to the way we handle the Windows AF_UNIX bind edge case, we also need to
++             * ignore listen's error. */
++            if (!(errno == EINVAL && sock->family == WS_AF_UNIX && !*sock->addr.un.sun_path))
++            {
++                set_error( sock_get_ntstatus( errno ) );
++                return;
++            }
+         }
+ 
+         sock->state = SOCK_LISTENING;
+@@ -2665,7 +2679,55 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
+                 break;
+         }
+ 
+-        unix_len = sockaddr_to_unix( addr, params->addr_len, &unix_addr );
++        if (sock->family == WS_AF_UNIX)
++        {
++            if (*addr->sa_data)
++            {
++                int unix_path_len = get_req_data_size() - sizeof(*params) - params->addr_len;
++                char *unix_path;
++                char *base_name;
++
++                if (!(unix_path = mem_alloc( unix_path_len + 1 )))
++                    return;
++
++                memcpy( unix_path, (char *)(params + 1) + params->addr_len, unix_path_len );
++                unix_path[unix_path_len] = '\0';
++
++                base_name = strrchr(unix_path, '/');
++                if (base_name)
++                {
++                    if (base_name != unix_path)
++                        (++base_name)[-1] = '\0';
++                }
++                else
++                    base_name = unix_path;
++
++                if (chdir( unix_path ) == -1)
++                {
++                    set_error( sock_get_ntstatus( errno ) );
++                    free( unix_path );
++                    return;
++                }
++
++                send_len -= unix_path_len;
++                unix_len = sizeof(unix_addr.un);
++                memset( &unix_addr.un, 0, sizeof(unix_addr.un) );
++                unix_addr.un.sun_family = AF_UNIX;
++                memcpy( unix_addr.un.sun_path, base_name, strlen( base_name ) );
++                free( unix_path );
++            }
++            else
++            {
++                /* Contrary to documentation, Windows does not currently support abstract Unix
++                 * sockets. connect() throws WSAEINVAL if sun_family is AF_UNIX and sun_path
++                 * begins with '\0', even though bind() will succeed. */
++                set_win32_error( WSAEINVAL );
++                return;
++            }
++        }
++        else
++            unix_len = sockaddr_to_unix( addr, params->addr_len, &unix_addr );
++
+         if (!unix_len)
+         {
+             set_error( STATUS_INVALID_ADDRESS );
+@@ -2712,6 +2774,9 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
+             return;
+         }
+ 
++        if (sock->family == WS_AF_UNIX && *addr->sa_data)
++            fchdir(server_dir_fd);
++
+         /* a connected or connecting socket can no longer be accepted into */
+         allow_fd_caching( sock->fd );
+ 
+@@ -2961,6 +3026,7 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
+         data_size_t in_size;
+         socklen_t unix_len;
+         int v6only = 1;
++        int unix_path_len = 0;
+ 
+         /* the ioctl is METHOD_NEITHER, so ntdll gives us the output buffer as
+          * input */
+@@ -2970,8 +3036,10 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
+             return;
+         }
+         in_size = get_req_data_size() - get_reply_max_size();
++        if (params->addr.sa_family == WS_AF_UNIX)
++            unix_path_len = in_size - sizeof(params->unknown) - sizeof(struct WS_sockaddr_un);
+         if (in_size < offsetof(struct afd_bind_params, addr.sa_data)
+-                || get_reply_max_size() < in_size - sizeof(int))
++                || get_reply_max_size() < in_size - sizeof(int) - unix_path_len)
+         {
+             set_error( STATUS_INVALID_PARAMETER );
+             return;
+@@ -2983,7 +3051,47 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
+             return;
+         }
+ 
+-        unix_len = sockaddr_to_unix( &params->addr, in_size - sizeof(int), &unix_addr );
++        if (sock->family == WS_AF_UNIX)
++        {
++            if (*params->addr.sa_data)
++            {
++                char *unix_path;
++                char *base_name;
++
++                if (!(unix_path = mem_alloc( unix_path_len + 1 )))
++                    return;
++
++                memcpy( unix_path, (char *)(&params->addr) + sizeof(struct WS_sockaddr_un), unix_path_len );
++                unix_path[unix_path_len] = '\0';
++
++                base_name = strrchr(unix_path, '/');
++                if (base_name)
++                {
++                    if (base_name != unix_path)
++                        (++base_name)[-1] = '\0';
++                }
++                else
++                    base_name = unix_path;
++
++                if (chdir( unix_path ) == -1)
++                {
++                    free( unix_path );
++                    set_error( sock_get_ntstatus( errno ) );
++                    return;
++                }
++
++                memset( &unix_addr.un, 0, sizeof(unix_addr.un) );
++                memcpy( unix_addr.un.sun_path, base_name, strlen( base_name ) );
++                free( unix_path );
++            }
++            else
++                memset(unix_addr.un.sun_path, 0, sizeof(unix_addr.un.sun_path));
++            unix_addr.un.sun_family = AF_UNIX;
++            unix_len = sizeof(unix_addr.un);
++        }
++        else
++            unix_len = sockaddr_to_unix( &params->addr, in_size - sizeof(int), &unix_addr );
++
+         if (!unix_len)
+         {
+             set_error( STATUS_INVALID_ADDRESS );
+@@ -3027,8 +3135,16 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
+             if (errno == EADDRINUSE && sock->reuseaddr)
+                 errno = EACCES;
+ 
+-            set_error( sock_get_ntstatus( errno ) );
+-            return;
++            /* Windows' AF_UNIX implementation has an edge case allowing for a socket to bind to
++             * an empty path. Linux doesn't, so it throws EINVAL. We check for this situation
++             * here and avoid early-exiting if it's the case. */
++            if (!(errno == EINVAL && sock->family == WS_AF_UNIX && !*params->addr.sa_data))
++            {
++                set_error( sock_get_ntstatus( errno ) );
++                if (sock->family == WS_AF_UNIX && *params->addr.sa_data)
++                    fchdir(server_dir_fd);
++                return;
++            }
+         }
+ 
+         sock->bound = 1;
+@@ -3040,13 +3156,23 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
+              * actual unix address */
+             if (bind_addr.addr.sa_family == AF_INET)
+                 bind_addr.in.sin_addr = unix_addr.in.sin_addr;
+-            sock->addr_len = sockaddr_from_unix( &bind_addr, &sock->addr.addr, sizeof(sock->addr) );
++            if (bind_addr.addr.sa_family == AF_UNIX)
++            {
++                sock->addr.un.sun_family = WS_AF_UNIX;
++                memcpy(sock->addr.un.sun_path, params->addr.sa_data, sizeof(sock->addr.un.sun_path));
++                sock->addr_len = sizeof(sock->addr.un);
++            }
++            else
++                sock->addr_len = sockaddr_from_unix( &bind_addr, &sock->addr.addr, sizeof(sock->addr) );
+         }
+ 
+         update_addr_usage( sock, &bind_addr, v6only );
+ 
+         if (get_reply_max_size() >= sock->addr_len)
+             set_reply_data( &sock->addr, sock->addr_len );
++
++        if (sock->family == WS_AF_UNIX && *params->addr.sa_data)
++            fchdir(server_dir_fd);
+         return;
+     }
+ 
+@@ -3063,7 +3189,15 @@ static void sock_ioctl( struct fd *fd, ioctl_code_t code, struct async *async )
+             return;
+         }
+ 
+-        set_reply_data( &sock->addr, sock->addr_len );
++        if (sock->family == WS_AF_UNIX)
++        {
++            if (*sock->addr.un.sun_path)
++                set_reply_data( &sock->addr, sizeof(sock->addr.un.sun_family) + strlen(sock->addr.un.sun_path) + 1 );
++            else
++                set_reply_data( &sock->addr, sizeof(sock->addr.un) );
++        }
++        else
++            set_reply_data( &sock->addr, sock->addr_len );
+         return;
+ 
+     case IOCTL_AFD_WINE_GETPEERNAME:
+-- 
+2.47.2
+
