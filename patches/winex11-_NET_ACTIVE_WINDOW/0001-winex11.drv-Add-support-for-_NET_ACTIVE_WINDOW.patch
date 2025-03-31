@@ -1,0 +1,191 @@
+From d8bc3b7bbc96baf051b2e9e121a72db163699567 Mon Sep 17 00:00:00 2001
+From: Dmitry Timoshkov <dmitry@baikal.ru>
+Date: Wed, 10 Feb 2016 15:09:29 +0800
+Subject: [PATCH] winex11.drv: Add support for _NET_ACTIVE_WINDOW. (v2)
+
+And use it as a backend in user32.SetActiveWindow().
+
+For bug #2155.
+---
+ dlls/win32u/driver.c      |  6 +++++
+ dlls/win32u/input.c       |  2 ++
+ dlls/winex11.drv/event.c  |  5 ++++
+ dlls/winex11.drv/init.c   |  1 +
+ dlls/winex11.drv/window.c | 48 +++++++++++++++++++++++++++++++++++++++
+ dlls/winex11.drv/x11drv.h |  2 ++
+ include/wine/gdi_driver.h |  1 +
+ 7 files changed, 65 insertions(+)
+
+diff --git a/dlls/win32u/driver.c b/dlls/win32u/driver.c
+index 5edac6a0c8a..6d2ec187e67 100644
+--- a/dlls/win32u/driver.c
++++ b/dlls/win32u/driver.c
+@@ -816,6 +816,10 @@ static BOOL nulldrv_ScrollDC( HDC hdc, INT dx, INT dy, HRGN update )
+                         hdc, rect.left - dx, rect.top - dy, SRCCOPY, 0, 0 );
+ }
+ 
++static void nulldrv_SetActiveWindow( HWND hwnd )
++{
++}
++
+ static void nulldrv_SetCapture( HWND hwnd, UINT flags )
+ {
+ }
+@@ -1278,6 +1282,7 @@ static const struct user_driver_funcs lazy_load_driver =
+     nulldrv_ProcessEvents,
+     nulldrv_ReleaseDC,
+     nulldrv_ScrollDC,
++    nulldrv_SetActiveWindow,
+     nulldrv_SetCapture,
+     loaderdrv_SetDesktopWindow,
+     nulldrv_SetFocus,
+@@ -1375,6 +1380,7 @@ void __wine_set_user_driver( const struct user_driver_funcs *funcs, UINT version
+     SET_USER_FUNC(ProcessEvents);
+     SET_USER_FUNC(ReleaseDC);
+     SET_USER_FUNC(ScrollDC);
++    SET_USER_FUNC(SetActiveWindow);
+     SET_USER_FUNC(SetCapture);
+     SET_USER_FUNC(SetDesktopWindow);
+     SET_USER_FUNC(SetFocus);
+diff --git a/dlls/win32u/input.c b/dlls/win32u/input.c
+index 008a8b4943d..724b5d9a660 100644
+--- a/dlls/win32u/input.c
++++ b/dlls/win32u/input.c
+@@ -2051,6 +2051,8 @@ BOOL set_active_window( HWND hwnd, HWND *prev, BOOL mouse, BOOL focus, DWORD new
+             NtUserPostMessage( get_desktop_window(), WM_PARENTNOTIFY, WM_NCACTIVATE, (LPARAM)hwnd );
+     }
+ 
++    user_driver->pSetActiveWindow( hwnd );
++
+     /* now change focus if necessary */
+     if (focus)
+     {
+diff --git a/dlls/winex11.drv/event.c b/dlls/winex11.drv/event.c
+index a9e9f25b422..66191a672e9 100644
+--- a/dlls/winex11.drv/event.c
++++ b/dlls/winex11.drv/event.c
+@@ -656,6 +656,9 @@ static void set_focus( Display *display, HWND hwnd, Time time )
+     Window win;
+     GUITHREADINFO threadinfo;
+ 
++    /* prevent recursion */
++    x11drv_thread_data()->active_window = hwnd;
++
+     TRACE( "setting foreground window to %p\n", hwnd );
+     NtUserSetForegroundWindow( hwnd );
+ 
+@@ -911,6 +914,8 @@ static void focus_out( Display *display , HWND hwnd )
+ 
+     if (!is_current_process_focused())
+     {
++        x11drv_thread_data()->active_window = 0;
++
+         /* Abey : 6-Oct-99. Check again if the focus out window is the
+            Foreground window, because in most cases the messages sent
+            above must have already changed the foreground window, in which
+diff --git a/dlls/winex11.drv/init.c b/dlls/winex11.drv/init.c
+index 70da9b8c094..027643c8f5f 100644
+--- a/dlls/winex11.drv/init.c
++++ b/dlls/winex11.drv/init.c
+@@ -444,6 +444,7 @@ static const struct user_driver_funcs x11drv_funcs =
+     .pProcessEvents = X11DRV_ProcessEvents,
+     .pReleaseDC = X11DRV_ReleaseDC,
+     .pScrollDC = X11DRV_ScrollDC,
++    .pSetActiveWindow = X11DRV_SetActiveWindow,
+     .pSetCapture = X11DRV_SetCapture,
+     .pSetDesktopWindow = X11DRV_SetDesktopWindow,
+     .pSetFocus = X11DRV_SetFocus,
+diff --git a/dlls/winex11.drv/window.c b/dlls/winex11.drv/window.c
+index 51b64e8e83c..dbe3314fee2 100644
+--- a/dlls/winex11.drv/window.c
++++ b/dlls/winex11.drv/window.c
+@@ -2781,6 +2781,54 @@ BOOL X11DRV_ScrollDC( HDC hdc, INT dx, INT dy, HRGN update )
+ }
+ 
+ 
++/***********************************************************************
++ *		SetActiveWindow  (X11DRV.@)
++ */
++void X11DRV_SetActiveWindow( HWND hwnd )
++{
++    struct x11drv_thread_data *thread_data = x11drv_init_thread_data();
++    struct x11drv_win_data *data;
++
++    TRACE("%p\n", hwnd);
++
++    if (thread_data->active_window == hwnd)
++    {
++        TRACE("ignoring activation for already active window %p\n", hwnd);
++        return;
++    }
++
++    if (!(data = get_win_data( hwnd ))) return;
++
++    if (data->managed)
++    {
++        XEvent xev;
++        struct x11drv_win_data *active = get_win_data( thread_data->active_window );
++        DWORD timestamp = NtUserGetThreadInfo()->message_time - EVENT_x11_time_to_win32_time( 0 );
++
++        TRACE("setting _NET_ACTIVE_WINDOW to %p/%lx, current active %p/%lx\n",
++            data->hwnd, data->whole_window, active ? active->hwnd : NULL, active ? active->whole_window : 0 );
++
++        xev.xclient.type = ClientMessage;
++        xev.xclient.window = data->whole_window;
++        xev.xclient.message_type = x11drv_atom(_NET_ACTIVE_WINDOW);
++        xev.xclient.serial = 0;
++        xev.xclient.display = data->display;
++        xev.xclient.send_event = True;
++        xev.xclient.format = 32;
++
++        xev.xclient.data.l[0] = 1; /* source: application */
++        xev.xclient.data.l[1] = timestamp;
++        xev.xclient.data.l[2] = active ? active->whole_window : 0;
++        xev.xclient.data.l[3] = 0;
++        xev.xclient.data.l[4] = 0;
++        XSendEvent( data->display, root_window, False, SubstructureRedirectMask | SubstructureNotifyMask, &xev );
++
++        if (active) release_win_data( active );
++    }
++
++    release_win_data( data );
++}
++
+ /***********************************************************************
+  *		SetCapture  (X11DRV.@)
+  */
+diff --git a/dlls/winex11.drv/x11drv.h b/dlls/winex11.drv/x11drv.h
+index 75dd3c1711a..e4013a65b34 100644
+--- a/dlls/winex11.drv/x11drv.h
++++ b/dlls/winex11.drv/x11drv.h
+@@ -226,6 +226,7 @@ extern void X11DRV_GetDC( HDC hdc, HWND hwnd, HWND top, const RECT *win_rect,
+                           const RECT *top_rect, DWORD flags );
+ extern void X11DRV_ReleaseDC( HWND hwnd, HDC hdc );
+ extern BOOL X11DRV_ScrollDC( HDC hdc, INT dx, INT dy, HRGN update );
++extern void X11DRV_SetActiveWindow( HWND hwnd );
+ extern void X11DRV_SetCapture( HWND hwnd, UINT flags );
+ extern void X11DRV_SetDesktopWindow( HWND hwnd );
+ extern void X11DRV_SetLayeredWindowAttributes( HWND hwnd, COLORREF key, BYTE alpha,
+@@ -391,6 +392,7 @@ struct x11drv_thread_data
+     Display *display;
+     XEvent  *current_event;        /* event currently being processed */
+     HWND     grab_hwnd;            /* window that currently grabs the mouse */
++    HWND     active_window;        /* active window */
+     HWND     last_focus;           /* last window that had focus */
+     HWND     keymapnotify_hwnd;    /* window that should receive modifier release events */
+     XIM      xim;                  /* input method */
+diff --git a/include/wine/gdi_driver.h b/include/wine/gdi_driver.h
+index efee8d1af4d..b4b5b378554 100644
+--- a/include/wine/gdi_driver.h
++++ b/include/wine/gdi_driver.h
+@@ -370,6 +370,7 @@ struct user_driver_funcs
+     BOOL    (*pProcessEvents)(DWORD);
+     void    (*pReleaseDC)(HWND,HDC);
+     BOOL    (*pScrollDC)(HDC,INT,INT,HRGN);
++    void    (*pSetActiveWindow)(HWND);
+     void    (*pSetCapture)(HWND,UINT);
+     void    (*pSetDesktopWindow)(HWND);
+     void    (*pSetFocus)(HWND);
+-- 
+2.47.2
+
