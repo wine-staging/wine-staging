@@ -1,4 +1,4 @@
-From 4c246e61f0de05a8b80e7a5d5ff2edcd21036fec Mon Sep 17 00:00:00 2001
+From e5c4a6bd332d7d125e9db79fa29b14e55e3a1ee5 Mon Sep 17 00:00:00 2001
 From: Paul Gofman <pgofman@codeweavers.com>
 Date: Mon, 25 Nov 2019 12:19:20 +0300
 Subject: [PATCH] ntdll: Force virtual memory allocation order.
@@ -12,14 +12,14 @@ are from higher memory than they expect.
 Wine-Bug: https://bugs.winehq.org/show_bug.cgi?id=48175
 Wine-Bug: https://bugs.winehq.org/show_bug.cgi?id=46568
 ---
- dlls/ntdll/unix/virtual.c | 410 +++++++++++++++-----------------------
- 1 file changed, 164 insertions(+), 246 deletions(-)
+ dlls/ntdll/unix/virtual.c | 402 +++++++++++++++-----------------------
+ 1 file changed, 162 insertions(+), 240 deletions(-)
 
 diff --git a/dlls/ntdll/unix/virtual.c b/dlls/ntdll/unix/virtual.c
-index 1a3d527f186..ec72d692c3a 100644
+index a36c919d47f..2f682e70ec2 100644
 --- a/dlls/ntdll/unix/virtual.c
 +++ b/dlls/ntdll/unix/virtual.c
-@@ -1269,43 +1269,15 @@ static struct file_view *find_view_range( const void *addr, size_t size )
+@@ -1324,43 +1324,15 @@ static struct file_view *find_view_range( const void *addr, size_t size )
  }
  
  
@@ -71,7 +71,7 @@ index 1a3d527f186..ec72d692c3a 100644
  
  /***********************************************************************
   *           try_map_free_area
-@@ -1338,112 +1310,6 @@ static void* try_map_free_area( void *base, void *end, ptrdiff_t step,
+@@ -1393,112 +1365,6 @@ static void* try_map_free_area( void *base, void *end, ptrdiff_t step,
  }
  
  
@@ -184,7 +184,7 @@ index 1a3d527f186..ec72d692c3a 100644
  /***********************************************************************
   *           remove_reserved_area
   *
-@@ -1553,8 +1419,7 @@ static void free_view( struct file_view *view )
+@@ -1613,8 +1479,7 @@ static void free_view( struct file_view *view )
   */
  static void unregister_view( struct file_view *view )
  {
@@ -194,7 +194,7 @@ index 1a3d527f186..ec72d692c3a 100644
      wine_rb_remove( &views_tree, &view->entry );
  }
  
-@@ -1582,8 +1447,7 @@ static void delete_view( struct file_view *view ) /* [in] View */
+@@ -1642,8 +1507,7 @@ static void delete_view( struct file_view *view ) /* [in] View */
  static void register_view( struct file_view *view )
  {
      wine_rb_put( &views_tree, view->base, &view->entry );
@@ -204,7 +204,7 @@ index 1a3d527f186..ec72d692c3a 100644
  }
  
  
-@@ -1855,89 +1719,176 @@ static inline void *unmap_extra_space( void *ptr, size_t total_size, size_t want
+@@ -1919,89 +1783,176 @@ static inline void *unmap_extra_space( void *ptr, size_t total_size, size_t want
      return ptr;
  }
  
@@ -362,8 +362,8 @@ index 1a3d527f186..ec72d692c3a 100644
 -
 -            if (start >= limit_high) continue;
 -            if (end <= limit_low) return NULL;
--            if (start < limit_low) start = limit_low;
--            if (end > limit_high) end = limit_high;
+-            if (start < limit_low) start = (void *)ROUND_SIZE( 0, limit_low, host_page_mask );
+-            if (end > limit_high) end = ROUND_ADDR( limit_high, host_page_mask );
 -            ptr = find_reserved_free_area_outside_preloader( start, end, size, top_down, align_mask );
 -            if (ptr) break;
 -        }
@@ -396,8 +396,8 @@ index 1a3d527f186..ec72d692c3a 100644
 +
 +        TRACE("range %p-%p.\n", base, end);
 +
-+        if (base < limit_low) base = limit_low;
-+        if (end > limit_high) end = limit_high;
++        if (base < limit_low) base = (void *)ROUND_SIZE( 0, limit_low, host_page_mask );
++        if (end > limit_high) end = ROUND_ADDR( limit_high, host_page_mask );
 +        if (base > end || end - base < size) continue;
 +
 +        if (reserve_end >= base)
@@ -407,8 +407,8 @@ index 1a3d527f186..ec72d692c3a 100644
 -
 -            if (start >= limit_high) return NULL;
 -            if (end <= limit_low) continue;
--            if (start < limit_low) start = limit_low;
--            if (end > limit_high) end = limit_high;
+-            if (start < limit_low) start = (void *)ROUND_SIZE( 0, limit_low, host_page_mask );
+-            if (end > limit_high) end = ROUND_ADDR( limit_high, host_page_mask );
 -            ptr = find_reserved_free_area_outside_preloader( start, end, size, top_down, align_mask );
 -            if (ptr) break;
 +            if (reserve_end >= end)
@@ -442,31 +442,24 @@ index 1a3d527f186..ec72d692c3a 100644
  }
  
  /***********************************************************************
-@@ -2041,48 +1992,13 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
-     }
-     else
-     {
--        void *start = address_space_start;
--        void *end = min( user_space_limit, host_addr_space_limit );
--        size_t view_size, unmap_size;
+@@ -2112,43 +2063,12 @@ static NTSTATUS map_view( struct file_view **view_ret, void *base, size_t size,
+         void *start = address_space_start;
+         void *end = min( user_space_limit, host_addr_space_limit );
+         size_t host_size = ROUND_SIZE( 0, size, host_page_mask );
+-        size_t unmap_size, view_size = host_size + align_mask + 1;
 -
-+        limit_high = limit_high ? min( limit_high + 1, (UINT_PTR)user_space_limit) : (UINT_PTR)user_space_limit;
-+        if (limit_low < (ULONG_PTR)address_space_start) limit_low = (ULONG_PTR)address_space_start;
-         if (!align_mask) align_mask = granularity_mask;
--        view_size = size + align_mask + 1;
--
--        if (limit_low && (void *)limit_low > start) start = (void *)limit_low;
--        if (limit_high && (void *)limit_high < end) end = (char *)limit_high + 1;
--
--        if ((ptr = map_reserved_area( start, end, size, top_down, get_unix_prot(vprot), align_mask )))
+         if (limit_low && (void *)limit_low > start) start = (void *)limit_low;
+         if (limit_high && (void *)limit_high < end) end = (char *)limit_high + 1;
+ 
+-        if ((ptr = map_reserved_area( start, end, host_size, top_down, get_unix_prot(vprot), align_mask )))
 -        {
 -            TRACE( "got mem in reserved area %p-%p\n", ptr, (char *)ptr + size );
 -            goto done;
 -        }
- 
+-
 -        if (start > address_space_start || end < host_addr_space_limit || top_down)
 -        {
--            if (!(ptr = map_free_area( start, end, size, top_down, get_unix_prot(vprot), align_mask )))
+-            if (!(ptr = map_free_area( start, end, host_size, top_down, get_unix_prot(vprot), align_mask )))
 -                return STATUS_NO_MEMORY;
 -            TRACE( "got mem with map_free_area %p-%p\n", ptr, (char *)ptr + size );
 -            goto done;
@@ -487,15 +480,15 @@ index 1a3d527f186..ec72d692c3a 100644
 -            unmap_size = unmap_area_above_user_limit( ptr, view_size );
 -            if (unmap_size) munmap( ptr, unmap_size );
 -        }
--        ptr = unmap_extra_space( ptr, view_size, size, align_mask );
-+        if (!(ptr = alloc_free_area( (void *)limit_low, (void *)limit_high, size, top_down, get_unix_prot( vprot ), align_mask )))
+-        ptr = unmap_extra_space( ptr, view_size, host_size, align_mask );
++        if (!(ptr = alloc_free_area( start, end, host_size, top_down, get_unix_prot( vprot ), align_mask )))
 +            return STATUS_NO_MEMORY;
      }
 -done:
      status = create_view( view_ret, ptr, size, vprot );
      if (status != STATUS_SUCCESS) unmap_area( ptr, size );
      return status;
-@@ -3275,6 +3191,7 @@ static unsigned int virtual_map_section( HANDLE handle, PVOID *addr_ptr, ULONG_P
+@@ -3413,6 +3333,7 @@ static unsigned int virtual_map_section( HANDLE handle, PVOID *addr_ptr, ULONG_P
  done:
      server_leave_uninterrupted_section( &virtual_mutex, &sigset );
      if (needs_close) close( unix_handle );
@@ -503,7 +496,7 @@ index 1a3d527f186..ec72d692c3a 100644
      return res;
  }
  
-@@ -6394,6 +6311,7 @@ NTSTATUS WINAPI NtWow64AllocateVirtualMemory64( HANDLE process, ULONG64 *ret, UL
+@@ -6624,6 +6545,7 @@ NTSTATUS WINAPI NtWow64AllocateVirtualMemory64( HANDLE process, ULONG64 *ret, UL
          *ret = (ULONG_PTR)base;
          *size_ptr = size;
      }
@@ -512,5 +505,5 @@ index 1a3d527f186..ec72d692c3a 100644
  }
  
 -- 
-2.45.2
+2.49.0
 
