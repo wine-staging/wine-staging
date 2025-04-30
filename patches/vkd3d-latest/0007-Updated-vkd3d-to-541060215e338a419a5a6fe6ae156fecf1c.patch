@@ -1,0 +1,745 @@
+From d4bb50e646849dd747c804afef18f463c6cd7a8e Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Thu, 1 May 2025 06:41:00 +1000
+Subject: [PATCH] Updated vkd3d to 541060215e338a419a5a6fe6ae156fecf1c4b89f.
+
+---
+ libs/vkd3d/libs/vkd3d-shader/d3dbc.c        |  61 ++++++-
+ libs/vkd3d/libs/vkd3d-shader/dxil.c         |  68 ++++---
+ libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c |   4 +-
+ libs/vkd3d/libs/vkd3d-shader/ir.c           |   4 +-
+ libs/vkd3d/libs/vkd3d-shader/msl.c          | 187 ++++++++++----------
+ 5 files changed, 201 insertions(+), 123 deletions(-)
+
+diff --git a/libs/vkd3d/libs/vkd3d-shader/d3dbc.c b/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
+index 77498f26c7f..57d874efe37 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
++++ b/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
+@@ -1215,6 +1215,7 @@ static void shader_sm1_read_instruction(struct vkd3d_shader_sm1_parser *sm1, str
+     struct vkd3d_shader_src_param *src_params, *predicate;
+     const struct vkd3d_sm1_opcode_info *opcode_info;
+     struct vsir_program *program = sm1->p.program;
++    unsigned int vsir_dst_count, vsir_src_count;
+     struct vkd3d_shader_dst_param *dst_param;
+     const uint32_t **ptr = &sm1->ptr;
+     uint32_t opcode_token;
+@@ -1241,6 +1242,17 @@ static void shader_sm1_read_instruction(struct vkd3d_shader_sm1_parser *sm1, str
+         goto fail;
+     }
+ 
++    if (opcode_info->vkd3d_opcode == VKD3DSIH_TEXKILL)
++    {
++        vsir_src_count = 1;
++        vsir_dst_count = 0;
++    }
++    else
++    {
++        vsir_src_count = opcode_info->src_count;
++        vsir_dst_count = opcode_info->dst_count;
++    }
++
+     vsir_instruction_init(ins, &sm1->p.location, opcode_info->vkd3d_opcode);
+     ins->flags = (opcode_token & VKD3D_SM1_INSTRUCTION_FLAGS_MASK) >> VKD3D_SM1_INSTRUCTION_FLAGS_SHIFT;
+     ins->coissue = opcode_token & VKD3D_SM1_COISSUE;
+@@ -1248,9 +1260,9 @@ static void shader_sm1_read_instruction(struct vkd3d_shader_sm1_parser *sm1, str
+     ins->structured = false;
+     predicated = !!(opcode_token & VKD3D_SM1_INSTRUCTION_PREDICATED);
+     ins->predicate = predicate = predicated ? vsir_program_get_src_params(program, 1) : NULL;
+-    ins->dst_count = opcode_info->dst_count;
++    ins->dst_count = vsir_dst_count;
+     ins->dst = dst_param = vsir_program_get_dst_params(program, ins->dst_count);
+-    ins->src_count = opcode_info->src_count;
++    ins->src_count = vsir_src_count;
+     ins->src = src_params = vsir_program_get_src_params(program, ins->src_count);
+     if ((!predicate && predicated) || (!src_params && ins->src_count) || (!dst_param && ins->dst_count))
+     {
+@@ -1298,6 +1310,25 @@ static void shader_sm1_read_instruction(struct vkd3d_shader_sm1_parser *sm1, str
+         shader_sm1_read_immconst(sm1, &p, &src_params[0], VSIR_DIMENSION_VEC4, VKD3D_DATA_INT);
+         shader_sm1_scan_register(sm1, &dst_param->reg, dst_param->write_mask, true);
+     }
++    else if (ins->opcode == VKD3DSIH_TEXKILL)
++    {
++        /* TEXKILL, uniquely, encodes its argument as a destination, when it is
++         * semantically a source. Since we have multiple passes which operate
++         * generically on sources or destinations, normalize that. */
++        const struct vkd3d_shader_register *reg;
++        struct vkd3d_shader_dst_param tmp_dst;
++
++        reg = &tmp_dst.reg;
++        shader_sm1_read_dst_param(sm1, &p, &tmp_dst);
++        shader_sm1_scan_register(sm1, reg, tmp_dst.write_mask, false);
++
++        vsir_src_param_init(&src_params[0], reg->type, reg->data_type, reg->idx_count);
++        src_params[0].reg = *reg;
++        src_params[0].swizzle = vsir_swizzle_from_writemask(tmp_dst.write_mask);
++
++        if (ins->predicate)
++            shader_sm1_read_src_param(sm1, &p, predicate);
++    }
+     else
+     {
+         /* Destination token */
+@@ -1834,6 +1865,27 @@ static void d3dbc_write_instruction(struct d3dbc_compiler *d3dbc, const struct v
+     }
+ };
+ 
++static void d3dbc_write_texkill(struct d3dbc_compiler *d3dbc, const struct vkd3d_shader_instruction *ins)
++{
++    const struct vkd3d_shader_register *reg = &ins->src[0].reg;
++    struct vkd3d_shader_instruction tmp;
++    struct vkd3d_shader_dst_param dst;
++
++    /* TEXKILL, uniquely, encodes its argument as a destination, when it is
++     * semantically a source. We store it as a source in vsir, so convert it. */
++
++    vsir_dst_param_init(&dst, reg->type, reg->data_type, reg->idx_count);
++    dst.reg = *reg;
++    dst.write_mask = mask_from_swizzle(ins->src[0].swizzle);
++
++    tmp = *ins;
++    tmp.dst_count = 1;
++    tmp.dst = &dst;
++    tmp.src_count = 0;
++
++    d3dbc_write_instruction(d3dbc, &tmp);
++}
++
+ static void d3dbc_write_vsir_def(struct d3dbc_compiler *d3dbc, const struct vkd3d_shader_instruction *ins)
+ {
+     const struct vkd3d_shader_version *version = &d3dbc->program->shader_version;
+@@ -1938,6 +1990,10 @@ static void d3dbc_write_vsir_instruction(struct d3dbc_compiler *d3dbc, const str
+             d3dbc_write_vsir_dcl(d3dbc, ins);
+             break;
+ 
++        case VKD3DSIH_TEXKILL:
++            d3dbc_write_texkill(d3dbc, ins);
++            break;
++
+         case VKD3DSIH_ABS:
+         case VKD3DSIH_ADD:
+         case VKD3DSIH_CMP:
+@@ -1959,7 +2015,6 @@ static void d3dbc_write_vsir_instruction(struct d3dbc_compiler *d3dbc, const str
+         case VKD3DSIH_SINCOS:
+         case VKD3DSIH_SLT:
+         case VKD3DSIH_TEX:
+-        case VKD3DSIH_TEXKILL:
+         case VKD3DSIH_TEXLDD:
+             d3dbc_write_instruction(d3dbc, ins);
+             break;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/dxil.c b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+index d5f9626ec9d..775be85334e 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/dxil.c
++++ b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+@@ -659,7 +659,8 @@ struct sm6_function_data
+ struct sm6_handle_data
+ {
+     const struct sm6_descriptor_info *d;
+-    struct vkd3d_shader_register reg;
++    const struct sm6_value *index;
++    bool non_uniform;
+ };
+ 
+ struct sm6_value
+@@ -2519,6 +2520,25 @@ static void register_index_address_init(struct vkd3d_shader_register_index *idx,
+     }
+ }
+ 
++static void sm6_register_from_handle(struct sm6_parser *sm6,
++        const struct sm6_handle_data *handle, struct vkd3d_shader_register *reg)
++{
++    vsir_register_init(reg, handle->d->reg_type, handle->d->reg_data_type, 2);
++    reg->dimension = VSIR_DIMENSION_VEC4;
++    reg->idx[0].offset = handle->d->id;
++    register_index_address_init(&reg->idx[1], handle->index, sm6);
++    reg->non_uniform = handle->non_uniform;
++}
++
++static void src_param_init_vector_from_handle(struct sm6_parser *sm6,
++        struct vkd3d_shader_src_param *param, const struct sm6_handle_data *handle)
++{
++    struct vkd3d_shader_register reg;
++
++    sm6_register_from_handle(sm6, handle, &reg);
++    src_param_init_vector_from_reg(param, &reg);
++}
++
+ static bool instruction_dst_param_init_ssa_scalar(struct vkd3d_shader_instruction *ins, struct sm6_parser *sm6)
+ {
+     struct sm6_value *dst = sm6_parser_get_current_value(sm6);
+@@ -4788,7 +4808,7 @@ static void sm6_parser_emit_dx_atomic_binop(struct sm6_parser *sm6, enum dx_intr
+     dst_param_init(&dst_params[0]);
+     register_init_ssa_scalar(&dst_params[0].reg, dst->type, dst, sm6);
+     dst_param_init(&dst_params[1]);
+-    dst_params[1].reg = resource->u.handle.reg;
++    sm6_register_from_handle(sm6, &resource->u.handle, &dst_params[1].reg);
+ 
+     dst->u.reg = dst_params[0].reg;
+ }
+@@ -4846,7 +4866,7 @@ static void sm6_parser_emit_dx_buffer_update_counter(struct sm6_parser *sm6, enu
+     vsir_instruction_init(ins, &sm6->p.location, (inc < 0) ? VKD3DSIH_IMM_ATOMIC_CONSUME : VKD3DSIH_IMM_ATOMIC_ALLOC);
+     if (!(src_params = instruction_src_params_alloc(ins, 1, sm6)))
+         return;
+-    src_param_init_vector_from_reg(&src_params[0], &resource->u.handle.reg);
++    src_param_init_vector_from_handle(sm6, &src_params[0], &resource->u.handle);
+ 
+     instruction_dst_param_init_ssa_scalar(ins, sm6);
+ }
+@@ -4878,9 +4898,9 @@ static void sm6_parser_emit_dx_calculate_lod(struct sm6_parser *sm6, enum dx_int
+     if (!(src_params = instruction_src_params_alloc(ins, 3, sm6)))
+         return;
+     src_param_init_vector_from_reg(&src_params[0], &coord);
+-    src_params[1].reg = resource->u.handle.reg;
++    sm6_register_from_handle(sm6, &resource->u.handle, &src_params[1].reg);
+     src_param_init_scalar(&src_params[1], !clamp);
+-    src_param_init_vector_from_reg(&src_params[2], &sampler->u.handle.reg);
++    src_param_init_vector_from_handle(sm6, &src_params[2], &sampler->u.handle);
+ 
+     instruction_dst_param_init_ssa_scalar(ins, sm6);
+ }
+@@ -4902,7 +4922,7 @@ static void sm6_parser_emit_dx_cbuffer_load(struct sm6_parser *sm6, enum dx_intr
+ 
+     if (!(src_param = instruction_src_params_alloc(ins, 1, sm6)))
+         return;
+-    src_param_init_vector_from_reg(src_param, &buffer->u.handle.reg);
++    src_param_init_vector_from_handle(sm6, src_param, &buffer->u.handle);
+     /* Differently from other descriptors, constant buffers require an
+      * additional index, used to index within the constant buffer itself. */
+     src_param->reg.idx_count = 3;
+@@ -4986,7 +5006,6 @@ static void sm6_parser_emit_dx_create_handle(struct sm6_parser *sm6, enum dx_int
+     struct vkd3d_shader_instruction *ins = state->ins;
+     enum vkd3d_shader_descriptor_type type;
+     const struct sm6_descriptor_info *d;
+-    struct vkd3d_shader_register *reg;
+     struct sm6_value *dst;
+     unsigned int id;
+ 
+@@ -5003,13 +5022,8 @@ static void sm6_parser_emit_dx_create_handle(struct sm6_parser *sm6, enum dx_int
+     dst = sm6_parser_get_current_value(sm6);
+     dst->value_type = VALUE_TYPE_HANDLE;
+     dst->u.handle.d = d;
+-
+-    reg = &dst->u.handle.reg;
+-    vsir_register_init(reg, d->reg_type, d->reg_data_type, 2);
+-    reg->dimension = VSIR_DIMENSION_VEC4;
+-    reg->idx[0].offset = id;
+-    register_index_address_init(&reg->idx[1], operands[2], sm6);
+-    reg->non_uniform = !!sm6_value_get_constant_uint(operands[3]);
++    dst->u.handle.index = operands[2];
++    dst->u.handle.non_uniform = !!sm6_value_get_constant_uint(operands[3]);
+ 
+     /* NOP is used to flag no instruction emitted. */
+     ins->opcode = VKD3DSIH_NOP;
+@@ -5284,7 +5298,7 @@ static void sm6_parser_emit_dx_get_dimensions(struct sm6_parser *sm6, enum dx_in
+ 
+     if (!(src_params = instruction_src_params_alloc(ins, 1 + is_texture, sm6)))
+         return;
+-    src_param_init_vector_from_reg(&src_params[is_texture], &resource->u.handle.reg);
++    src_param_init_vector_from_handle(sm6, &src_params[is_texture], &resource->u.handle);
+ 
+     if (is_texture)
+     {
+@@ -5304,7 +5318,7 @@ static void sm6_parser_emit_dx_get_dimensions(struct sm6_parser *sm6, enum dx_in
+ 
+             if (!(src_params = instruction_src_params_alloc(ins, 1, sm6)))
+                 return;
+-            src_param_init_vector_from_reg(&src_params[0], &resource->u.handle.reg);
++            src_param_init_vector_from_handle(sm6, &src_params[0], &resource->u.handle);
+             src_params[0].swizzle = VKD3D_SHADER_SWIZZLE(X, X, X, X);
+ 
+             if (!instruction_dst_param_init_temp_vector(ins, sm6))
+@@ -5546,7 +5560,7 @@ static void sm6_parser_emit_dx_raw_buffer_load(struct sm6_parser *sm6, enum dx_i
+     if (!(src_params = instruction_src_params_alloc(ins, operand_count, sm6)))
+         return;
+     src_params_init_from_operands(src_params, &operands[1], operand_count - 1);
+-    src_param_init_vector_from_reg(&src_params[operand_count - 1], &resource->u.handle.reg);
++    src_param_init_vector_from_handle(sm6, &src_params[operand_count - 1], &resource->u.handle);
+ 
+     instruction_dst_param_init_ssa_vector(ins, component_count, sm6);
+ }
+@@ -5617,7 +5631,7 @@ static void sm6_parser_emit_dx_raw_buffer_store(struct sm6_parser *sm6, enum dx_
+ 
+     dst_param = instruction_dst_params_alloc(ins, 1, sm6);
+     dst_param_init_with_mask(dst_param, write_mask);
+-    dst_param->reg = resource->u.handle.reg;
++    sm6_register_from_handle(sm6, &resource->u.handle, &dst_param->reg);
+     dst_param->reg.alignment = alignment;
+ }
+ 
+@@ -5658,7 +5672,7 @@ static void sm6_parser_emit_dx_buffer_load(struct sm6_parser *sm6, enum dx_intri
+         vkd3d_shader_parser_warning(&sm6->p, VKD3D_SHADER_WARNING_DXIL_IGNORING_OPERANDS,
+                 "Ignoring structure offset for a typed buffer load.");
+     }
+-    src_param_init_vector_from_reg(&src_params[1], &resource->u.handle.reg);
++    src_param_init_vector_from_handle(sm6, &src_params[1], &resource->u.handle);
+ 
+     instruction_dst_param_init_ssa_vector(ins, VKD3D_VEC4_SIZE, sm6);
+ }
+@@ -5727,7 +5741,7 @@ static void sm6_parser_emit_dx_buffer_store(struct sm6_parser *sm6, enum dx_intr
+ 
+     dst_param = instruction_dst_params_alloc(ins, 1, sm6);
+     dst_param_init_with_mask(dst_param, write_mask);
+-    dst_param->reg = resource->u.handle.reg;
++    sm6_register_from_handle(sm6, &resource->u.handle, &dst_param->reg);
+ }
+ 
+ static void sm6_parser_emit_dx_get_sample_count(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
+@@ -5769,7 +5783,7 @@ static void sm6_parser_emit_dx_get_sample_pos(struct sm6_parser *sm6, enum dx_in
+         return;
+     if (op == DX_TEX2DMS_GET_SAMPLE_POS)
+     {
+-        src_param_init_vector_from_reg(&src_params[0], &resource->u.handle.reg);
++        src_param_init_vector_from_handle(sm6, &src_params[0], &resource->u.handle);
+         src_param_init_from_value(&src_params[1], operands[1]);
+     }
+     else
+@@ -5873,8 +5887,8 @@ static void sm6_parser_emit_dx_sample(struct sm6_parser *sm6, enum dx_intrinsic_
+     }
+ 
+     src_param_init_vector_from_reg(&src_params[0], &coord);
+-    src_param_init_vector_from_reg(&src_params[1], &resource->u.handle.reg);
+-    src_param_init_vector_from_reg(&src_params[2], &sampler->u.handle.reg);
++    src_param_init_vector_from_handle(sm6, &src_params[1], &resource->u.handle);
++    src_param_init_vector_from_handle(sm6, &src_params[2], &sampler->u.handle);
+     instruction_set_texel_offset(ins, &operands[6], sm6);
+ 
+     instruction_dst_param_init_ssa_vector(ins, component_count, sm6);
+@@ -6071,8 +6085,8 @@ static void sm6_parser_emit_dx_texture_gather(struct sm6_parser *sm6, enum dx_in
+         src_param_init_vector_from_reg(&src_params[1], &offset);
+     else
+         instruction_set_texel_offset(ins, &operands[6], sm6);
+-    src_param_init_vector_from_reg(&src_params[1 + extended_offset], &resource->u.handle.reg);
+-    src_param_init_vector_from_reg(&src_params[2 + extended_offset], &sampler->u.handle.reg);
++    src_param_init_vector_from_handle(sm6, &src_params[1 + extended_offset], &resource->u.handle);
++    src_param_init_vector_from_handle(sm6, &src_params[2 + extended_offset], &sampler->u.handle);
+     /* Swizzle stored in the sampler parameter is the scalar component index to be gathered. */
+     swizzle = sm6_value_get_constant_uint(operands[8]);
+     if (swizzle >= VKD3D_VEC4_SIZE)
+@@ -6124,7 +6138,7 @@ static void sm6_parser_emit_dx_texture_load(struct sm6_parser *sm6, enum dx_intr
+     if (!(src_params = instruction_src_params_alloc(ins, 2 + is_multisample, sm6)))
+         return;
+     src_param_init_vector_from_reg(&src_params[0], &coord);
+-    src_param_init_vector_from_reg(&src_params[1], &resource->u.handle.reg);
++    src_param_init_vector_from_handle(sm6, &src_params[1], &resource->u.handle);
+     if (is_multisample)
+         src_param_init_from_value(&src_params[2], mip_level_or_sample_count);
+ 
+@@ -6177,7 +6191,7 @@ static void sm6_parser_emit_dx_texture_store(struct sm6_parser *sm6, enum dx_int
+     src_param_init_vector_from_reg(&src_params[1], &texel);
+ 
+     dst_param = instruction_dst_params_alloc(ins, 1, sm6);
+-    dst_param->reg = resource->u.handle.reg;
++    sm6_register_from_handle(sm6, &resource->u.handle, &dst_param->reg);
+     dst_param_init_with_mask(dst_param, write_mask);
+ }
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+index 8dff48ee83e..bc14885af2b 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+@@ -9263,10 +9263,10 @@ static void sm1_generate_vsir_instr_jump(struct hlsl_ctx *ctx,
+ 
+     if (jump->type == HLSL_IR_JUMP_DISCARD_NEG)
+     {
+-        if (!(ins = generate_vsir_add_program_instruction(ctx, program, &instr->loc, VKD3DSIH_TEXKILL, 1, 0)))
++        if (!(ins = generate_vsir_add_program_instruction(ctx, program, &instr->loc, VKD3DSIH_TEXKILL, 0, 1)))
+             return;
+ 
+-        vsir_dst_from_hlsl_node(&ins->dst[0], ctx, condition);
++        vsir_src_from_hlsl_node(&ins->src[0], ctx, condition, VKD3DSP_WRITEMASK_ALL);
+     }
+     else
+     {
+diff --git a/libs/vkd3d/libs/vkd3d-shader/ir.c b/libs/vkd3d/libs/vkd3d-shader/ir.c
+index b8f83946294..4101e92e91f 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/ir.c
++++ b/libs/vkd3d/libs/vkd3d-shader/ir.c
+@@ -622,7 +622,7 @@ static enum vkd3d_result vsir_program_lower_texkill(struct vsir_program *program
+     if (*tmp_idx == ~0u)
+         *tmp_idx = program->temp_count++;
+ 
+-    /* tmp = ins->dst[0] < 0  */
++    /* tmp = ins->src[0] < 0  */
+ 
+     ins = &instructions->elements[pos + 1];
+     if (!vsir_instruction_init_with_params(program, ins, &texkill->location, VKD3DSIH_LTO, 1, 2))
+@@ -633,7 +633,7 @@ static enum vkd3d_result vsir_program_lower_texkill(struct vsir_program *program
+     ins->dst[0].reg.idx[0].offset = *tmp_idx;
+     ins->dst[0].write_mask = VKD3DSP_WRITEMASK_ALL;
+ 
+-    ins->src[0].reg = texkill->dst[0].reg;
++    ins->src[0].reg = texkill->src[0].reg;
+     ins->src[0].swizzle = VKD3D_SHADER_NO_SWIZZLE;
+     vsir_register_init(&ins->src[1].reg, VKD3DSPR_IMMCONST, VKD3D_DATA_FLOAT, 0);
+     ins->src[1].reg.dimension = VSIR_DIMENSION_VEC4;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/msl.c b/libs/vkd3d/libs/vkd3d-shader/msl.c
+index def6f459f69..4f37468af86 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/msl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/msl.c
+@@ -18,6 +18,13 @@
+ 
+ #include "vkd3d_shader_private.h"
+ 
++enum msl_data_type
++{
++    MSL_DATA_FLOAT,
++    MSL_DATA_UINT,
++    MSL_DATA_UNION,
++};
++
+ struct msl_src
+ {
+     struct vkd3d_string_buffer *str;
+@@ -267,15 +274,14 @@ static void msl_print_srv_name(struct vkd3d_string_buffer *buffer, struct msl_ge
+     vkd3d_string_buffer_printf(buffer, ">>()");
+ }
+ 
+-static void msl_print_register_name(struct vkd3d_string_buffer *buffer,
++static enum msl_data_type msl_print_register_name(struct vkd3d_string_buffer *buffer,
+         struct msl_generator *gen, const struct vkd3d_shader_register *reg)
+ {
+     switch (reg->type)
+     {
+         case VKD3DSPR_TEMP:
+             vkd3d_string_buffer_printf(buffer, "r[%u]", reg->idx[0].offset);
+-            msl_print_register_datatype(buffer, gen, reg->data_type);
+-            break;
++            return MSL_DATA_UNION;
+ 
+         case VKD3DSPR_INPUT:
+             if (reg->idx_count != 1)
+@@ -283,18 +289,17 @@ static void msl_print_register_name(struct vkd3d_string_buffer *buffer,
+                 msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+                         "Internal compiler error: Unhandled input register index count %u.", reg->idx_count);
+                 vkd3d_string_buffer_printf(buffer, "<unhandled register %#x>", reg->type);
+-                break;
++                return MSL_DATA_UNION;
+             }
+             if (reg->idx[0].rel_addr)
+             {
+                 msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+                         "Internal compiler error: Unhandled input register indirect addressing.");
+                 vkd3d_string_buffer_printf(buffer, "<unhandled register %#x>", reg->type);
+-                break;
++                return MSL_DATA_UNION;
+             }
+             vkd3d_string_buffer_printf(buffer, "v[%u]", reg->idx[0].offset);
+-            msl_print_register_datatype(buffer, gen, reg->data_type);
+-            break;
++            return MSL_DATA_UNION;
+ 
+         case VKD3DSPR_OUTPUT:
+             if (reg->idx_count != 1)
+@@ -302,18 +307,17 @@ static void msl_print_register_name(struct vkd3d_string_buffer *buffer,
+                 msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+                         "Internal compiler error: Unhandled output register index count %u.", reg->idx_count);
+                 vkd3d_string_buffer_printf(buffer, "<unhandled register %#x>", reg->type);
+-                break;
++                return MSL_DATA_UNION;
+             }
+             if (reg->idx[0].rel_addr)
+             {
+                 msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+                         "Internal compiler error: Unhandled output register indirect addressing.");
+                 vkd3d_string_buffer_printf(buffer, "<unhandled register %#x>", reg->type);
+-                break;
++                return MSL_DATA_UNION;
+             }
+             vkd3d_string_buffer_printf(buffer, "o[%u]", reg->idx[0].offset);
+-            msl_print_register_datatype(buffer, gen, reg->data_type);
+-            break;
++            return MSL_DATA_UNION;
+ 
+         case VKD3DSPR_DEPTHOUT:
+             if (gen->program->shader_version.type != VKD3D_SHADER_TYPE_PIXEL)
+@@ -321,64 +325,27 @@ static void msl_print_register_name(struct vkd3d_string_buffer *buffer,
+                         "Internal compiler error: Unhandled depth output in shader type #%x.",
+                         gen->program->shader_version.type);
+             vkd3d_string_buffer_printf(buffer, "o_depth");
+-            break;
++            return MSL_DATA_FLOAT;
+ 
+         case VKD3DSPR_IMMCONST:
+             switch (reg->dimension)
+             {
+                 case VSIR_DIMENSION_SCALAR:
+-                    switch (reg->data_type)
+-                    {
+-                        case VKD3D_DATA_INT:
+-                            vkd3d_string_buffer_printf(buffer, "as_type<int>(%#xu)", reg->u.immconst_u32[0]);
+-                            break;
+-                        case VKD3D_DATA_UINT:
+-                            vkd3d_string_buffer_printf(buffer, "%#xu", reg->u.immconst_u32[0]);
+-                            break;
+-                        case VKD3D_DATA_FLOAT:
+-                            vkd3d_string_buffer_printf(buffer, "as_type<float>(%#xu)", reg->u.immconst_u32[0]);
+-                            break;
+-                        default:
+-                            msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+-                                    "Internal compiler error: Unhandled immconst datatype %#x.", reg->data_type);
+-                            vkd3d_string_buffer_printf(buffer, "<unrecognised immconst datatype %#x>", reg->data_type);
+-                            break;
+-                    }
+-                    break;
++                    vkd3d_string_buffer_printf(buffer, "%#xu", reg->u.immconst_u32[0]);
++                    return MSL_DATA_UINT;
+ 
+                 case VSIR_DIMENSION_VEC4:
+-                    switch (reg->data_type)
+-                    {
+-                        case VKD3D_DATA_INT:
+-                            vkd3d_string_buffer_printf(buffer, "as_type<int4>(uint4(%#xu, %#xu, %#xu, %#xu))",
+-                                    reg->u.immconst_u32[0], reg->u.immconst_u32[1],
+-                                    reg->u.immconst_u32[2], reg->u.immconst_u32[3]);
+-                            break;
+-                        case VKD3D_DATA_UINT:
+-                            vkd3d_string_buffer_printf(buffer, "uint4(%#xu, %#xu, %#xu, %#xu)",
+-                                    reg->u.immconst_u32[0], reg->u.immconst_u32[1],
+-                                    reg->u.immconst_u32[2], reg->u.immconst_u32[3]);
+-                            break;
+-                        case VKD3D_DATA_FLOAT:
+-                            vkd3d_string_buffer_printf(buffer, "as_type<float4>(uint4(%#xu, %#xu, %#xu, %#xu))",
+-                                    reg->u.immconst_u32[0], reg->u.immconst_u32[1],
+-                                    reg->u.immconst_u32[2], reg->u.immconst_u32[3]);
+-                            break;
+-                        default:
+-                            msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+-                                    "Internal compiler error: Unhandled immconst datatype %#x.", reg->data_type);
+-                            vkd3d_string_buffer_printf(buffer, "<unrecognised immconst datatype %#x>", reg->data_type);
+-                            break;
+-                    }
+-                    break;
++                    vkd3d_string_buffer_printf(buffer, "uint4(%#xu, %#xu, %#xu, %#xu)",
++                            reg->u.immconst_u32[0], reg->u.immconst_u32[1],
++                            reg->u.immconst_u32[2], reg->u.immconst_u32[3]);
++                    return MSL_DATA_UINT;
+ 
+                 default:
+                     vkd3d_string_buffer_printf(buffer, "<unhandled_dimension %#x>", reg->dimension);
+                     msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+                             "Internal compiler error: Unhandled dimension %#x.", reg->dimension);
+-                    break;
++                    return MSL_DATA_UINT;
+             }
+-            break;
+ 
+         case VKD3DSPR_CONSTBUFFER:
+             {
+@@ -390,33 +357,32 @@ static void msl_print_register_name(struct vkd3d_string_buffer *buffer,
+                             "Internal compiler error: Unhandled constant buffer register index count %u.",
+                             reg->idx_count);
+                     vkd3d_string_buffer_printf(buffer, "<unhandled register %#x>", reg->type);
+-                    break;
++                    return MSL_DATA_UNION;
+                 }
+                 if (reg->idx[0].rel_addr || reg->idx[1].rel_addr || reg->idx[2].rel_addr)
+                 {
+                     msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+                             "Internal compiler error: Unhandled constant buffer register indirect addressing.");
+                     vkd3d_string_buffer_printf(buffer, "<unhandled register %#x>", reg->type);
+-                    break;
++                    return MSL_DATA_UNION;
+                 }
+                 if (!(binding = msl_get_cbv_binding(gen, 0, reg->idx[1].offset)))
+                 {
+                     msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_BINDING_NOT_FOUND,
+                             "Cannot finding binding for CBV register %u.", reg->idx[0].offset);
+                     vkd3d_string_buffer_printf(buffer, "<unhandled register %#x>", reg->type);
+-                    break;
++                    return MSL_DATA_UNION;
+                 }
+                 msl_print_cbv_name(buffer, binding->binding);
+                 vkd3d_string_buffer_printf(buffer, "[%u]", reg->idx[2].offset);
+-                msl_print_register_datatype(buffer, gen, reg->data_type);
+-                break;
++                return MSL_DATA_UNION;
+             }
+ 
+         default:
+             msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+                     "Internal compiler error: Unhandled register type %#x.", reg->type);
+             vkd3d_string_buffer_printf(buffer, "<unrecognised register %#x>", reg->type);
+-            break;
++            return MSL_DATA_UINT;
+     }
+ }
+ 
+@@ -451,24 +417,64 @@ static void msl_src_cleanup(struct msl_src *src, struct vkd3d_string_buffer_cach
+     vkd3d_string_buffer_release(cache, src->str);
+ }
+ 
+-static void msl_src_init(struct msl_src *msl_src, struct msl_generator *gen,
+-        const struct vkd3d_shader_src_param *vsir_src, uint32_t mask)
++static void msl_print_bitcast(struct vkd3d_string_buffer *dst, struct msl_generator *gen, const char *src,
++        enum vkd3d_data_type dst_data_type, enum msl_data_type src_data_type, enum vsir_dimension dimension)
++{
++    bool write_cast = false;
++
++    if (dst_data_type == VKD3D_DATA_UNORM || dst_data_type == VKD3D_DATA_SNORM)
++        dst_data_type = VKD3D_DATA_FLOAT;
++
++    switch (src_data_type)
++    {
++        case MSL_DATA_FLOAT:
++            write_cast = dst_data_type != VKD3D_DATA_FLOAT;
++            break;
++
++        case MSL_DATA_UINT:
++            write_cast = dst_data_type != VKD3D_DATA_UINT;
++            break;
++
++        case MSL_DATA_UNION:
++            break;
++    }
++
++    if (write_cast)
++    {
++        vkd3d_string_buffer_printf(dst, "as_type<");
++        msl_print_resource_datatype(gen, dst, dst_data_type);
++        vkd3d_string_buffer_printf(dst, "%s>(", dimension == VSIR_DIMENSION_VEC4 ? "4" : "");
++    }
++
++    vkd3d_string_buffer_printf(dst, "%s", src);
++
++    if (write_cast)
++        vkd3d_string_buffer_printf(dst, ")");
++
++    if (src_data_type == MSL_DATA_UNION)
++        msl_print_register_datatype(dst, gen, dst_data_type);
++}
++
++static void msl_print_src_with_type(struct vkd3d_string_buffer *buffer, struct msl_generator *gen,
++    const struct vkd3d_shader_src_param *vsir_src, uint32_t mask, enum vkd3d_data_type data_type)
+ {
+     const struct vkd3d_shader_register *reg = &vsir_src->reg;
+-    struct vkd3d_string_buffer *str;
++    struct vkd3d_string_buffer *register_name, *str;
++    enum msl_data_type src_data_type;
+ 
+-    msl_src->str = vkd3d_string_buffer_get(&gen->string_buffers);
++    register_name = vkd3d_string_buffer_get(&gen->string_buffers);
+ 
+     if (reg->non_uniform)
+         msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+                 "Internal compiler error: Unhandled 'non-uniform' modifier.");
+ 
+     if (!vsir_src->modifiers)
+-        str = msl_src->str;
++        str = buffer;
+     else
+         str = vkd3d_string_buffer_get(&gen->string_buffers);
+ 
+-    msl_print_register_name(str, gen, reg);
++    src_data_type = msl_print_register_name(register_name, gen, reg);
++    msl_print_bitcast(str, gen, register_name->buffer, data_type, src_data_type, reg->dimension);
+     if (reg->dimension == VSIR_DIMENSION_VEC4)
+         msl_print_swizzle(str, vsir_src->swizzle, mask);
+ 
+@@ -477,23 +483,30 @@ static void msl_src_init(struct msl_src *msl_src, struct msl_generator *gen,
+         case VKD3DSPSM_NONE:
+             break;
+         case VKD3DSPSM_NEG:
+-            vkd3d_string_buffer_printf(msl_src->str, "-%s", str->buffer);
++            vkd3d_string_buffer_printf(buffer, "-%s", str->buffer);
+             break;
+         case VKD3DSPSM_ABS:
+-            vkd3d_string_buffer_printf(msl_src->str, "abs(%s)", str->buffer);
++            vkd3d_string_buffer_printf(buffer, "abs(%s)", str->buffer);
+             break;
+         default:
+-            vkd3d_string_buffer_printf(msl_src->str, "<unhandled modifier %#x>(%s)",
++            vkd3d_string_buffer_printf(buffer, "<unhandled modifier %#x>(%s)",
+                     vsir_src->modifiers, str->buffer);
+             msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+                     "Internal compiler error: Unhandled source modifier(s) %#x.", vsir_src->modifiers);
+             break;
+     }
+ 
+-    if (str != msl_src->str)
++    if (str != buffer)
+         vkd3d_string_buffer_release(&gen->string_buffers, str);
+ }
+ 
++static void msl_src_init(struct msl_src *msl_src, struct msl_generator *gen,
++        const struct vkd3d_shader_src_param *vsir_src, uint32_t mask)
++{
++    msl_src->str = vkd3d_string_buffer_get(&gen->string_buffers);
++    msl_print_src_with_type(msl_src->str, gen, vsir_src, mask, vsir_src->reg.data_type);
++}
++
+ static void msl_dst_cleanup(struct msl_dst *dst, struct vkd3d_string_buffer_cache *cache)
+ {
+     vkd3d_string_buffer_release(cache, dst->mask);
+@@ -504,6 +517,7 @@ static uint32_t msl_dst_init(struct msl_dst *msl_dst, struct msl_generator *gen,
+         const struct vkd3d_shader_instruction *ins, const struct vkd3d_shader_dst_param *vsir_dst)
+ {
+     uint32_t write_mask = vsir_dst->write_mask;
++    enum msl_data_type dst_data_type;
+ 
+     if (ins->flags & VKD3DSI_PRECISE_XYZW)
+         msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+@@ -516,7 +530,9 @@ static uint32_t msl_dst_init(struct msl_dst *msl_dst, struct msl_generator *gen,
+     msl_dst->register_name = vkd3d_string_buffer_get(&gen->string_buffers);
+     msl_dst->mask = vkd3d_string_buffer_get(&gen->string_buffers);
+ 
+-    msl_print_register_name(msl_dst->register_name, gen, &vsir_dst->reg);
++    dst_data_type = msl_print_register_name(msl_dst->register_name, gen, &vsir_dst->reg);
++    if (dst_data_type == MSL_DATA_UNION)
++        msl_print_register_datatype(msl_dst->mask, gen, vsir_dst->reg.data_type);
+     if (vsir_dst->reg.dimension == VSIR_DIMENSION_VEC4)
+         msl_print_write_mask(msl_dst->mask, write_mask);
+ 
+@@ -710,7 +726,6 @@ static void msl_ld(struct msl_generator *gen, const struct vkd3d_shader_instruct
+     const struct vkd3d_shader_descriptor_info1 *descriptor;
+     const struct vkd3d_shader_descriptor_binding *binding;
+     enum vkd3d_shader_resource_type resource_type;
+-    struct msl_src coord, array_index, lod;
+     struct vkd3d_string_buffer *read;
+     enum vkd3d_data_type data_type;
+     uint32_t coord_mask;
+@@ -762,34 +777,28 @@ static void msl_ld(struct msl_generator *gen, const struct vkd3d_shader_instruct
+     }
+ 
+     msl_dst_init(&dst, gen, ins, &ins->dst[0]);
+-    msl_src_init(&coord, gen, &ins->src[0], coord_mask);
+-    /* `coord_mask + 1` gives exactly the array index component mask if it is an array resource */
+-    /* Or it's simply unused, saving some branches */
+-    msl_src_init(&array_index, gen, &ins->src[0], coord_mask + 1);
+-    msl_src_init(&lod, gen, &ins->src[0], VKD3DSP_WRITEMASK_3);
+     read = vkd3d_string_buffer_get(&gen->string_buffers);
+ 
+     vkd3d_string_buffer_printf(read, "as_type<uint4>(");
+     msl_print_srv_name(read, gen, binding->binding, resource_type_info, data_type);
+     vkd3d_string_buffer_printf(read, ".read(");
+-    if (resource_type_info->read_coord_size > 1)
+-        vkd3d_string_buffer_printf(read, "as_type<uint%zu>(%s)",
+-                resource_type_info->read_coord_size, coord.str->buffer);
+-    else
+-        vkd3d_string_buffer_printf(read, "as_type<uint>(%s)", coord.str->buffer);
++    msl_print_src_with_type(read, gen, &ins->src[0], coord_mask, VKD3D_DATA_UINT);
+     if (resource_type_info->array)
+-        vkd3d_string_buffer_printf(read, ", as_type<uint>(%s)", array_index.str->buffer);
++    {
++        vkd3d_string_buffer_printf(read, ", ");
++        msl_print_src_with_type(read, gen, &ins->src[0], coord_mask + 1, VKD3D_DATA_UINT);
++    }
+     if (resource_type_info->lod)
+-        vkd3d_string_buffer_printf(read, ", as_type<uint>(%s)", lod.str->buffer);
++    {
++        vkd3d_string_buffer_printf(read, ", ");
++        msl_print_src_with_type(read, gen, &ins->src[0], VKD3DSP_WRITEMASK_3, VKD3D_DATA_UINT);
++    }
+     vkd3d_string_buffer_printf(read, "))");
+     msl_print_swizzle(read, ins->src[1].swizzle, ins->dst[0].write_mask);
+ 
+     msl_print_assignment(gen, &dst, "%s", read->buffer);
+ 
+     vkd3d_string_buffer_release(&gen->string_buffers, read);
+-    msl_src_cleanup(&lod, &gen->string_buffers);
+-    msl_src_cleanup(&array_index, &gen->string_buffers);
+-    msl_src_cleanup(&coord, &gen->string_buffers);
+     msl_dst_cleanup(&dst, &gen->string_buffers);
+ }
+ 
+-- 
+2.47.2
+
