@@ -1,0 +1,842 @@
+From a3aae93362d2d3bd145f6dc89e8aedfed829a597 Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Wed, 7 May 2025 07:27:09 +1000
+Subject: [PATCH 3/3] Updated vkd3d to
+ 960244bf1ea66755b0fbe11c4d40fa0fbf211d97.
+
+---
+ libs/vkd3d/libs/vkd3d-shader/dxil.c   |  87 +++++++----------
+ libs/vkd3d/libs/vkd3d-shader/fx.c     |  90 +++++++++++-------
+ libs/vkd3d/libs/vkd3d/command.c       | 131 ++++++++++++++++----------
+ libs/vkd3d/libs/vkd3d/device.c        | 121 +++++++++++++++++++++++-
+ libs/vkd3d/libs/vkd3d/vkd3d_private.h |  20 +++-
+ 5 files changed, 308 insertions(+), 141 deletions(-)
+
+diff --git a/libs/vkd3d/libs/vkd3d-shader/dxil.c b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+index 52bab40b553..da872afc265 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/dxil.c
++++ b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+@@ -648,6 +648,8 @@ enum sm6_value_type
+     VALUE_TYPE_ICB,
+     VALUE_TYPE_HANDLE,
+     VALUE_TYPE_SSA,
++    VALUE_TYPE_UNDEFINED,
++    VALUE_TYPE_INVALID,
+ };
+ 
+ struct sm6_function_data
+@@ -674,7 +676,6 @@ struct sm6_value
+     const struct sm6_type *type;
+     enum sm6_value_type value_type;
+     unsigned int structure_stride;
+-    bool is_undefined;
+     bool is_back_ref;
+     union
+     {
+@@ -2243,6 +2244,8 @@ static inline bool sm6_value_is_register(const struct sm6_value *value)
+     {
+         case VALUE_TYPE_REG:
+         case VALUE_TYPE_SSA:
++        case VALUE_TYPE_UNDEFINED:
++        case VALUE_TYPE_INVALID:
+             return true;
+ 
+         default:
+@@ -2407,6 +2410,10 @@ static enum vkd3d_data_type vkd3d_data_type_from_sm6_type(const struct sm6_type
+ 
+ static void sm6_register_from_value(struct vkd3d_shader_register *reg, const struct sm6_value *value)
+ {
++    enum vkd3d_data_type data_type;
++
++    data_type = vkd3d_data_type_from_sm6_type(sm6_type_get_scalar_type(value->type, 0));
++
+     switch (value->value_type)
+     {
+         case VALUE_TYPE_REG:
+@@ -2414,11 +2421,15 @@ static void sm6_register_from_value(struct vkd3d_shader_register *reg, const str
+             break;
+ 
+         case VALUE_TYPE_SSA:
+-            register_init_with_id(reg, VKD3DSPR_SSA, vkd3d_data_type_from_sm6_type(
+-                    sm6_type_get_scalar_type(value->type, 0)), value->u.ssa.id);
++            register_init_with_id(reg, VKD3DSPR_SSA, data_type, value->u.ssa.id);
+             reg->dimension = sm6_type_is_scalar(value->type) ? VSIR_DIMENSION_SCALAR : VSIR_DIMENSION_VEC4;
+             break;
+ 
++        case VALUE_TYPE_UNDEFINED:
++        case VALUE_TYPE_INVALID:
++            vsir_register_init(reg, VKD3DSPR_UNDEF, data_type, 0);
++            break;
++
+         case VALUE_TYPE_FUNCTION:
+         case VALUE_TYPE_HANDLE:
+         case VALUE_TYPE_ICB:
+@@ -2445,32 +2456,6 @@ static void sm6_parser_init_ssa_value(struct sm6_parser *sm6, struct sm6_value *
+     sm6_register_from_value(&value->reg, value);
+ }
+ 
+-static void register_init_ssa_vector(struct vkd3d_shader_register *reg, const struct sm6_type *type,
+-        unsigned int component_count, struct sm6_value *value, struct sm6_parser *sm6)
+-{
+-    enum vkd3d_data_type data_type;
+-    unsigned int id;
+-
+-    if (value && register_is_ssa(&value->reg) && value->reg.idx[0].offset)
+-    {
+-        id = value->reg.idx[0].offset;
+-        TRACE("Using forward-allocated id %u.\n", id);
+-    }
+-    else
+-    {
+-        id = sm6_parser_alloc_ssa_id(sm6);
+-    }
+-    data_type = vkd3d_data_type_from_sm6_type(sm6_type_get_scalar_type(type, 0));
+-    register_init_with_id(reg, VKD3DSPR_SSA, data_type, id);
+-    reg->dimension = component_count > 1 ? VSIR_DIMENSION_VEC4 : VSIR_DIMENSION_SCALAR;
+-}
+-
+-static void register_init_ssa_scalar(struct vkd3d_shader_register *reg, const struct sm6_type *type,
+-        struct sm6_value *value, struct sm6_parser *sm6)
+-{
+-    register_init_ssa_vector(reg, sm6_type_get_scalar_type(type, 0), 1, value, sm6);
+-}
+-
+ static void register_make_constant_uint(struct vkd3d_shader_register *reg, unsigned int value)
+ {
+     vsir_register_init(reg, VKD3DSPR_IMMCONST, VKD3D_DATA_UINT, 0);
+@@ -3406,16 +3391,16 @@ static enum vkd3d_result sm6_parser_constants_init(struct sm6_parser *sm6, const
+ 
+             case CST_CODE_UNDEF:
+                 dxil_record_validate_operand_max_count(record, 0, sm6);
+-                dst->reg.type = VKD3DSPR_UNDEF;
+-                /* Mark as explicitly undefined, not the result of a missing constant code or instruction. */
+-                dst->is_undefined = true;
++                dst->value_type = VALUE_TYPE_UNDEFINED;
++                sm6_register_from_value(&dst->reg, dst);
+                 break;
+ 
+             default:
+                 FIXME("Unhandled constant code %u.\n", record->code);
+                 vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_OPERAND,
+                         "Constant code %u is unhandled.", record->code);
+-                dst->reg.type = VKD3DSPR_UNDEF;
++                dst->value_type = VALUE_TYPE_INVALID;
++                sm6_register_from_value(&dst->reg, dst);
+                 break;
+         }
+ 
+@@ -4602,7 +4587,7 @@ static bool sm6_parser_emit_coordinate_construct(struct sm6_parser *sm6, const s
+ 
+     for (component_count = 0; component_count < max_operands; ++component_count)
+     {
+-        if (!z_operand && operands[component_count]->is_undefined)
++        if (!z_operand && operands[component_count]->value_type == VALUE_TYPE_UNDEFINED)
+             break;
+         sm6_register_from_value(&operand_regs[component_count], operands[component_count]);
+     }
+@@ -4838,7 +4823,7 @@ static void sm6_parser_emit_dx_atomic_binop(struct sm6_parser *sm6, enum dx_intr
+ 
+     for (i = coord_idx + coord_count; i < coord_idx + 3; ++i)
+     {
+-        if (!operands[i]->is_undefined)
++        if (operands[i]->value_type != VALUE_TYPE_UNDEFINED)
+         {
+             WARN("Ignoring unexpected operand.\n");
+             vkd3d_shader_parser_warning(&sm6->p, VKD3D_SHADER_WARNING_DXIL_IGNORING_OPERANDS,
+@@ -4857,13 +4842,13 @@ static void sm6_parser_emit_dx_atomic_binop(struct sm6_parser *sm6, enum dx_intr
+         src_param_init_from_value(&src_params[1], operands[4]);
+     src_param_init_from_value(&src_params[1 + is_cmp_xchg], operands[5]);
+ 
++    sm6_parser_init_ssa_value(sm6, dst);
++
+     dst_params = instruction_dst_params_alloc(ins, 2, sm6);
+     dst_param_init(&dst_params[0]);
+-    register_init_ssa_scalar(&dst_params[0].reg, dst->type, dst, sm6);
++    sm6_register_from_value(&dst_params[0].reg, dst);
+     dst_param_init(&dst_params[1]);
+     sm6_register_from_handle(sm6, &resource->u.handle, &dst_params[1].reg);
+-
+-    dst->reg = dst_params[0].reg;
+ }
+ 
+ static void sm6_parser_emit_dx_barrier(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
+@@ -5393,7 +5378,7 @@ static void sm6_parser_emit_dx_get_dimensions(struct sm6_parser *sm6, enum dx_in
+     }
+     else
+     {
+-        if (!operands[1]->is_undefined)
++        if (operands[1]->value_type != VALUE_TYPE_UNDEFINED)
+         {
+             WARN("Ignoring unexpected operand.\n");
+             vkd3d_shader_parser_warning(&sm6->p, VKD3D_SHADER_WARNING_DXIL_IGNORING_OPERANDS,
+@@ -5450,7 +5435,7 @@ static void sm6_parser_emit_dx_load_input(struct sm6_parser *sm6, enum dx_intrin
+     row_index = sm6_value_get_constant_uint(operands[0]);
+     column_index = sm6_value_get_constant_uint(operands[2]);
+ 
+-    if (is_control_point && operands[3]->is_undefined)
++    if (is_control_point && operands[3]->value_type == VALUE_TYPE_UNDEFINED)
+     {
+         /* dxcompiler will compile source which does this, so let it pass. */
+         WARN("Control point id is undefined.\n");
+@@ -5493,7 +5478,7 @@ static void sm6_parser_emit_dx_load_input(struct sm6_parser *sm6, enum dx_intrin
+     if (e->register_count > 1)
+         register_index_address_init(&src_param->reg.idx[count++], operands[1], sm6);
+ 
+-    if (!is_patch_constant && !operands[3]->is_undefined)
++    if (!is_patch_constant && operands[3]->value_type != VALUE_TYPE_UNDEFINED)
+     {
+         VKD3D_ASSERT(src_param->reg.idx_count > count);
+         register_index_address_init(&src_param->reg.idx[count], operands[3], sm6);
+@@ -6004,13 +5989,14 @@ static void sm6_parser_emit_dx_sincos(struct sm6_parser *sm6, enum dx_intrinsic_
+         return;
+     src_param_init_from_value(src_param, operands[0]);
+ 
++    sm6_parser_init_ssa_value(sm6, dst);
++
+     index = op == DX_COS;
+     dst_params = instruction_dst_params_alloc(ins, 2, sm6);
+     dst_param_init(&dst_params[0]);
+     dst_param_init(&dst_params[1]);
+-    register_init_ssa_scalar(&dst_params[index].reg, dst->type, dst, sm6);
++    sm6_register_from_value(&dst_params[index].reg, dst);
+     vsir_dst_param_init_null(&dst_params[index ^ 1]);
+-    dst->reg = dst_params[index].reg;
+ }
+ 
+ static void sm6_parser_emit_dx_split_double(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
+@@ -6619,16 +6605,13 @@ static bool sm6_parser_validate_dx_op(struct sm6_parser *sm6, enum dx_intrinsic_
+ static void sm6_parser_emit_unhandled(struct sm6_parser *sm6, struct vkd3d_shader_instruction *ins,
+         struct sm6_value *dst)
+ {
+-    const struct sm6_type *type;
+-
+     ins->opcode = VKD3DSIH_NOP;
+ 
+     if (!dst->type)
+         return;
+ 
+-    type = sm6_type_get_scalar_type(dst->type, 0);
+-    vsir_register_init(&dst->reg, VKD3DSPR_UNDEF, vkd3d_data_type_from_sm6_type(type), 0);
+-    /* dst->is_undefined is not set here because it flags only explicitly undefined values. */
++    dst->value_type = VALUE_TYPE_INVALID;
++    sm6_register_from_value(&dst->reg, dst);
+ }
+ 
+ static void sm6_parser_decode_dx_op(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
+@@ -7115,14 +7098,14 @@ static void sm6_parser_emit_cmpxchg(struct sm6_parser *sm6, const struct dxil_re
+     src_param_init_from_value(&src_params[1], cmp);
+     src_param_init_from_value(&src_params[2], new);
+ 
++    sm6_parser_init_ssa_value(sm6, dst);
++
+     if (!(dst_params = instruction_dst_params_alloc(ins, 2, sm6)))
+         return;
+-    register_init_ssa_scalar(&dst_params[0].reg, dst->type, dst, sm6);
++    sm6_register_from_value(&dst_params[0].reg, dst);
+     dst_param_init(&dst_params[0]);
+     dst_params[1].reg = reg;
+     dst_param_init(&dst_params[1]);
+-
+-    dst->reg = dst_params[0].reg;
+ }
+ 
+ static void sm6_parser_emit_extractval(struct sm6_parser *sm6, const struct dxil_record *record,
+@@ -7404,7 +7387,7 @@ static void sm6_parser_emit_phi(struct sm6_parser *sm6, const struct dxil_record
+     }
+ 
+     dst->type = type;
+-    register_init_ssa_scalar(&dst->reg, type, dst, sm6);
++    sm6_parser_init_ssa_value(sm6, dst);
+ 
+     if (!(phi = sm6_block_phi_require_space(code_block, sm6)))
+         return;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/fx.c b/libs/vkd3d/libs/vkd3d-shader/fx.c
+index c93f01039ef..6f67af2f7e8 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d/libs/vkd3d-shader/fx.c
+@@ -2655,38 +2655,31 @@ fx_4_states[] =
+     { "ComputeShader",  HLSL_CLASS_PASS, HLSL_CLASS_SCALAR, FX_COMPUTESHADER, 1, 1, 58 },
+ };
+ 
+-static void resolve_fx_4_state_block_values(struct hlsl_ir_var *var, struct hlsl_state_block_entry *entry,
+-        struct fx_write_context *fx)
++static const struct fx_4_state fx_5_blend_states[] =
+ {
+-    static const struct fx_4_state fx_5_blend_states[] =
+-    {
+-        { "AlphaToCoverageEnable", HLSL_CLASS_BLEND_STATE, HLSL_CLASS_SCALAR, FX_BOOL,  1, 1, 36, bool_values },
+-        { "BlendEnable",           HLSL_CLASS_BLEND_STATE, HLSL_CLASS_SCALAR, FX_BOOL,  1, 8, 37, bool_values },
+-        { "SrcBlend",              HLSL_CLASS_BLEND_STATE, HLSL_CLASS_SCALAR, FX_UINT,  1, 8, 38, blend_values },
+-        { "DestBlend",             HLSL_CLASS_BLEND_STATE, HLSL_CLASS_SCALAR, FX_UINT,  1, 8, 39, blend_values },
+-        { "BlendOp",               HLSL_CLASS_BLEND_STATE, HLSL_CLASS_SCALAR, FX_UINT,  1, 8, 40, blendop_values },
+-        { "SrcBlendAlpha",         HLSL_CLASS_BLEND_STATE, HLSL_CLASS_SCALAR, FX_UINT,  1, 8, 41, blend_values },
+-        { "DestBlendAlpha",        HLSL_CLASS_BLEND_STATE, HLSL_CLASS_SCALAR, FX_UINT,  1, 8, 42, blend_values },
+-        { "BlendOpAlpha",          HLSL_CLASS_BLEND_STATE, HLSL_CLASS_SCALAR, FX_UINT,  1, 8, 43, blendop_values },
+-        { "RenderTargetWriteMask", HLSL_CLASS_BLEND_STATE, HLSL_CLASS_SCALAR, FX_UINT8, 1, 8, 44 },
+-    };
++    { "AlphaToCoverageEnable", HLSL_CLASS_BLEND_STATE, HLSL_CLASS_SCALAR, FX_BOOL,  1, 1, 36, bool_values },
++    { "BlendEnable",           HLSL_CLASS_BLEND_STATE, HLSL_CLASS_SCALAR, FX_BOOL,  1, 8, 37, bool_values },
++    { "SrcBlend",              HLSL_CLASS_BLEND_STATE, HLSL_CLASS_SCALAR, FX_UINT,  1, 8, 38, blend_values },
++    { "DestBlend",             HLSL_CLASS_BLEND_STATE, HLSL_CLASS_SCALAR, FX_UINT,  1, 8, 39, blend_values },
++    { "BlendOp",               HLSL_CLASS_BLEND_STATE, HLSL_CLASS_SCALAR, FX_UINT,  1, 8, 40, blendop_values },
++    { "SrcBlendAlpha",         HLSL_CLASS_BLEND_STATE, HLSL_CLASS_SCALAR, FX_UINT,  1, 8, 41, blend_values },
++    { "DestBlendAlpha",        HLSL_CLASS_BLEND_STATE, HLSL_CLASS_SCALAR, FX_UINT,  1, 8, 42, blend_values },
++    { "BlendOpAlpha",          HLSL_CLASS_BLEND_STATE, HLSL_CLASS_SCALAR, FX_UINT,  1, 8, 43, blendop_values },
++    { "RenderTargetWriteMask", HLSL_CLASS_BLEND_STATE, HLSL_CLASS_SCALAR, FX_UINT8, 1, 8, 44 },
++};
+ 
+-    struct state_table
+-    {
+-        const struct fx_4_state *ptr;
+-        unsigned int count;
+-    } table;
++struct fx_4_state_table
++{
++    const struct fx_4_state *ptr;
++    unsigned int count;
++};
+ 
+-    const struct hlsl_type *type = hlsl_get_multiarray_element_type(var->data_type);
+-    struct replace_state_context replace_context;
+-    const struct fx_4_state *state = NULL;
+-    struct hlsl_type *state_type = NULL;
+-    struct hlsl_ctx *ctx = fx->ctx;
+-    enum hlsl_base_type base_type;
+-    struct hlsl_ir_node *node;
+-    unsigned int i;
++static struct fx_4_state_table fx_4_get_state_table(enum hlsl_type_class type_class,
++        unsigned int major, unsigned int minor)
++{
++    struct fx_4_state_table table;
+ 
+-    if (type->class == HLSL_CLASS_BLEND_STATE && ctx->profile->major_version == 5)
++    if (type_class == HLSL_CLASS_BLEND_STATE && (major == 5 || (major == 4 && minor == 1)))
+     {
+         table.ptr = fx_5_blend_states;
+         table.count = ARRAY_SIZE(fx_5_blend_states);
+@@ -2697,6 +2690,24 @@ static void resolve_fx_4_state_block_values(struct hlsl_ir_var *var, struct hlsl
+         table.count = ARRAY_SIZE(fx_4_states);
+     }
+ 
++    return table;
++}
++
++static void resolve_fx_4_state_block_values(struct hlsl_ir_var *var,
++        struct hlsl_state_block_entry *entry, struct fx_write_context *fx)
++{
++    const struct hlsl_type *type = hlsl_get_multiarray_element_type(var->data_type);
++    struct replace_state_context replace_context;
++    const struct fx_4_state *state = NULL;
++    struct hlsl_type *state_type = NULL;
++    struct hlsl_ctx *ctx = fx->ctx;
++    enum hlsl_base_type base_type;
++    struct fx_4_state_table table;
++    struct hlsl_ir_node *node;
++    unsigned int i;
++
++    table = fx_4_get_state_table(type->class, ctx->profile->major_version, ctx->profile->minor_version);
++
+     for (i = 0; i < table.count; ++i)
+     {
+         if (type->class == table.ptr[i].container
+@@ -3439,7 +3450,11 @@ struct fx_parser
+     struct vkd3d_shader_message_context *message_context;
+     struct vkd3d_string_buffer buffer;
+     unsigned int indent;
+-    unsigned int version;
++    struct
++    {
++        unsigned int major;
++        unsigned int minor;
++    } version;
+     struct
+     {
+         const uint8_t *ptr;
+@@ -4904,16 +4919,18 @@ static void fx_4_parse_state_object_initializer(struct fx_parser *parser, uint32
+     };
+     const struct rhs_named_value *named_value;
+     struct fx_5_shader shader = { 0 };
++    struct fx_4_state_table table;
+     unsigned int shader_type = 0;
+     uint32_t i, j, comp_count;
+     struct fx_4_state *state;
+ 
++    table = fx_4_get_state_table(type_class, parser->version.major, parser->version.minor);
++
+     for (i = 0; i < count; ++i)
+     {
+         fx_parser_read_u32s(parser, &entry, sizeof(entry));
+ 
+-        if (!(state = bsearch(&entry.id, fx_4_states, ARRAY_SIZE(fx_4_states),
+-                sizeof(*fx_4_states), fx_4_state_id_compare)))
++        if (!(state = bsearch(&entry.id, table.ptr, table.count, sizeof(*table.ptr), fx_4_state_id_compare)))
+         {
+             fx_parser_error(parser, VKD3D_SHADER_ERROR_FX_INVALID_DATA, "Unrecognized state id %#x.", entry.id);
+             break;
+@@ -5183,7 +5200,7 @@ static void fx_parse_fx_4_technique(struct fx_parser *parser)
+     name = fx_4_get_string(parser, technique.name);
+ 
+     parse_fx_print_indent(parser);
+-    vkd3d_string_buffer_printf(&parser->buffer, "technique%u %s", parser->version, name);
++    vkd3d_string_buffer_printf(&parser->buffer, "technique%u %s", parser->version.major == 4 ? 10 : 11, name);
+     fx_parse_fx_4_annotations(parser);
+ 
+     vkd3d_string_buffer_printf(&parser->buffer, "\n");
+@@ -5277,7 +5294,6 @@ static void fx_4_parse(struct fx_parser *parser)
+     } header;
+     uint32_t i;
+ 
+-    parser->version = 10;
+     fx_parser_read_u32s(parser, &header, sizeof(header));
+     parser->buffer_count = header.buffer_count;
+     parser->object_count = header.object_count;
+@@ -5331,7 +5347,6 @@ static void fx_5_parse(struct fx_parser *parser)
+         uint32_t class_instance_element_count;
+     } header;
+ 
+-    parser->version = 11;
+     fx_parser_read_u32s(parser, &header, sizeof(header));
+     parser->buffer_count = header.buffer_count;
+     parser->object_count = header.object_count;
+@@ -5390,13 +5405,20 @@ int fx_parse(const struct vkd3d_shader_compile_info *compile_info,
+     switch (version)
+     {
+         case 0xfeff0901:
++            parser.version.major = 3;
+             fx_2_parse(&parser);
+             break;
+         case 0xfeff1001:
++            parser.version.major = 4;
++            fx_4_parse(&parser);
++            break;
+         case 0xfeff1011:
++            parser.version.major = 4;
++            parser.version.minor = 1;
+             fx_4_parse(&parser);
+             break;
+         case 0xfeff2001:
++            parser.version.major = 5;
+             fx_5_parse(&parser);
+             break;
+         default:
+diff --git a/libs/vkd3d/libs/vkd3d/command.c b/libs/vkd3d/libs/vkd3d/command.c
+index 1ff58f97565..e487ed0b9ad 100644
+--- a/libs/vkd3d/libs/vkd3d/command.c
++++ b/libs/vkd3d/libs/vkd3d/command.c
+@@ -31,6 +31,43 @@ static void d3d12_command_queue_submit_locked(struct d3d12_command_queue *queue)
+ static HRESULT d3d12_command_queue_flush_ops(struct d3d12_command_queue *queue, bool *flushed_any);
+ static HRESULT d3d12_command_queue_flush_ops_locked(struct d3d12_command_queue *queue, bool *flushed_any);
+ 
++static void vkd3d_null_event_signal(struct vkd3d_null_event *e)
++{
++    vkd3d_mutex_lock(&e->mutex);
++    e->signalled = true;
++    vkd3d_cond_signal(&e->cond);
++    vkd3d_mutex_unlock(&e->mutex);
++}
++
++void vkd3d_null_event_wait(struct vkd3d_null_event *e)
++{
++    vkd3d_mutex_lock(&e->mutex);
++    while (!e->signalled)
++        vkd3d_cond_wait(&e->cond, &e->mutex);
++    e->signalled = false;
++    vkd3d_mutex_unlock(&e->mutex);
++}
++
++void vkd3d_null_event_cleanup(struct vkd3d_null_event *e)
++{
++    vkd3d_cond_destroy(&e->cond);
++    vkd3d_mutex_destroy(&e->mutex);
++}
++
++void vkd3d_null_event_init(struct vkd3d_null_event *e)
++{
++    vkd3d_mutex_init(&e->mutex);
++    vkd3d_cond_init(&e->cond);
++    e->signalled = false;
++}
++
++HRESULT vkd3d_signal_null_event(HANDLE h)
++{
++    vkd3d_null_event_signal(h);
++
++    return S_OK;
++}
++
+ HRESULT vkd3d_queue_create(struct d3d12_device *device,
+         uint32_t family_index, const VkQueueFamilyProperties *properties, struct vkd3d_queue **queue)
+ {
+@@ -753,8 +790,6 @@ static HRESULT d3d12_fence_add_vk_semaphore(struct d3d12_fence *fence, VkSemapho
+ 
+ static void d3d12_fence_signal_external_events_locked(struct d3d12_fence *fence)
+ {
+-    struct d3d12_device *device = fence->device;
+-    bool signal_null_event_cond = false;
+     unsigned int i, j;
+ 
+     for (i = 0, j = 0; i < fence->event_count; ++i)
+@@ -763,28 +798,16 @@ static void d3d12_fence_signal_external_events_locked(struct d3d12_fence *fence)
+ 
+         if (current->value <= fence->value)
+         {
+-            if (current->event)
+-            {
+-                device->signal_event(current->event);
+-            }
+-            else
+-            {
+-                *current->latch = true;
+-                signal_null_event_cond = true;
+-            }
+-        }
+-        else
+-        {
+-            if (i != j)
+-                fence->events[j] = *current;
+-            ++j;
++            current->signal(current->event);
++            continue;
+         }
++
++        if (i != j)
++            fence->events[j] = *current;
++        ++j;
+     }
+ 
+     fence->event_count = j;
+-
+-    if (signal_null_event_cond)
+-        vkd3d_cond_broadcast(&fence->null_event_cond);
+ }
+ 
+ static HRESULT d3d12_fence_signal(struct d3d12_fence *fence, uint64_t value, VkFence vk_fence, bool on_cpu)
+@@ -978,7 +1001,6 @@ static void d3d12_fence_decref(struct d3d12_fence *fence)
+     vkd3d_free(fence->events);
+     vkd3d_free(fence->semaphores);
+     vkd3d_mutex_destroy(&fence->mutex);
+-    vkd3d_cond_destroy(&fence->null_event_cond);
+     vkd3d_free(fence);
+ 
+     d3d12_device_release(device);
+@@ -1047,12 +1069,30 @@ static UINT64 STDMETHODCALLTYPE d3d12_fence_GetCompletedValue(ID3D12Fence1 *ifac
+     return completed_value;
+ }
+ 
++bool d3d12_fence_add_waiting_event(struct d3d12_fence *fence,
++        HANDLE event, PFN_vkd3d_signal_event signal, uint64_t value)
++{
++    struct vkd3d_waiting_event *e;
++
++    if (!vkd3d_array_reserve((void **)&fence->events, &fence->events_size,
++            fence->event_count + 1, sizeof(*fence->events)))
++        return false;
++
++    e = &fence->events[fence->event_count++];
++    e->event = event;
++    e->signal = signal;
++    e->value = value;
++
++    return true;
++}
++
+ static HRESULT STDMETHODCALLTYPE d3d12_fence_SetEventOnCompletion(ID3D12Fence1 *iface,
+         UINT64 value, HANDLE event)
+ {
+     struct d3d12_fence *fence = impl_from_ID3D12Fence1(iface);
++    struct vkd3d_null_event null_event;
++    PFN_vkd3d_signal_event signal;
+     unsigned int i;
+-    bool latch = false;
+ 
+     TRACE("iface %p, value %#"PRIx64", event %p.\n", iface, value, event);
+ 
+@@ -1078,30 +1118,29 @@ static HRESULT STDMETHODCALLTYPE d3d12_fence_SetEventOnCompletion(ID3D12Fence1 *
+         }
+     }
+ 
+-    if (!vkd3d_array_reserve((void **)&fence->events, &fence->events_size,
+-            fence->event_count + 1, sizeof(*fence->events)))
++    signal = fence->device->signal_event;
++    if (!event)
++    {
++        vkd3d_null_event_init(&null_event);
++        event = &null_event;
++        signal = vkd3d_signal_null_event;
++    }
++
++    if (!d3d12_fence_add_waiting_event(fence, event, signal, value))
+     {
+         WARN("Failed to add event.\n");
+         vkd3d_mutex_unlock(&fence->mutex);
+         return E_OUTOFMEMORY;
+     }
+ 
+-    fence->events[fence->event_count].value = value;
+-    fence->events[fence->event_count].event = event;
+-    fence->events[fence->event_count].latch = &latch;
+-    ++fence->event_count;
++    vkd3d_mutex_unlock(&fence->mutex);
+ 
+-    /* If event is NULL, we need to block until the fence value completes.
+-     * Implement this in a uniform way where we pretend we have a dummy event.
+-     * A NULL fence->events[].event means that we should set latch to true
+-     * and signal a condition variable instead of calling external signal_event callback. */
+-    if (!event)
++    if (event == &null_event)
+     {
+-        while (!latch)
+-            vkd3d_cond_wait(&fence->null_event_cond, &fence->mutex);
++        vkd3d_null_event_wait(&null_event);
++        vkd3d_null_event_cleanup(&null_event);
+     }
+ 
+-    vkd3d_mutex_unlock(&fence->mutex);
+     return S_OK;
+ }
+ 
+@@ -1159,7 +1198,7 @@ static const struct ID3D12Fence1Vtbl d3d12_fence_vtbl =
+     d3d12_fence_GetCreationFlags,
+ };
+ 
+-static struct d3d12_fence *unsafe_impl_from_ID3D12Fence(ID3D12Fence *iface)
++struct d3d12_fence *unsafe_impl_from_ID3D12Fence(ID3D12Fence *iface)
+ {
+     ID3D12Fence1 *iface1;
+ 
+@@ -1185,8 +1224,6 @@ static HRESULT d3d12_fence_init(struct d3d12_fence *fence, struct d3d12_device *
+ 
+     vkd3d_mutex_init(&fence->mutex);
+ 
+-    vkd3d_cond_init(&fence->null_event_cond);
+-
+     if ((fence->flags = flags))
+         FIXME("Ignoring flags %#x.\n", flags);
+ 
+@@ -1201,8 +1238,8 @@ static HRESULT d3d12_fence_init(struct d3d12_fence *fence, struct d3d12_device *
+             &fence->timeline_semaphore)) < 0)
+     {
+         WARN("Failed to create timeline semaphore, vr %d.\n", vr);
+-        hr = hresult_from_vk_result(vr);
+-        goto fail_destroy_null_cond;
++        vkd3d_mutex_destroy(&fence->mutex);
++        return hresult_from_vk_result(vr);
+     }
+ 
+     fence->semaphores = NULL;
+@@ -1213,20 +1250,14 @@ static HRESULT d3d12_fence_init(struct d3d12_fence *fence, struct d3d12_device *
+ 
+     if (FAILED(hr = vkd3d_private_store_init(&fence->private_store)))
+     {
+-        goto fail_destroy_timeline_semaphore;
++        VK_CALL(vkDestroySemaphore(device->vk_device, fence->timeline_semaphore, NULL));
++        vkd3d_mutex_destroy(&fence->mutex);
++        return hr;
+     }
+ 
+     d3d12_device_add_ref(fence->device = device);
+ 
+     return S_OK;
+-
+-fail_destroy_timeline_semaphore:
+-    VK_CALL(vkDestroySemaphore(device->vk_device, fence->timeline_semaphore, NULL));
+-fail_destroy_null_cond:
+-    vkd3d_cond_destroy(&fence->null_event_cond);
+-    vkd3d_mutex_destroy(&fence->mutex);
+-
+-    return hr;
+ }
+ 
+ HRESULT d3d12_fence_create(struct d3d12_device *device,
+diff --git a/libs/vkd3d/libs/vkd3d/device.c b/libs/vkd3d/libs/vkd3d/device.c
+index 15affcee9cb..b2636fd5585 100644
+--- a/libs/vkd3d/libs/vkd3d/device.c
++++ b/libs/vkd3d/libs/vkd3d/device.c
+@@ -4901,14 +4901,131 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_CreatePipelineLibrary(ID3D12Device
+     return DXGI_ERROR_UNSUPPORTED;
+ }
+ 
++struct waiting_event_semaphore
++{
++    HANDLE event;
++    PFN_vkd3d_signal_event signal;
++    uint32_t value;
++};
++
++static HRESULT waiting_event_semaphore_signal(HANDLE h)
++{
++    struct waiting_event_semaphore *s = h;
++
++    if (vkd3d_atomic_decrement_u32(&s->value))
++        return S_OK;
++
++    if (s->event)
++        s->signal(s->event);
++    vkd3d_free(s);
++
++    return S_OK;
++}
++
++static HRESULT waiting_event_semaphore_signal_first(HANDLE h)
++{
++    struct waiting_event_semaphore *s = h;
++    HANDLE event;
++
++    if ((event = vkd3d_atomic_exchange_ptr(&s->event, NULL)))
++        s->signal(event);
++
++    return waiting_event_semaphore_signal(h);
++}
++
++static bool waiting_event_semaphore_cancel(struct waiting_event_semaphore *s)
++{
++    bool ret;
++
++    ret = !vkd3d_atomic_exchange_ptr(&s->event, NULL);
++    waiting_event_semaphore_signal(s);
++
++    return ret;
++}
++
+ static HRESULT STDMETHODCALLTYPE d3d12_device_SetEventOnMultipleFenceCompletion(ID3D12Device9 *iface,
+         ID3D12Fence *const *fences, const UINT64 *values, UINT fence_count,
+         D3D12_MULTIPLE_FENCE_WAIT_FLAGS flags, HANDLE event)
+ {
+-    FIXME("iface %p, fences %p, values %p, fence_count %u, flags %#x, event %p stub!\n",
++    struct d3d12_device *device = impl_from_ID3D12Device9(iface);
++    struct vkd3d_null_event null_event;
++    struct waiting_event_semaphore *s;
++    PFN_vkd3d_signal_event signal;
++    struct d3d12_fence *fence;
++    HRESULT hr = S_OK;
++    unsigned int i;
++
++    TRACE("iface %p, fences %p, values %p, fence_count %u, flags %#x, event %p.\n",
+             iface, fences, values, fence_count, flags, event);
+ 
+-    return E_NOTIMPL;
++    if (flags & ~D3D12_MULTIPLE_FENCE_WAIT_FLAG_ANY)
++    {
++        FIXME("Unhandled flags %#x.\n", flags & ~D3D12_MULTIPLE_FENCE_WAIT_FLAG_ANY);
++        return E_NOTIMPL;
++    }
++
++    if (!fence_count)
++        return E_INVALIDARG;
++
++    if (fence_count == 1)
++        return ID3D12Fence_SetEventOnCompletion(fences[0], values[0], event);
++
++    if (!(s = vkd3d_malloc(sizeof(*s))))
++    {
++        WARN("Failed to allocate semaphore memory.\n");
++        return E_OUTOFMEMORY;
++    }
++
++    signal = device->signal_event;
++    if (!event)
++    {
++        vkd3d_null_event_init(&null_event);
++        event = &null_event;
++        signal = vkd3d_signal_null_event;
++    }
++    s->event = event;
++    s->signal = signal;
++    s->value = fence_count;
++
++    if (flags & D3D12_MULTIPLE_FENCE_WAIT_FLAG_ANY)
++        signal = waiting_event_semaphore_signal_first;
++    else
++        signal = waiting_event_semaphore_signal;
++
++    for (i = 0; i < fence_count; ++i)
++    {
++        fence = unsafe_impl_from_ID3D12Fence(fences[i]);
++
++        vkd3d_mutex_lock(&fence->mutex);
++
++        if (values[i] <= fence->value)
++        {
++            vkd3d_mutex_unlock(&fence->mutex);
++            signal(s);
++            continue;
++        }
++
++        if (!d3d12_fence_add_waiting_event(fence, s, signal, values[i]))
++        {
++            WARN("Failed to add event.\n");
++            /* If the event was already signalled, we don't need to fail here.
++             * Note that cancel() will also return "true" for any subsequent
++             * cancel() calls; that's fine, because we already failed in that
++             * case. */
++            if (!waiting_event_semaphore_cancel(s))
++                hr = E_OUTOFMEMORY;
++        }
++
++        vkd3d_mutex_unlock(&fence->mutex);
++    }
++
++    if (event == &null_event)
++    {
++        vkd3d_null_event_wait(&null_event);
++        vkd3d_null_event_cleanup(&null_event);
++    }
++
++    return hr;
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE d3d12_device_SetResidencyPriority(ID3D12Device9 *iface,
+diff --git a/libs/vkd3d/libs/vkd3d/vkd3d_private.h b/libs/vkd3d/libs/vkd3d/vkd3d_private.h
+index e0e44248053..7e54738b19e 100644
+--- a/libs/vkd3d/libs/vkd3d/vkd3d_private.h
++++ b/libs/vkd3d/libs/vkd3d/vkd3d_private.h
+@@ -357,6 +357,18 @@ HRESULT vkd3d_set_private_data(struct vkd3d_private_store *store,
+         const GUID *tag, unsigned int data_size, const void *data);
+ HRESULT vkd3d_set_private_data_interface(struct vkd3d_private_store *store, const GUID *tag, const IUnknown *object);
+ 
++struct vkd3d_null_event
++{
++    struct vkd3d_mutex mutex;
++    struct vkd3d_cond cond;
++    bool signalled;
++};
++
++void vkd3d_null_event_cleanup(struct vkd3d_null_event *e);
++void vkd3d_null_event_init(struct vkd3d_null_event *e);
++void vkd3d_null_event_wait(struct vkd3d_null_event *e);
++HRESULT vkd3d_signal_null_event(HANDLE h);
++
+ struct vkd3d_signaled_semaphore
+ {
+     uint64_t value;
+@@ -385,13 +397,12 @@ struct d3d12_fence
+     uint64_t value;
+     uint64_t max_pending_value;
+     struct vkd3d_mutex mutex;
+-    struct vkd3d_cond null_event_cond;
+ 
+     struct vkd3d_waiting_event
+     {
+-        uint64_t value;
+         HANDLE event;
+-        bool *latch;
++        PFN_vkd3d_signal_event signal;
++        uint64_t value;
+     } *events;
+     size_t events_size;
+     size_t event_count;
+@@ -411,8 +422,11 @@ struct d3d12_fence
+     struct vkd3d_private_store private_store;
+ };
+ 
++bool d3d12_fence_add_waiting_event(struct d3d12_fence *fence,
++        HANDLE event, PFN_vkd3d_signal_event signal, uint64_t value);
+ HRESULT d3d12_fence_create(struct d3d12_device *device, uint64_t initial_value,
+         D3D12_FENCE_FLAGS flags, struct d3d12_fence **fence);
++struct d3d12_fence *unsafe_impl_from_ID3D12Fence(ID3D12Fence *iface);
+ 
+ VkResult vkd3d_create_timeline_semaphore(const struct d3d12_device *device, uint64_t initial_value,
+         VkSemaphore *timeline_semaphore);
+-- 
+2.47.2
+
