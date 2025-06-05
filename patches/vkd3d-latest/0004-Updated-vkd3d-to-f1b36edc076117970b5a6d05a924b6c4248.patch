@@ -1,0 +1,323 @@
+From 6a86ff50e62add7c2739b6508518b5556dcd2289 Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Thu, 5 Jun 2025 07:25:40 +1000
+Subject: [PATCH] Updated vkd3d to f1b36edc076117970b5a6d05a924b6c4248e082f.
+
+---
+ libs/vkd3d/libs/vkd3d-shader/dxil.c         | 69 ++++++++++++---------
+ libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c | 55 +++++++++-------
+ libs/vkd3d/libs/vkd3d-shader/tpf.c          | 36 ++++++-----
+ 3 files changed, 91 insertions(+), 69 deletions(-)
+
+diff --git a/libs/vkd3d/libs/vkd3d-shader/dxil.c b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+index c85b644df15..ff56cd6284f 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/dxil.c
++++ b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+@@ -6805,6 +6805,7 @@ static enum vkd3d_shader_opcode sm6_map_cast_op(uint64_t code, const struct sm6_
+ {
+     enum vkd3d_shader_opcode op = VKD3DSIH_INVALID;
+     bool from_int, to_int, from_fp, to_fp;
++    unsigned int from_width, to_width;
+     bool is_valid = false;
+ 
+     from_int = sm6_type_is_integer(from);
+@@ -6828,66 +6829,58 @@ static enum vkd3d_shader_opcode sm6_map_cast_op(uint64_t code, const struct sm6_
+         return VKD3DSIH_INVALID;
+     }
+ 
+-    /* DXC emits minimum precision types as 16-bit. These must be emitted
+-     * as 32-bit in VSIR, so all width extensions to 32 bits are no-ops. */
+     switch (code)
+     {
+         case CAST_TRUNC:
+-            /* nop or min precision. TODO: native 16-bit */
+-            if (to->u.width == from->u.width || (to->u.width == 16 && from->u.width == 32))
+-                op = VKD3DSIH_NOP;
+-            else
+-                op = VKD3DSIH_UTOU;
++            op = VKD3DSIH_UTOU;
+             is_valid = from_int && to_int && to->u.width <= from->u.width;
+             break;
++
+         case CAST_ZEXT:
++            op = VKD3DSIH_UTOU;
++            is_valid = from_int && to_int && to->u.width >= from->u.width;
++            break;
++
+         case CAST_SEXT:
+-            /* nop or min precision. TODO: native 16-bit.
+-             * Extension instructions could be emitted for min precision, but in Windows
+-             * the AMD RX 580 simply drops such instructions, which makes sense as no
+-             * assumptions should be made about any behaviour which depends on bit width. */
+-            if (to->u.width == from->u.width || (to->u.width == 32 && from->u.width == 16))
+-            {
+-                op = VKD3DSIH_NOP;
+-                is_valid = from_int && to_int;
+-            }
+-            else if (to->u.width > from->u.width)
+-            {
+-                op = (code == CAST_ZEXT) ? VKD3DSIH_UTOU : VKD3DSIH_ITOI;
+-                VKD3D_ASSERT(from->u.width == 1 || to->u.width == 64);
+-                is_valid = from_int && to_int;
+-            }
++            op = VKD3DSIH_ITOI;
++            is_valid = from_int && to_int && to->u.width >= from->u.width;
+             break;
++
+         case CAST_FPTOUI:
+             op = VKD3DSIH_FTOU;
+             is_valid = from_fp && to_int && to->u.width > 1;
+             break;
++
+         case CAST_FPTOSI:
+             op = VKD3DSIH_FTOI;
+             is_valid = from_fp && to_int && to->u.width > 1;
+             break;
++
+         case CAST_UITOFP:
+             op = VKD3DSIH_UTOF;
+             is_valid = from_int && to_fp;
+             break;
++
+         case CAST_SITOFP:
+             op = VKD3DSIH_ITOF;
+             is_valid = from_int && to_fp;
+             break;
++
+         case CAST_FPTRUNC:
+-            /* TODO: native 16-bit */
+-            op = (from->u.width == 64) ? VKD3DSIH_DTOF : VKD3DSIH_NOP;
+-            is_valid = from_fp && to_fp;
++            op = VKD3DSIH_DTOF;
++            is_valid = from_fp && to_fp && to->u.width <= from->u.width;
+             break;
++
+         case CAST_FPEXT:
+-            /* TODO: native 16-bit */
+-            op = (to->u.width == 64) ? VKD3DSIH_FTOD : VKD3DSIH_NOP;
+-            is_valid = from_fp && to_fp;
++            op = VKD3DSIH_FTOD;
++            is_valid = from_fp && to_fp && to->u.width >= from->u.width;
+             break;
++
+         case CAST_BITCAST:
+             op = VKD3DSIH_MOV;
+             is_valid = to->u.width == from->u.width;
+             break;
++
+         default:
+             FIXME("Unhandled cast op %"PRIu64".\n", code);
+             vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_OPERAND,
+@@ -6904,6 +6897,20 @@ static enum vkd3d_shader_opcode sm6_map_cast_op(uint64_t code, const struct sm6_
+         return VKD3DSIH_INVALID;
+     }
+ 
++    /* 16-bit values are currently treated as 32-bit, because 16-bit is
++     * interpreted as a minimum precision hint in SM 6.0, and we don't handle
++     * SM > 6.0 yet. */
++     from_width = from->u.width;
++     if (from_width == 16)
++         from_width = 32;
++
++     to_width = to->u.width;
++     if (to_width == 16)
++         to_width = 32;
++
++     if (from->class == to->class && from_width == to_width)
++         op = VKD3DSIH_NOP;
++
+     return op;
+ }
+ 
+@@ -6955,9 +6962,11 @@ static void sm6_parser_emit_cast(struct sm6_parser *sm6, const struct dxil_recor
+ 
+     instruction_dst_param_init_ssa_scalar(ins, sm6);
+ 
+-    /* bitcast */
++    /* VSIR bitcasts are represented by source registers with types different
++     * from the types they were written with, rather than with different types
++     * for the MOV source and destination. */
+     if (handler_idx == VKD3DSIH_MOV)
+-        src_param->reg.data_type = dst->reg.data_type;
++        src_param->reg.data_type = ins->dst[0].reg.data_type;
+ }
+ 
+ struct sm6_cmp_info
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+index d4cd338f15a..d4e29e16b7c 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+@@ -12114,14 +12114,11 @@ static void sm4_generate_vsir_add_dcl_texture(struct hlsl_ctx *ctx,
+         bool uav)
+ {
+     enum hlsl_regset regset = uav ? HLSL_REGSET_UAVS : HLSL_REGSET_TEXTURES;
+-    struct vkd3d_shader_structured_resource *structured_resource;
+-    struct vkd3d_shader_dst_param *dst_param;
+-    struct vkd3d_shader_semantic *semantic;
+     struct vkd3d_shader_instruction *ins;
+     struct hlsl_type *component_type;
+     enum vkd3d_shader_opcode opcode;
+     bool multisampled;
+-    unsigned int i, j;
++    unsigned int i;
+ 
+     VKD3D_ASSERT(resource->regset == regset);
+     VKD3D_ASSERT(hlsl_version_lt(ctx, 5, 1) || resource->bind_count == 1);
+@@ -12132,6 +12129,7 @@ static void sm4_generate_vsir_add_dcl_texture(struct hlsl_ctx *ctx,
+     {
+         unsigned int array_first = resource->index + i;
+         unsigned int array_last = resource->index + i; /* FIXME: array end. */
++        struct vkd3d_shader_resource *vsir_resource;
+ 
+         if (resource->var && !resource->var->objects_usage[regset][i].used)
+             continue;
+@@ -12169,13 +12167,16 @@ static void sm4_generate_vsir_add_dcl_texture(struct hlsl_ctx *ctx,
+             ctx->result = VKD3D_ERROR_OUT_OF_MEMORY;
+             return;
+         }
+-        semantic = &ins->declaration.semantic;
+-        structured_resource = &ins->declaration.structured_resource;
+-        dst_param = &semantic->resource.reg;
+-        vsir_dst_param_init(dst_param, uav ? VKD3DSPR_UAV : VKD3DSPR_RESOURCE, VKD3D_DATA_UNUSED, 0);
+ 
+-        if (uav && component_type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER)
+-            structured_resource->byte_stride = 4 * component_type->e.resource.format->reg_size[HLSL_REGSET_NUMERIC];
++        if (component_type->sampler_dim == HLSL_SAMPLER_DIM_RAW_BUFFER)
++            vsir_resource = &ins->declaration.raw_resource.resource;
++        else if (component_type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER)
++            vsir_resource = &ins->declaration.structured_resource.resource;
++        else
++            vsir_resource = &ins->declaration.semantic.resource;
++
++        vsir_dst_param_init(&vsir_resource->reg, uav ? VKD3DSPR_UAV : VKD3DSPR_RESOURCE, VKD3D_DATA_UNUSED, 0);
++
+         if (uav && component_type->e.resource.rasteriser_ordered)
+             ins->flags = VKD3DSUF_RASTERISER_ORDERED_VIEW;
+ 
+@@ -12189,29 +12190,35 @@ static void sm4_generate_vsir_add_dcl_texture(struct hlsl_ctx *ctx,
+                     ctx->profile->major_version, ctx->profile->minor_version);
+         }
+ 
+-        for (j = 0; j < 4; ++j)
+-            semantic->resource_data_type[j] = sm4_generate_vsir_get_format_type(component_type);
++        vsir_resource->range.first = array_first;
++        vsir_resource->range.last = array_last;
++        vsir_resource->range.space = resource->space;
+ 
+-        semantic->resource.range.first = array_first;
+-        semantic->resource.range.last = array_last;
+-        semantic->resource.range.space = resource->space;
+-
+-        dst_param->reg.idx[0].offset = resource->id;
+-        dst_param->reg.idx[1].offset = array_first;
+-        dst_param->reg.idx[2].offset = array_last;
+-        dst_param->reg.idx_count = 3;
++        vsir_resource->reg.reg.idx[0].offset = resource->id;
++        vsir_resource->reg.reg.idx[1].offset = array_first;
++        vsir_resource->reg.reg.idx[2].offset = array_last;
++        vsir_resource->reg.reg.idx_count = 3;
+ 
+         ins->resource_type = sm4_generate_vsir_get_resource_type(resource->component_type);
+-        if (resource->component_type->sampler_dim == HLSL_SAMPLER_DIM_RAW_BUFFER)
++
++        if (component_type->sampler_dim == HLSL_SAMPLER_DIM_RAW_BUFFER)
++        {
+             ins->raw = true;
+-        if (resource->component_type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER)
++        }
++        else if (component_type->sampler_dim == HLSL_SAMPLER_DIM_STRUCTURED_BUFFER)
+         {
+             ins->structured = true;
+             ins->resource_stride = 4 * component_type->e.resource.format->reg_size[HLSL_REGSET_NUMERIC];
++            ins->declaration.structured_resource.byte_stride = ins->resource_stride;
+         }
++        else
++        {
++            for (unsigned int j = 0; j < 4; ++j)
++                ins->declaration.semantic.resource_data_type[j] = sm4_generate_vsir_get_format_type(component_type);
+ 
+-        if (multisampled)
+-            semantic->sample_count = component_type->sample_count;
++            if (multisampled)
++                ins->declaration.semantic.sample_count = component_type->sample_count;
++        }
+     }
+ }
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/tpf.c b/libs/vkd3d/libs/vkd3d-shader/tpf.c
+index 08bdc3e645a..ae3fa1650bf 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/tpf.c
++++ b/libs/vkd3d/libs/vkd3d-shader/tpf.c
+@@ -3859,9 +3859,8 @@ static uint32_t pack_resource_data_type(const enum vkd3d_data_type *resource_dat
+ 
+ static void tpf_dcl_texture(const struct tpf_compiler *tpf, const struct vkd3d_shader_instruction *ins)
+ {
+-    const struct vkd3d_shader_structured_resource *structured_resource = &ins->declaration.structured_resource;
+-    const struct vkd3d_shader_semantic *semantic = &ins->declaration.semantic;
+     const struct vkd3d_shader_version *version = &tpf->program->shader_version;
++    const struct vkd3d_shader_resource *resource;
+     const struct vkd3d_sm4_opcode_info *info;
+     struct sm4_instruction instr = {0};
+     bool uav;
+@@ -3875,27 +3874,38 @@ static void tpf_dcl_texture(const struct tpf_compiler *tpf, const struct vkd3d_s
+ 
+     instr.opcode = info->opcode;
+ 
+-    instr.dsts[0] = semantic->resource.reg;
+-    instr.dst_count = 1;
+-
+     if (ins->opcode == VKD3DSIH_DCL || ins->opcode == VKD3DSIH_DCL_UAV_TYPED)
+     {
+-        instr.idx[0] = pack_resource_data_type(semantic->resource_data_type);
++        instr.idx[0] = pack_resource_data_type(ins->declaration.semantic.resource_data_type);
+         instr.idx_count = 1;
++        instr.extra_bits |= ins->declaration.semantic.sample_count << VKD3D_SM4_RESOURCE_SAMPLE_COUNT_SHIFT;
++        resource = &ins->declaration.semantic.resource;
++    }
++    else if (ins->opcode == VKD3DSIH_DCL_RESOURCE_RAW || ins->opcode == VKD3DSIH_DCL_UAV_RAW)
++    {
++        resource = &ins->declaration.raw_resource.resource;
++    }
++    else
++    {
++        instr.byte_stride = ins->declaration.structured_resource.byte_stride;
++        resource = &ins->declaration.structured_resource.resource;
+     }
+ 
++    instr.dsts[0] = resource->reg;
++    instr.dst_count = 1;
++
+     if (vkd3d_shader_ver_ge(version, 5, 1))
+     {
+-        instr.dsts[0].reg.idx[0].offset = semantic->resource.reg.reg.idx[0].offset;
+-        instr.dsts[0].reg.idx[1].offset = semantic->resource.range.first;
+-        instr.dsts[0].reg.idx[2].offset = semantic->resource.range.last;
++        instr.dsts[0].reg.idx[0].offset = resource->reg.reg.idx[0].offset;
++        instr.dsts[0].reg.idx[1].offset = resource->range.first;
++        instr.dsts[0].reg.idx[2].offset = resource->range.last;
+         instr.dsts[0].reg.idx_count = 3;
+ 
+-        instr.idx[instr.idx_count++] = semantic->resource.range.space;
++        instr.idx[instr.idx_count++] = resource->range.space;
+     }
+     else
+     {
+-        instr.dsts[0].reg.idx[0].offset = semantic->resource.range.first;
++        instr.dsts[0].reg.idx[0].offset = resource->range.first;
+         instr.dsts[0].reg.idx_count = 1;
+     }
+ 
+@@ -3903,10 +3913,6 @@ static void tpf_dcl_texture(const struct tpf_compiler *tpf, const struct vkd3d_s
+         instr.extra_bits |= ins->flags << VKD3D_SM5_UAV_FLAGS_SHIFT;
+ 
+     instr.extra_bits |= (sm4_resource_dimension(ins->resource_type) << VKD3D_SM4_RESOURCE_TYPE_SHIFT);
+-    instr.extra_bits |= semantic->sample_count << VKD3D_SM4_RESOURCE_SAMPLE_COUNT_SHIFT;
+-
+-    if (ins->structured)
+-        instr.byte_stride = structured_resource->byte_stride;
+ 
+     write_sm4_instruction(tpf, &instr);
+ }
+-- 
+2.47.2
+

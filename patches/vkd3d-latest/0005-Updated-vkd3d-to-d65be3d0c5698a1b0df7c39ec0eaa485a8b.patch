@@ -1,0 +1,723 @@
+From 981c6b22b1d959588c16002c6176d72615c23cb0 Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Fri, 6 Jun 2025 07:10:30 +1000
+Subject: [PATCH] Updated vkd3d to d65be3d0c5698a1b0df7c39ec0eaa485a8bd35de.
+
+---
+ libs/vkd3d/libs/vkd3d-shader/dxil.c    |  32 ++--
+ libs/vkd3d/libs/vkd3d-shader/hlsl.y    |   3 +
+ libs/vkd3d/libs/vkd3d-shader/msl.c     | 239 +++++++++++++++++--------
+ libs/vkd3d/libs/vkd3d-shader/preproc.h |   2 +-
+ libs/vkd3d/libs/vkd3d-shader/preproc.l |  38 ++--
+ 5 files changed, 210 insertions(+), 104 deletions(-)
+
+diff --git a/libs/vkd3d/libs/vkd3d-shader/dxil.c b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+index ff56cd6284f..8c71176fb0b 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/dxil.c
++++ b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+@@ -644,7 +644,6 @@ struct sm6_type
+ enum sm6_value_type
+ {
+     VALUE_TYPE_FUNCTION,
+-    VALUE_TYPE_REG,
+     VALUE_TYPE_DATA,
+     VALUE_TYPE_HANDLE,
+     VALUE_TYPE_SSA,
+@@ -711,6 +710,7 @@ struct sm6_value
+     enum sm6_value_type value_type;
+     unsigned int structure_stride;
+     bool is_back_ref;
++    bool non_uniform;
+     union
+     {
+         struct sm6_function_data function;
+@@ -747,7 +747,7 @@ struct incoming_value
+ 
+ struct sm6_phi
+ {
+-    struct vkd3d_shader_register reg;
++    struct sm6_value value;
+     struct incoming_value *incoming;
+     size_t incoming_capacity;
+     size_t incoming_count;
+@@ -2275,7 +2275,6 @@ static inline bool sm6_value_is_register(const struct sm6_value *value)
+ {
+     switch (value->value_type)
+     {
+-        case VALUE_TYPE_REG:
+         case VALUE_TYPE_SSA:
+         case VALUE_TYPE_ICB:
+         case VALUE_TYPE_IDXTEMP:
+@@ -2468,10 +2467,6 @@ static void sm6_register_from_value(struct vkd3d_shader_register *reg, const str
+ 
+     switch (value->value_type)
+     {
+-        case VALUE_TYPE_REG:
+-            *reg = value->reg;
+-            break;
+-
+         case VALUE_TYPE_SSA:
+             register_init_with_id(reg, VKD3DSPR_SSA, data_type, value->u.ssa.id);
+             reg->dimension = sm6_type_is_scalar(value->type) ? VSIR_DIMENSION_SCALAR : VSIR_DIMENSION_VEC4;
+@@ -2514,6 +2509,8 @@ static void sm6_register_from_value(struct vkd3d_shader_register *reg, const str
+         case VALUE_TYPE_DATA:
+             vkd3d_unreachable();
+     }
++
++    reg->non_uniform = value->non_uniform;
+ }
+ 
+ static void sm6_parser_init_ssa_value(struct sm6_parser *sm6, struct sm6_value *value)
+@@ -3743,7 +3740,6 @@ static bool sm6_parser_declare_global(struct sm6_parser *sm6, const struct dxil_
+ 
+     dst = sm6_parser_get_current_value(sm6);
+     dst->type = type;
+-    dst->value_type = VALUE_TYPE_REG;
+     dst->is_back_ref = true;
+ 
+     if (is_constant && !init)
+@@ -6949,10 +6945,9 @@ static void sm6_parser_emit_cast(struct sm6_parser *sm6, const struct dxil_recor
+ 
+     if (handler_idx == VKD3DSIH_NOP)
+     {
+-        sm6_register_from_value(&dst->reg, value, sm6);
+-        /* Set the result type for casts from 16-bit min precision. */
+-        if (type->u.width != 16)
+-            dst->reg.data_type = vkd3d_data_type_from_sm6_type(type);
++        *dst = *value;
++        dst->type = type;
++        sm6_register_from_value(&dst->reg, dst, sm6);
+         return;
+     }
+ 
+@@ -7478,7 +7473,6 @@ static void sm6_parser_emit_phi(struct sm6_parser *sm6, const struct dxil_record
+ 
+     if (!(phi = sm6_block_phi_require_space(code_block, sm6)))
+         return;
+-    sm6_register_from_value(&phi->reg, dst, sm6);
+     phi->incoming_count = record->operand_count / 2u;
+ 
+     if (!vkd3d_array_reserve((void **)&phi->incoming, &phi->incoming_capacity, phi->incoming_count,
+@@ -8004,7 +7998,8 @@ static void metadata_attachment_record_apply(const struct dxil_record *record, e
+             }
+             else if (metadata_node_get_unary_uint(node, &operand, sm6))
+             {
+-                dst->reg.non_uniform = !!operand;
++                dst->non_uniform = !!operand;
++                sm6_register_from_value(&dst->reg, dst, sm6);
+             }
+         }
+         else
+@@ -8076,7 +8071,7 @@ static enum vkd3d_result sm6_function_resolve_phi_incomings(const struct sm6_fun
+                             "A PHI incoming value is not a constant or SSA register.");
+                     return VKD3D_ERROR_INVALID_SHADER;
+                 }
+-                if (src->reg.data_type != phi->reg.data_type)
++                if (src->type != phi->value.type)
+                 {
+                     WARN("Type mismatch.\n");
+                     vkd3d_shader_parser_warning(&sm6->p, VKD3D_SHADER_WARNING_DXIL_TYPE_MISMATCH,
+@@ -8171,7 +8166,6 @@ static enum vkd3d_result sm6_parser_function_init(struct sm6_parser *sm6, const
+         dst = sm6_parser_get_current_value(sm6);
+         fwd_type = dst->type;
+         dst->type = NULL;
+-        dst->value_type = VALUE_TYPE_REG;
+         dst->is_back_ref = true;
+         is_terminator = false;
+ 
+@@ -8249,6 +8243,10 @@ static enum vkd3d_result sm6_parser_function_init(struct sm6_parser *sm6, const
+         if (record->attachment)
+             metadata_attachment_record_apply(record->attachment, record->code, ins, dst, sm6);
+ 
++        /* This is specific for PHI nodes, but must happen after attachments have been applied. */
++        if (record->code == FUNC_CODE_INST_PHI)
++            code_block->phi[code_block->phi_count - 1].value = *dst;
++
+         if (is_terminator)
+         {
+             ++block_idx;
+@@ -8395,7 +8393,7 @@ static void sm6_block_emit_phi(const struct sm6_block *block, struct sm6_parser
+         }
+ 
+         dst_param_init(dst_param);
+-        dst_param->reg = src_phi->reg;
++        sm6_register_from_value(&dst_param->reg, &src_phi->value, sm6);
+     }
+ }
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.y b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+index 5aee1e701cd..bad9d33094b 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.y
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+@@ -2559,6 +2559,9 @@ static void declare_var(struct hlsl_ctx *ctx, struct parse_variable_def *v)
+             hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_MODIFIER,
+                     "Variable '%s' is declared as both \"uniform\" and \"static\".", var->name);
+ 
++        if (modifiers & HLSL_STORAGE_GROUPSHARED)
++            hlsl_fixme(ctx, &var->loc, "Group shared variables.");
++
+         /* Mark it as uniform. We need to do this here since synthetic
+             * variables also get put in the global scope, but shouldn't be
+             * considered uniforms, and we have no way of telling otherwise. */
+diff --git a/libs/vkd3d/libs/vkd3d-shader/msl.c b/libs/vkd3d/libs/vkd3d-shader/msl.c
+index d354c7efcb1..62981811ee4 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/msl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/msl.c
+@@ -48,7 +48,7 @@ struct msl_generator
+     const char *prefix;
+     bool failed;
+ 
+-    bool write_depth;
++    bool read_vertex_id;
+ 
+     const struct vkd3d_shader_interface_info *interface_info;
+ };
+@@ -57,10 +57,12 @@ struct msl_resource_type_info
+ {
+     size_t read_coord_size;
+     bool array;
+-    bool lod;
+     const char *type_suffix;
+ };
+ 
++static void msl_print_subscript(struct vkd3d_string_buffer *buffer, struct msl_generator *gen,
++        const struct vkd3d_shader_src_param *rel_addr, unsigned int offset);
++
+ static void VKD3D_PRINTF_FUNC(3, 4) msl_compiler_error(struct msl_generator *gen,
+         enum vkd3d_shader_error error, const char *fmt, ...)
+ {
+@@ -76,17 +78,17 @@ static const struct msl_resource_type_info *msl_get_resource_type_info(enum vkd3
+ {
+     static const struct msl_resource_type_info info[] =
+     {
+-        [VKD3D_SHADER_RESOURCE_NONE]              = {0, false, false, "none"},
+-        [VKD3D_SHADER_RESOURCE_BUFFER]            = {1, false, false, "_buffer"},
+-        [VKD3D_SHADER_RESOURCE_TEXTURE_1D]        = {1, false, false, "1d"},
+-        [VKD3D_SHADER_RESOURCE_TEXTURE_2D]        = {2, false, true,  "2d"},
+-        [VKD3D_SHADER_RESOURCE_TEXTURE_2DMS]      = {2, false, false, "2d_ms"},
+-        [VKD3D_SHADER_RESOURCE_TEXTURE_3D]        = {3, false, true,  "3d"},
+-        [VKD3D_SHADER_RESOURCE_TEXTURE_CUBE]      = {2, false, true,  "cube"},
+-        [VKD3D_SHADER_RESOURCE_TEXTURE_1DARRAY]   = {1, true,  false, "1d_array"},
+-        [VKD3D_SHADER_RESOURCE_TEXTURE_2DARRAY]   = {2, true,  true,  "2d_array"},
+-        [VKD3D_SHADER_RESOURCE_TEXTURE_2DMSARRAY] = {2, true,  false, "2d_ms_array"},
+-        [VKD3D_SHADER_RESOURCE_TEXTURE_CUBEARRAY] = {2, true,  true,  "cube_array"},
++        [VKD3D_SHADER_RESOURCE_NONE]              = {0, 0, "none"},
++        [VKD3D_SHADER_RESOURCE_BUFFER]            = {1, 0, "_buffer"},
++        [VKD3D_SHADER_RESOURCE_TEXTURE_1D]        = {1, 0, "1d"},
++        [VKD3D_SHADER_RESOURCE_TEXTURE_2D]        = {2, 0, "2d"},
++        [VKD3D_SHADER_RESOURCE_TEXTURE_2DMS]      = {2, 0, "2d_ms"},
++        [VKD3D_SHADER_RESOURCE_TEXTURE_3D]        = {3, 0, "3d"},
++        [VKD3D_SHADER_RESOURCE_TEXTURE_CUBE]      = {2, 0, "cube"},
++        [VKD3D_SHADER_RESOURCE_TEXTURE_1DARRAY]   = {1, 1, "1d_array"},
++        [VKD3D_SHADER_RESOURCE_TEXTURE_2DARRAY]   = {2, 1, "2d_array"},
++        [VKD3D_SHADER_RESOURCE_TEXTURE_2DMSARRAY] = {2, 1, "2d_ms_array"},
++        [VKD3D_SHADER_RESOURCE_TEXTURE_CUBEARRAY] = {2, 1, "cube_array"},
+     };
+ 
+     if (!t || t >= ARRAY_SIZE(info))
+@@ -359,22 +361,24 @@ static enum msl_data_type msl_print_register_name(struct vkd3d_string_buffer *bu
+                     vkd3d_string_buffer_printf(buffer, "<unhandled register %#x>", reg->type);
+                     return MSL_DATA_UNION;
+                 }
+-                if (reg->idx[0].rel_addr || reg->idx[1].rel_addr || reg->idx[2].rel_addr)
++                if (reg->idx[0].rel_addr || reg->idx[1].rel_addr)
+                 {
+                     msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+                             "Internal compiler error: Unhandled constant buffer register indirect addressing.");
+                     vkd3d_string_buffer_printf(buffer, "<unhandled register %#x>", reg->type);
+                     return MSL_DATA_UNION;
+                 }
++                /* FIXME: This should use vkd3d_shader_find_descriptor() to
++                 * find the resource index/space from the resource ID. */
+                 if (!(binding = msl_get_cbv_binding(gen, 0, reg->idx[1].offset)))
+                 {
+                     msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_BINDING_NOT_FOUND,
+-                            "Cannot finding binding for CBV register %u.", reg->idx[0].offset);
++                            "No descriptor binding specified for CBV %u.", reg->idx[0].offset);
+                     vkd3d_string_buffer_printf(buffer, "<unhandled register %#x>", reg->type);
+                     return MSL_DATA_UNION;
+                 }
+                 msl_print_cbv_name(buffer, binding->binding);
+-                vkd3d_string_buffer_printf(buffer, "[%u]", reg->idx[2].offset);
++                msl_print_subscript(buffer, gen, reg->idx[2].rel_addr, reg->idx[2].offset);
+                 return MSL_DATA_UNION;
+             }
+ 
+@@ -542,6 +546,25 @@ static uint32_t msl_dst_init(struct msl_dst *msl_dst, struct msl_generator *gen,
+     return write_mask;
+ }
+ 
++static void msl_print_subscript(struct vkd3d_string_buffer *buffer, struct msl_generator *gen,
++        const struct vkd3d_shader_src_param *rel_addr, unsigned int offset)
++{
++    struct msl_src r;
++
++    if (!rel_addr)
++    {
++        vkd3d_string_buffer_printf(buffer, "[%u]", offset);
++        return;
++    }
++
++    msl_src_init(&r, gen, rel_addr, VKD3DSP_WRITEMASK_0);
++    vkd3d_string_buffer_printf(buffer, "[%s", r.str->buffer);
++    if (offset)
++        vkd3d_string_buffer_printf(buffer, " + %u", offset);
++    vkd3d_string_buffer_printf(buffer, "]");
++    msl_src_cleanup(&r, &gen->string_buffers);
++}
++
+ static void VKD3D_PRINTF_FUNC(3, 4) msl_print_assignment(
+         struct msl_generator *gen, struct msl_dst *dst, const char *format, ...)
+ {
+@@ -734,6 +757,7 @@ static void msl_ld(struct msl_generator *gen, const struct vkd3d_shader_instruct
+     enum vkd3d_shader_resource_type resource_type;
+     struct vkd3d_string_buffer *read;
+     enum vkd3d_data_type data_type;
++    unsigned int srv_binding;
+     uint32_t coord_mask;
+     struct msl_dst dst;
+ 
+@@ -763,30 +787,38 @@ static void msl_ld(struct msl_generator *gen, const struct vkd3d_shader_instruct
+         data_type = VKD3D_DATA_FLOAT;
+     }
+ 
+-    if ((resource_type_info = msl_get_resource_type_info(resource_type)))
+-    {
+-        coord_mask = vkd3d_write_mask_from_component_count(resource_type_info->read_coord_size);
+-    }
+-    else
++    if (resource_type == VKD3D_SHADER_RESOURCE_TEXTURE_2DMS
++            || resource_type == VKD3D_SHADER_RESOURCE_TEXTURE_CUBE
++            || resource_type == VKD3D_SHADER_RESOURCE_TEXTURE_2DMSARRAY
++            || resource_type == VKD3D_SHADER_RESOURCE_TEXTURE_CUBEARRAY)
++        msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_UNSUPPORTED,
++                "Texel fetches from resource type %#x are not supported.", resource_type);
++
++    if (!(resource_type_info = msl_get_resource_type_info(resource_type)))
+     {
+         msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+                 "Internal compiler error: Unhandled resource type %#x.", resource_type);
+-        coord_mask = vkd3d_write_mask_from_component_count(2);
++        resource_type_info = msl_get_resource_type_info(VKD3D_SHADER_RESOURCE_TEXTURE_2D);
+     }
++    coord_mask = vkd3d_write_mask_from_component_count(resource_type_info->read_coord_size);
+ 
+-    if (!(binding = msl_get_srv_binding(gen, resource_space, resource_idx, resource_type)))
++    if ((binding = msl_get_srv_binding(gen, resource_space, resource_idx, resource_type)))
++    {
++        srv_binding = binding->binding;
++    }
++    else
+     {
+         msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_BINDING_NOT_FOUND,
+-                "Cannot finding binding for SRV register %u index %u space %u.",
++                "No descriptor binding specified for SRV %u (index %u, space %u).",
+                 resource_id, resource_idx, resource_space);
+-        return;
++        srv_binding = 0;
+     }
+ 
+     msl_dst_init(&dst, gen, ins, &ins->dst[0]);
+     read = vkd3d_string_buffer_get(&gen->string_buffers);
+ 
+     vkd3d_string_buffer_printf(read, "as_type<uint4>(");
+-    msl_print_srv_name(read, gen, binding->binding, resource_type_info, data_type);
++    msl_print_srv_name(read, gen, srv_binding, resource_type_info, data_type);
+     vkd3d_string_buffer_printf(read, ".read(");
+     msl_print_src_with_type(read, gen, &ins->src[0], coord_mask, VKD3D_DATA_UINT);
+     if (resource_type_info->array)
+@@ -794,7 +826,7 @@ static void msl_ld(struct msl_generator *gen, const struct vkd3d_shader_instruct
+         vkd3d_string_buffer_printf(read, ", ");
+         msl_print_src_with_type(read, gen, &ins->src[0], coord_mask + 1, VKD3D_DATA_UINT);
+     }
+-    if (resource_type_info->lod)
++    if (resource_type != VKD3D_SHADER_RESOURCE_BUFFER)
+     {
+         vkd3d_string_buffer_printf(read, ", ");
+         msl_print_src_with_type(read, gen, &ins->src[0], VKD3DSP_WRITEMASK_3, VKD3D_DATA_UINT);
+@@ -1014,21 +1046,48 @@ static void msl_generate_input_struct_declarations(struct msl_generator *gen)
+         if (e->target_location == SIGNATURE_TARGET_LOCATION_UNUSED)
+             continue;
+ 
+-        if (e->sysval_semantic)
++        switch (e->sysval_semantic)
+         {
+-            if (e->sysval_semantic == VKD3D_SHADER_SV_IS_FRONT_FACE)
+-            {
++            case VKD3D_SHADER_SV_NONE:
++                break;
++
++            case VKD3D_SHADER_SV_POSITION:
+                 if (type != VKD3D_SHADER_TYPE_PIXEL)
+                     msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+-                            "Internal compiler error: Unhandled SV_IS_FRONT_FACE in shader type #%x.", type);
++                            "Internal compiler error: Unhandled SV_POSITION in shader type #%x.", type);
++                msl_print_indent(gen->buffer, 1);
++                vkd3d_string_buffer_printf(buffer, "float4 position [[position]];\n");
++                continue;
++
++            case VKD3D_SHADER_SV_VERTEX_ID:
++                if (type != VKD3D_SHADER_TYPE_VERTEX)
++                    msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
++                            "Internal compiler error: Unhandled SV_VERTEX_ID in shader type #%x.", type);
++                gen->read_vertex_id = true;
++                continue;
+ 
++            case VKD3D_SHADER_SV_IS_FRONT_FACE:
++                if (type != VKD3D_SHADER_TYPE_PIXEL)
++                    msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
++                            "Internal compiler error: Unhandled SV_IS_FRONT_FACE in shader type #%x.", type);
+                 msl_print_indent(gen->buffer, 1);
+                 vkd3d_string_buffer_printf(buffer, "bool is_front_face [[front_facing]];\n");
+                 continue;
+-            }
+-            msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+-                    "Internal compiler error: Unhandled system value %#x.", e->sysval_semantic);
+-            continue;
++
++            case VKD3D_SHADER_SV_SAMPLE_INDEX:
++                if (type != VKD3D_SHADER_TYPE_PIXEL)
++                    msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
++                            "Internal compiler error: Unhandled SV_SAMPLE_INDEX in shader type #%x.", type);
++                msl_print_indent(gen->buffer, 1);
++                vkd3d_string_buffer_printf(buffer, "uint sample_index [[sample_id]];\n");
++                continue;
++
++            default:
++                msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
++                        "Internal compiler error: Unhandled system value %#x.", e->sysval_semantic);
++                msl_print_indent(gen->buffer, 1);
++                vkd3d_string_buffer_printf(buffer, "<unhandled sysval %#x>;\n", e->sysval_semantic);
++                continue;
+         }
+ 
+         if (e->min_precision != VKD3D_SHADER_MINIMUM_PRECISION_NONE)
+@@ -1065,15 +1124,15 @@ static void msl_generate_input_struct_declarations(struct msl_generator *gen)
+                 break;
+         }
+ 
+-        vkd3d_string_buffer_printf(buffer, "shader_in_%u ", i);
++        vkd3d_string_buffer_printf(buffer, "shader_in_%u [[", i);
+ 
+         switch (type)
+         {
+             case VKD3D_SHADER_TYPE_VERTEX:
+-                vkd3d_string_buffer_printf(gen->buffer, "[[attribute(%u)]]", e->target_location);
++                vkd3d_string_buffer_printf(gen->buffer, "attribute(%u)", e->target_location);
+                 break;
+             case VKD3D_SHADER_TYPE_PIXEL:
+-                vkd3d_string_buffer_printf(gen->buffer, "[[user(locn%u)]]", e->target_location);
++                vkd3d_string_buffer_printf(gen->buffer, "user(locn%u)", e->target_location);
+                 break;
+             default:
+                 msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+@@ -1087,13 +1146,16 @@ static void msl_generate_input_struct_declarations(struct msl_generator *gen)
+             case VKD3DSIM_LINEAR:
+             case VKD3DSIM_NONE:
+                 break;
++            case VKD3DSIM_CONSTANT:
++                vkd3d_string_buffer_printf(gen->buffer, ", flat");
++                break;
+             default:
+                 msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+                         "Internal compiler error: Unhandled interpolation mode %#x.", e->interpolation_mode);
+                 break;
+         }
+ 
+-        vkd3d_string_buffer_printf(buffer, ";\n");
++        vkd3d_string_buffer_printf(buffer, "]];\n");
+     }
+ 
+     vkd3d_string_buffer_printf(buffer, "};\n\n");
+@@ -1144,15 +1206,8 @@ static void msl_generate_output_struct_declarations(struct msl_generator *gen)
+     {
+         e = &signature->elements[i];
+ 
+-        if (e->sysval_semantic == VKD3D_SHADER_SV_DEPTH)
+-        {
+-            gen->write_depth = true;
+-            msl_print_indent(gen->buffer, 1);
+-            vkd3d_string_buffer_printf(buffer, "float shader_out_depth [[depth(any)]];\n");
+-            continue;
+-        }
+-
+-        if (e->target_location == SIGNATURE_TARGET_LOCATION_UNUSED)
++        if (e->target_location == SIGNATURE_TARGET_LOCATION_UNUSED
++                || e->sysval_semantic == VKD3D_SHADER_SV_DEPTH)
+             continue;
+ 
+         if (e->min_precision != VKD3D_SHADER_MINIMUM_PRECISION_NONE)
+@@ -1215,6 +1270,12 @@ static void msl_generate_output_struct_declarations(struct msl_generator *gen)
+         vkd3d_string_buffer_printf(buffer, ";\n");
+     }
+ 
++    if (bitmap_is_set(gen->program->io_dcls, VKD3DSPR_DEPTHOUT))
++    {
++        msl_print_indent(gen->buffer, 1);
++        vkd3d_string_buffer_printf(buffer, "float shader_out_depth [[depth(any)]];\n");
++    }
++
+     vkd3d_string_buffer_printf(buffer, "};\n\n");
+ }
+ 
+@@ -1233,23 +1294,45 @@ static void msl_generate_entrypoint_prologue(struct msl_generator *gen)
+             continue;
+ 
+         vkd3d_string_buffer_printf(buffer, "    %s_in[%u]", gen->prefix, e->register_index);
+-        if (e->sysval_semantic == VKD3D_SHADER_SV_NONE)
+-        {
+-            msl_print_register_datatype(buffer, gen, vkd3d_data_type_from_component_type(e->component_type));
+-            msl_print_write_mask(buffer, e->mask);
+-            vkd3d_string_buffer_printf(buffer, " = input.shader_in_%u", i);
+-            msl_print_write_mask(buffer, e->mask);
+-        }
+-        else if (e->sysval_semantic == VKD3D_SHADER_SV_IS_FRONT_FACE)
+-        {
+-            vkd3d_string_buffer_printf(buffer, ".u = uint4(input.is_front_face ? 0xffffffffu : 0u, 0, 0, 0)");
+-        }
+-        else
++        switch (e->sysval_semantic)
+         {
+-            vkd3d_string_buffer_printf(buffer, " = <unhandled sysval %#x>", e->sysval_semantic);
+-            msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+-                    "Internal compiler error: Unhandled system value %#x input.", e->sysval_semantic);
++            case VKD3D_SHADER_SV_NONE:
++                msl_print_register_datatype(buffer, gen, vkd3d_data_type_from_component_type(e->component_type));
++                msl_print_write_mask(buffer, e->mask);
++                vkd3d_string_buffer_printf(buffer, " = input.shader_in_%u", i);
++                break;
++
++            case VKD3D_SHADER_SV_POSITION:
++                msl_print_register_datatype(buffer, gen, VKD3D_DATA_FLOAT);
++                msl_print_write_mask(buffer, e->mask);
++                vkd3d_string_buffer_printf(buffer, " = float4(input.position.xyz, 1.0f / input.position.w)");
++                break;
++
++            case VKD3D_SHADER_SV_VERTEX_ID:
++                msl_print_register_datatype(buffer, gen, VKD3D_DATA_UINT);
++                msl_print_write_mask(buffer, e->mask);
++                vkd3d_string_buffer_printf(buffer, " = uint4(vertex_id, 0u, 0u, 0u)");
++                break;
++
++            case VKD3D_SHADER_SV_IS_FRONT_FACE:
++                msl_print_register_datatype(buffer, gen, VKD3D_DATA_UINT);
++                msl_print_write_mask(buffer, e->mask);
++                vkd3d_string_buffer_printf(buffer, " = uint4(input.is_front_face ? 0xffffffffu : 0u, 0, 0, 0)");
++                break;
++
++            case VKD3D_SHADER_SV_SAMPLE_INDEX:
++                msl_print_register_datatype(buffer, gen, VKD3D_DATA_UINT);
++                msl_print_write_mask(buffer, e->mask);
++                vkd3d_string_buffer_printf(buffer, " = uint4(input.sample_index, 0u, 0u, 0u)");
++                break;
++
++            default:
++                vkd3d_string_buffer_printf(buffer, " = <unhandled sysval %#x>", e->sysval_semantic);
++                msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
++                        "Internal compiler error: Unhandled system value %#x input.", e->sysval_semantic);
++                break;
+         }
++        msl_print_write_mask(buffer, e->mask);
+         vkd3d_string_buffer_printf(buffer, ";\n");
+     }
+ }
+@@ -1265,12 +1348,6 @@ static void msl_generate_entrypoint_epilogue(struct msl_generator *gen)
+     {
+         e = &signature->elements[i];
+ 
+-        if (e->sysval_semantic == VKD3D_SHADER_SV_DEPTH)
+-        {
+-            vkd3d_string_buffer_printf(buffer, "    output.shader_out_depth = shader_out_depth;\n");
+-            continue;
+-        }
+-
+         if (e->target_location == SIGNATURE_TARGET_LOCATION_UNUSED)
+             continue;
+ 
+@@ -1285,6 +1362,8 @@ static void msl_generate_entrypoint_epilogue(struct msl_generator *gen)
+                 msl_print_register_datatype(buffer, gen, vkd3d_data_type_from_component_type(e->component_type));
+                 msl_print_write_mask(buffer, e->mask);
+                 break;
++            case VKD3D_SHADER_SV_DEPTH:
++                continue;
+             default:
+                 vkd3d_string_buffer_printf(buffer, "    <unhandled sysval %#x>", e->sysval_semantic);
+                 msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+@@ -1322,6 +1401,12 @@ static void msl_generate_entrypoint(struct msl_generator *gen)
+                 "constant descriptor *descriptors [[buffer(0)]],\n");
+     }
+ 
++    if (gen->read_vertex_id)
++    {
++        msl_print_indent(gen->buffer, 2);
++        vkd3d_string_buffer_printf(gen->buffer, "uint vertex_id [[vertex_id]],\n");
++    }
++
+     msl_print_indent(gen->buffer, 2);
+     vkd3d_string_buffer_printf(gen->buffer, "vkd3d_%s_in input [[stage_in]])\n{\n", gen->prefix);
+ 
+@@ -1330,14 +1415,13 @@ static void msl_generate_entrypoint(struct msl_generator *gen)
+     vkd3d_string_buffer_printf(gen->buffer, "    vkd3d_vec4 %s_out[%u];\n", gen->prefix, 32);
+     vkd3d_string_buffer_printf(gen->buffer, "    vkd3d_%s_out output;\n", gen->prefix);
+ 
+-    if (gen->write_depth)
+-        vkd3d_string_buffer_printf(gen->buffer, "    float shader_out_depth;\n");
+-
+     msl_generate_entrypoint_prologue(gen);
+ 
+     vkd3d_string_buffer_printf(gen->buffer, "    %s_main(%s_in, %s_out", gen->prefix, gen->prefix, gen->prefix);
+-    if (gen->write_depth)
+-        vkd3d_string_buffer_printf(gen->buffer, ", shader_out_depth");
++    if (gen->read_vertex_id)
++        vkd3d_string_buffer_printf(gen->buffer, ", vertex_id");
++    if (bitmap_is_set(gen->program->io_dcls, VKD3DSPR_DEPTHOUT))
++        vkd3d_string_buffer_printf(gen->buffer, ", output.shader_out_depth");
+     if (gen->program->descriptors.descriptor_count)
+         vkd3d_string_buffer_printf(gen->buffer, ", descriptors");
+     vkd3d_string_buffer_printf(gen->buffer, ");\n");
+@@ -1397,8 +1481,11 @@ static int msl_generator_generate(struct msl_generator *gen, struct vkd3d_shader
+             "static void %s_main(thread vkd3d_vec4 *v, "
+             "thread vkd3d_vec4 *o",
+             gen->prefix);
+-    if (gen->write_depth)
+-        vkd3d_string_buffer_printf(gen->buffer, ", thread float& o_depth");
++
++    if (gen->read_vertex_id)
++        vkd3d_string_buffer_printf(gen->buffer, ", uint vertex_id");
++    if (bitmap_is_set(gen->program->io_dcls, VKD3DSPR_DEPTHOUT))
++        vkd3d_string_buffer_printf(gen->buffer, ", thread float &o_depth");
+     if (gen->program->descriptors.descriptor_count)
+         vkd3d_string_buffer_printf(gen->buffer, ", constant descriptor *descriptors");
+     vkd3d_string_buffer_printf(gen->buffer, ")\n{\n");
+diff --git a/libs/vkd3d/libs/vkd3d-shader/preproc.h b/libs/vkd3d/libs/vkd3d-shader/preproc.h
+index a98c8ae3df5..9217237d8d3 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/preproc.h
++++ b/libs/vkd3d/libs/vkd3d-shader/preproc.h
+@@ -38,6 +38,7 @@ struct preproc_buffer
+ {
+     void *lexer_buffer;
+     struct vkd3d_shader_location location;
++    bool eof;
+ };
+ 
+ struct preproc_file
+@@ -125,7 +126,6 @@ struct preproc_ctx
+     int lookahead_token;
+ 
+     bool last_was_newline;
+-    bool last_was_eof;
+     bool last_was_defined;
+ 
+     bool error;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/preproc.l b/libs/vkd3d/libs/vkd3d-shader/preproc.l
+index d167415c356..5c56fba0229 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/preproc.l
++++ b/libs/vkd3d/libs/vkd3d-shader/preproc.l
+@@ -72,8 +72,8 @@ INT_SUFFIX      [uUlL]{0,2}
+ 
+ %%
+ 
+-<INITIAL>"//"                       {yy_push_state(CXX_COMMENT, yyscanner);}
+-<INITIAL>"/*"                       {yy_push_state(C_COMMENT, yyscanner);}
++<INITIAL,INCLUDE,LINE>"//"          {yy_push_state(CXX_COMMENT, yyscanner);}
++<INITIAL,INCLUDE,LINE>"/*"          {yy_push_state(C_COMMENT, yyscanner);}
+ <CXX_COMMENT>\\{NEWLINE}            {}
+ <CXX_COMMENT>\n                     {
+         yy_pop_state(yyscanner);
+@@ -81,7 +81,11 @@ INT_SUFFIX      [uUlL]{0,2}
+         return T_NEWLINE;
+     }
+ <C_COMMENT>"*/"                     {yy_pop_state(yyscanner);}
+-<C_COMMENT,CXX_COMMENT><<EOF>>      {yy_pop_state(yyscanner);}
++<C_COMMENT,CXX_COMMENT><<EOF>>      {
++        yy_pop_state(yyscanner);
++        BEGIN(INITIAL);
++        yyterminate();
++    }
+ <C_COMMENT,CXX_COMMENT>.            {}
+ <C_COMMENT>\n                       {}
+ 
+@@ -197,6 +201,10 @@ INT_SUFFIX      [uUlL]{0,2}
+         BEGIN(INITIAL);
+         return T_NEWLINE;
+     }
++<INITIAL,INCLUDE,ERROR,LINE><<EOF>> {
++        BEGIN(INITIAL);
++        yyterminate();
++    }
+ 
+ <INITIAL,INCLUDE,LINE>{WS}+         {}
+ <INITIAL>[-()\[\]{},+!*/<>&|^?:]    {return yytext[0];}
+@@ -251,8 +259,19 @@ static bool should_concat(struct preproc_ctx *ctx)
+     return !macro || macro->arg_count;
+ }
+ 
++static struct preproc_buffer *preproc_get_top_buffer(struct preproc_ctx *ctx)
++{
++    if (ctx->expansion_count)
++        return &ctx->expansion_stack[ctx->expansion_count - 1].buffer;
++    if (ctx->file_count)
++        return &ctx->file_stack[ctx->file_count - 1].buffer;
++    return NULL;
++}
++
+ static void preproc_pop_buffer(struct preproc_ctx *ctx)
+ {
++    struct preproc_buffer *buffer;
++
+     if (ctx->expansion_count)
+     {
+         struct preproc_expansion *exp = &ctx->expansion_stack[ctx->expansion_count - 1];
+@@ -291,10 +310,8 @@ static void preproc_pop_buffer(struct preproc_ctx *ctx)
+         TRACE("File stack size is now %zu.\n", ctx->file_count);
+     }
+ 
+-    if (ctx->expansion_count)
+-        yy_switch_to_buffer(ctx->expansion_stack[ctx->expansion_count - 1].buffer.lexer_buffer, ctx->scanner);
+-    else if (ctx->file_count)
+-        yy_switch_to_buffer(ctx->file_stack[ctx->file_count - 1].buffer.lexer_buffer, ctx->scanner);
++    if ((buffer = preproc_get_top_buffer(ctx)))
++        yy_switch_to_buffer(buffer->lexer_buffer, ctx->scanner);
+ }
+ 
+ static int return_token(int token, YYSTYPE *lval, const char *text)
+@@ -348,6 +365,7 @@ static bool preproc_push_expansion(struct preproc_ctx *ctx,
+     exp->text = text;
+     exp->buffer.lexer_buffer = yy_scan_bytes(text->text.buffer, text->text.content_size, ctx->scanner);
+     exp->buffer.location = text->location;
++    exp->buffer.eof = false;
+     exp->macro = macro;
+     exp->arg_values = arg_values;
+     TRACE("Expansion stack size is now %zu.\n", ctx->expansion_count);
+@@ -408,18 +426,17 @@ int yylex(YYSTYPE *lval, YYLTYPE *lloc, yyscan_t scanner)
+         }
+         else
+         {
+-            if (ctx->last_was_eof)
++            if (preproc_get_top_buffer(ctx)->eof)
+             {
+                 preproc_pop_buffer(ctx);
+                 if (!ctx->file_count)
+                     return 0;
+             }
+-            ctx->last_was_eof = false;
+ 
+             VKD3D_ASSERT(ctx->file_count);
+             if (!(token = preproc_lexer_lex(lval, lloc, scanner)))
+             {
+-                ctx->last_was_eof = true;
++                preproc_get_top_buffer(ctx)->eof = true;
+ 
+                 /* If we have reached the end of an included file, inject a newline. */
+                 if (ctx->expansion_count)
+@@ -782,6 +799,7 @@ bool preproc_push_include(struct preproc_ctx *ctx, char *filename, const struct
+     file->buffer.location.source_name = file->filename;
+     file->buffer.location.line = 1;
+     file->buffer.location.column = 1;
++    file->buffer.eof = false;
+     TRACE("File stack size is now %zu.\n", ctx->file_count);
+     ctx->last_was_newline = true;
+     return true;
+-- 
+2.47.2
+
