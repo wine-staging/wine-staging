@@ -1,0 +1,501 @@
+From 9b68296a60ed1150298f9638098765d0e92d406a Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Wed, 18 Jun 2025 08:49:39 +1000
+Subject: [PATCH] Updated vkd3d to 7c0da1747a89a8cea27a42ace51b318e9d843a19.
+
+---
+ libs/vkd3d/include/vkd3d_shader.h             |   6 +
+ libs/vkd3d/libs/vkd3d-shader/d3dbc.c          |  13 +-
+ libs/vkd3d/libs/vkd3d-shader/dxil.c           |  12 +-
+ libs/vkd3d/libs/vkd3d-shader/fx.c             | 120 +++++++++++++-----
+ libs/vkd3d/libs/vkd3d-shader/ir.c             |  10 +-
+ libs/vkd3d/libs/vkd3d-shader/spirv.c          |  24 ++--
+ .../libs/vkd3d-shader/vkd3d_shader_main.c     |  14 ++
+ .../libs/vkd3d-shader/vkd3d_shader_private.h  |   4 +-
+ 8 files changed, 154 insertions(+), 49 deletions(-)
+
+diff --git a/libs/vkd3d/include/vkd3d_shader.h b/libs/vkd3d/include/vkd3d_shader.h
+index 30b6a070018..b50271ce9bb 100644
+--- a/libs/vkd3d/include/vkd3d_shader.h
++++ b/libs/vkd3d/include/vkd3d_shader.h
+@@ -1431,6 +1431,11 @@ enum vkd3d_shader_source_type
+      * Input is a raw FX section without container. \since 1.14
+      */
+     VKD3D_SHADER_SOURCE_FX,
++    /**
++     * A D3DX texture shader. This is the format used for the 'tx_1_0' HLSL
++     * target profile. \since 1.17
++     */
++    VKD3D_SHADER_SOURCE_TX,
+ 
+     VKD3D_FORCE_32_BIT_ENUM(VKD3D_SHADER_SOURCE_TYPE),
+ };
+@@ -2761,6 +2766,7 @@ VKD3D_SHADER_API const enum vkd3d_shader_target_type *vkd3d_shader_get_supported
+  * - VKD3D_SHADER_SOURCE_HLSL to VKD3D_SHADER_TARGET_DXBC_TPF
+  * - VKD3D_SHADER_SOURCE_HLSL to VKD3D_SHADER_TARGET_FX
+  * - VKD3D_SHADER_SOURCE_FX to VKD3D_SHADER_TARGET_D3D_ASM
++ * - VKD3D_SHADER_SOURCE_TX to VKD3D_SHADER_TARGET_D3D_ASM
+  *
+  * Supported transformations can also be detected at runtime with the functions
+  * vkd3d_shader_get_supported_source_types() and
+diff --git a/libs/vkd3d/libs/vkd3d-shader/d3dbc.c b/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
+index c8291afcf6e..fbc0235cdd0 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
++++ b/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
+@@ -1830,6 +1830,7 @@ static void d3dbc_write_instruction(struct d3dbc_compiler *d3dbc, const struct v
+     struct vkd3d_bytecode_buffer *buffer = &d3dbc->buffer;
+     const struct vkd3d_shader_src_param *src;
+     const struct vkd3d_sm1_opcode_info *info;
++    size_t size, token_position;
+     unsigned int i;
+     uint32_t token;
+ 
+@@ -1842,9 +1843,7 @@ static void d3dbc_write_instruction(struct d3dbc_compiler *d3dbc, const struct v
+     token = info->sm1_opcode;
+     token |= VKD3D_SM1_INSTRUCTION_FLAGS_MASK & (ins->flags << VKD3D_SM1_INSTRUCTION_FLAGS_SHIFT);
+ 
+-    if (version->major > 1)
+-        token |= (ins->dst_count + ins->src_count) << VKD3D_SM1_INSTRUCTION_LENGTH_SHIFT;
+-    put_u32(buffer, token);
++    token_position = put_u32(buffer, 0);
+ 
+     for (i = 0; i < ins->dst_count; ++i)
+     {
+@@ -1864,6 +1863,14 @@ static void d3dbc_write_instruction(struct d3dbc_compiler *d3dbc, const struct v
+         if (src->reg.idx_count && src->reg.idx[0].rel_addr)
+             write_sm1_src_register(buffer, src->reg.idx[0].rel_addr);
+     }
++
++    if (version->major > 1)
++    {
++        size = (bytecode_get_size(buffer) - token_position) / sizeof(uint32_t);
++        token |= ((size - 1) << VKD3D_SM1_INSTRUCTION_LENGTH_SHIFT);
++    }
++
++    set_u32(buffer, token_position, token);
+ };
+ 
+ static void d3dbc_write_texkill(struct d3dbc_compiler *d3dbc, const struct vkd3d_shader_instruction *ins)
+diff --git a/libs/vkd3d/libs/vkd3d-shader/dxil.c b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+index 53578ce7141..1c7ed0d9e11 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/dxil.c
++++ b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+@@ -2271,9 +2271,19 @@ static inline bool sm6_value_is_constant(const struct sm6_value *value)
+ 
+ static bool sm6_value_is_constant_zero(const struct sm6_value *value)
+ {
+-    if (value->value_type != VALUE_TYPE_CONSTANT || value->type->class != TYPE_CLASS_INTEGER)
++    if (value->value_type != VALUE_TYPE_CONSTANT)
+         return false;
+ 
++    switch (value->type->class)
++    {
++        case TYPE_CLASS_INTEGER:
++        case TYPE_CLASS_FLOAT:
++            break;
++
++        default:
++            return false;
++    }
++
+     if (value->type->u.width == 64)
+         return value->u.constant.immconst.immconst_u64[0] == 0;
+     else
+diff --git a/libs/vkd3d/libs/vkd3d-shader/fx.c b/libs/vkd3d/libs/vkd3d-shader/fx.c
+index f7b2e3d7d13..95a172fd827 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d/libs/vkd3d-shader/fx.c
+@@ -65,6 +65,7 @@ enum fxlvm_constants
+     FX_FXLC_REG_CB = 2,
+     FX_FXLC_REG_OUTPUT = 4,
+     FX_FXLC_REG_TEMP = 7,
++    FX_FXLC_REG_MAX = FX_FXLC_REG_TEMP,
+ };
+ 
+ struct rhs_named_value
+@@ -3533,6 +3534,7 @@ int hlsl_emit_effect_binary(struct hlsl_ctx *ctx, struct vkd3d_shader_code *out)
+ 
+ struct fx_parser
+ {
++    enum vkd3d_shader_source_type source_type;
+     const uint8_t *ptr, *start, *end;
+     struct vkd3d_shader_message_context *message_context;
+     struct vkd3d_string_buffer buffer;
+@@ -4252,24 +4254,6 @@ static void fx_parse_fx_2_data_blob(struct fx_parser *parser)
+     fx_parser_skip(parser, align(size, 4));
+ }
+ 
+-static void fx_dump_blob(struct fx_parser *parser, const void *blob, uint32_t size)
+-{
+-    const uint32_t *data = blob;
+-    unsigned int i, j, n;
+-
+-    size /= sizeof(*data);
+-    i = 0;
+-    while (i < size)
+-    {
+-        parse_fx_print_indent(parser);
+-        n = min(size - i, 8);
+-        for (j = 0; j < n; ++j)
+-            vkd3d_string_buffer_printf(&parser->buffer, "0x%08x,", data[i + j]);
+-        i += n;
+-        vkd3d_string_buffer_printf(&parser->buffer, "\n");
+-    }
+-}
+-
+ static void fx_2_parse_fxlvm_expression(struct fx_parser *parser, const uint32_t *blob, uint32_t size);
+ 
+ static void fx_parse_fx_2_array_selector(struct fx_parser *parser)
+@@ -4313,7 +4297,7 @@ static void fx_parse_fx_2_complex_state(struct fx_parser *parser)
+         uint32_t state;
+         uint32_t assignment_type;
+     } state;
+-    const char *data;
++    const uint32_t *data;
+     uint32_t size;
+ 
+     fx_parser_read_u32s(parser, &state, sizeof(state));
+@@ -4339,14 +4323,19 @@ static void fx_parse_fx_2_complex_state(struct fx_parser *parser)
+     {
+         fx_parse_fx_2_array_selector(parser);
+     }
+-    else
++    else if (state.assignment_type == FX_2_ASSIGNMENT_CODE_BLOB)
+     {
+         size = fx_parser_read_u32(parser);
+-        vkd3d_string_buffer_printf(&parser->buffer, "blob size %u\n", size);
+         data = fx_parser_get_ptr(parser, size);
+-        fx_dump_blob(parser, data, size);
++        vkd3d_string_buffer_printf(&parser->buffer, "blob size %u\n", size);
++        fx_2_parse_fxlvm_expression(parser, data, size);
+         fx_parser_skip(parser, align(size, 4));
+     }
++    else
++    {
++        fx_parser_error(parser, VKD3D_SHADER_ERROR_FX_INVALID_DATA,
++                "Unknown state assignment type %u.", state.assignment_type);
++    }
+ }
+ 
+ static void fx_2_parse(struct fx_parser *parser)
+@@ -4774,7 +4763,9 @@ fxlc_opcodes[] =
+     { 0x236, "ushr"  },
+     { 0x301, "movc"  },
+     { 0x500, "dot"   },
++    { 0x502, "noise" },
+     { 0x70e, "d3ds_dotswiz" },
++    { 0x711, "d3ds_noiseswiz" },
+ };
+ 
+ static const char *get_fxlc_opcode_name(uint32_t opcode)
+@@ -4790,13 +4781,6 @@ static const char *get_fxlc_opcode_name(uint32_t opcode)
+     return "<unrecognized>";
+ }
+ 
+-struct fx_4_fxlc_argument
+-{
+-    uint32_t flags;
+-    uint32_t reg_type;
+-    uint32_t address;
+-};
+-
+ struct fx_4_ctab_entry
+ {
+     uint32_t name;
+@@ -4951,8 +4935,38 @@ static void fx_print_fxlc_literal(struct fx_parser *parser, uint32_t address, st
+ 
+ static void fx_print_fxlc_argument(struct fx_parser *parser, const struct fxlc_arg *arg, struct fxlvm_code *code)
+ {
++    static const char *table_names[FX_FXLC_REG_MAX + 1] =
++    {
++        [FX_FXLC_REG_LITERAL] = "imm",
++        [FX_FXLC_REG_CB] = "cb",
++        [FX_FXLC_REG_OUTPUT] = "o",
++        [FX_FXLC_REG_TEMP] = "r",
++    };
+     uint32_t count;
+ 
++    if (arg->reg_type > FX_FXLC_REG_MAX)
++    {
++        fx_parser_error(parser, VKD3D_SHADER_ERROR_FX_INVALID_DATA,
++                "Unexpected register type %u.", arg->reg_type);
++        return;
++    }
++
++    if (arg->index.reg_type > FX_FXLC_REG_MAX)
++    {
++        fx_parser_error(parser, VKD3D_SHADER_ERROR_FX_INVALID_DATA,
++                "Unexpected index register type %u.", arg->index.reg_type);
++        return;
++    }
++
++    if (arg->indexed)
++    {
++        vkd3d_string_buffer_printf(&parser->buffer, "%s[%u + %s%u.%c]", table_names[arg->reg_type],
++                arg->address, table_names[arg->index.reg_type], arg->index.address,
++                "xyzw"[arg->index.address % 4]);
++        fx_parse_print_swizzle(parser, code, arg->address);
++        return;
++    }
++
+     switch (arg->reg_type)
+     {
+         case FX_FXLC_REG_LITERAL:
+@@ -4999,9 +5013,14 @@ static void fx_parse_fxlvm_expression(struct fx_parser *parser, struct fxlvm_cod
+     uint32_t ins_count;
+     size_t i, j;
+ 
+-    ins_count = fxlvm_read_u32(code);
+-
+     parse_fx_start_indent(parser);
++    if (parser->source_type == VKD3D_SHADER_SOURCE_TX)
++    {
++        parse_fx_print_indent(parser);
++        vkd3d_string_buffer_printf(&parser->buffer, "tx_1_0\n");
++    }
++
++    ins_count = fxlvm_read_u32(code);
+ 
+     for (i = 0; i < ins_count; ++i)
+     {
+@@ -5055,6 +5074,9 @@ static void fx_2_parse_fxlvm_expression(struct fx_parser *parser, const uint32_t
+     uint32_t section_size;
+     const uint32_t *data;
+ 
++    if (!blob)
++        return;
++
+     /* Literal constants, using 64-bit floats. */
+     if ((data = find_d3dbc_section(blob, count, TAG_CLIT, &section_size)))
+     {
+@@ -5619,6 +5641,7 @@ static void fx_parser_init(struct fx_parser *parser, const struct vkd3d_shader_c
+         struct vkd3d_shader_message_context *message_context)
+ {
+     memset(parser, 0, sizeof(*parser));
++    parser->source_type = compile_info->source_type;
+     parser->start = compile_info->source.code;
+     parser->ptr = compile_info->source.code;
+     parser->end = (uint8_t *)compile_info->source.code + compile_info->source.size;
+@@ -5679,3 +5702,38 @@ int fx_parse(const struct vkd3d_shader_compile_info *compile_info,
+         return VKD3D_ERROR_INVALID_SHADER;
+     return VKD3D_OK;
+ }
++
++int tx_parse(const struct vkd3d_shader_compile_info *compile_info,
++        struct vkd3d_shader_code *out, struct vkd3d_shader_message_context *message_context)
++{
++    struct fx_parser parser;
++    uint32_t version;
++
++    fx_parser_init(&parser, compile_info, message_context);
++
++    if (parser.end - parser.start < sizeof(version))
++    {
++        fx_parser_error(&parser, VKD3D_SHADER_ERROR_FX_INVALID_SIZE,
++                "Source size %zu is smaller than the TX header size.", compile_info->source.size);
++        return VKD3D_ERROR_INVALID_SHADER;
++    }
++    version = *(uint32_t *)parser.ptr;
++
++    switch (version)
++    {
++        case 0x54580100:
++            fx_2_parse_fxlvm_expression(&parser, (const uint32_t *)parser.ptr, parser.end - parser.ptr);
++            break;
++        default:
++            fx_parser_error(&parser, VKD3D_SHADER_ERROR_FX_INVALID_VERSION,
++                    "Invalid texture shader binary version value 0x%08x.", version);
++            break;
++    }
++
++    vkd3d_shader_code_from_string_buffer(out, &parser.buffer);
++    fx_parser_cleanup(&parser);
++
++    if (parser.failed)
++        return VKD3D_ERROR_INVALID_SHADER;
++    return VKD3D_OK;
++}
+diff --git a/libs/vkd3d/libs/vkd3d-shader/ir.c b/libs/vkd3d/libs/vkd3d-shader/ir.c
+index 0aebfea2add..7546a1f557b 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/ir.c
++++ b/libs/vkd3d/libs/vkd3d-shader/ir.c
+@@ -9273,7 +9273,7 @@ static void vsir_validate_hull_shader_phase(struct validation_context *ctx,
+         const struct vkd3d_shader_instruction *instruction)
+ {
+     if (ctx->program->shader_version.type != VKD3D_SHADER_TYPE_HULL)
+-        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_HANDLER,
++        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_OPCODE,
+                 "Phase instruction \"%s\" (%#x) is only valid in a hull shader.",
+                 vsir_opcode_get_name(instruction->opcode, "<unknown>"), instruction->opcode);
+     if (ctx->depth != 0)
+@@ -9359,7 +9359,7 @@ static void vsir_validate_dcl_index_range(struct validation_context *ctx,
+ 
+     if (ctx->program->normalisation_level >= VSIR_NORMALISED_SM6)
+     {
+-        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_HANDLER,
++        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_OPCODE,
+                 "DCL_INDEX_RANGE is not allowed with fully normalised input/output.");
+         return;
+     }
+@@ -10026,8 +10026,8 @@ static void vsir_validate_instruction(struct validation_context *ctx)
+ 
+     if (instruction->opcode >= VKD3DSIH_INVALID)
+     {
+-        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_HANDLER, "Invalid instruction handler %#x.",
+-                instruction->opcode);
++        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_OPCODE,
++                "Invalid opcode %#x.", instruction->opcode);
+     }
+ 
+     if (version->type == VKD3D_SHADER_TYPE_HULL && ctx->phase == VKD3DSIH_INVALID)
+@@ -10043,7 +10043,7 @@ static void vsir_validate_instruction(struct validation_context *ctx)
+ 
+             default:
+                 if (!vsir_instruction_is_dcl(instruction))
+-                    validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_HANDLER,
++                    validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_OPCODE,
+                             "Instruction \"%s\" (%#x) appears before any phase instruction in a hull shader.",
+                             vsir_opcode_get_name(instruction->opcode, "<unknown>"), instruction->opcode);
+                 break;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/spirv.c b/libs/vkd3d/libs/vkd3d-shader/spirv.c
+index 13ebde5cfd5..debf7ac29f5 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/spirv.c
++++ b/libs/vkd3d/libs/vkd3d-shader/spirv.c
+@@ -7639,9 +7639,9 @@ static enum vkd3d_result spirv_compiler_emit_alu_instruction(struct spirv_compil
+ 
+     if (op == SpvOpMax)
+     {
+-        ERR("Unexpected instruction %#x.\n", instruction->opcode);
+         spirv_compiler_error(compiler, VKD3D_SHADER_ERROR_SPV_INVALID_HANDLER,
+-                "Encountered invalid/unhandled instruction handler %#x.", instruction->opcode);
++                "Encountered invalid/unhandled instruction \"%s\" (%#x).",
++                vsir_opcode_get_name(instruction->opcode, "<unknown>"), instruction->opcode);
+         return VKD3D_ERROR_INVALID_SHADER;
+     }
+ 
+@@ -7761,16 +7761,18 @@ static void spirv_compiler_emit_ext_glsl_instruction(struct spirv_compiler *comp
+             || instruction->opcode == VKD3DSIH_FIRSTBIT_LO || instruction->opcode == VKD3DSIH_FIRSTBIT_SHI))
+     {
+         /* At least some drivers support this anyway, but if validation is enabled it will fail. */
+-        FIXME("Unsupported 64-bit source for handler %#x.\n", instruction->opcode);
+         spirv_compiler_error(compiler, VKD3D_SHADER_ERROR_SPV_NOT_IMPLEMENTED,
+-                "64-bit source for handler %#x is not supported.", instruction->opcode);
++                "64-bit source for instruction \"%s\" (%#x) is not supported.",
++                vsir_opcode_get_name(instruction->opcode, "<unknown>"), instruction->opcode);
+         return;
+     }
+ 
+     glsl_inst = spirv_compiler_map_ext_glsl_instruction(instruction);
+     if (glsl_inst == GLSLstd450Bad)
+     {
+-        ERR("Unexpected instruction %#x.\n", instruction->opcode);
++        spirv_compiler_error(compiler, VKD3D_SHADER_ERROR_SPV_NOT_IMPLEMENTED,
++                "Unhandled instruction \"%s\" (%#x).",
++                vsir_opcode_get_name(instruction->opcode, "<unknown>"), instruction->opcode);
+         return;
+     }
+ 
+@@ -8294,7 +8296,9 @@ static void spirv_compiler_emit_bitfield_instruction(struct spirv_compiler *comp
+         case VKD3DSIH_IBFE: op = SpvOpBitFieldSExtract; break;
+         case VKD3DSIH_UBFE: op = SpvOpBitFieldUExtract; break;
+         default:
+-            ERR("Unexpected instruction %#x.\n", instruction->opcode);
++            spirv_compiler_error(compiler, VKD3D_SHADER_ERROR_SPV_NOT_IMPLEMENTED,
++                    "Unhandled instruction \"%s\" (%#x).",
++                    vsir_opcode_get_name(instruction->opcode, "<unknown>"), instruction->opcode);
+             return;
+     }
+ 
+@@ -8427,7 +8431,9 @@ static void spirv_compiler_emit_comparison_instruction(struct spirv_compiler *co
+         case VKD3DSIH_UGE: op = SpvOpUGreaterThanEqual; break;
+         case VKD3DSIH_ULT: op = SpvOpULessThan; break;
+         default:
+-            ERR("Unexpected instruction %#x.\n", instruction->opcode);
++            spirv_compiler_error(compiler, VKD3D_SHADER_ERROR_SPV_NOT_IMPLEMENTED,
++                    "Unhandled instruction \"%s\" (%#x).",
++                    vsir_opcode_get_name(instruction->opcode, "<unknown>"), instruction->opcode);
+             return;
+     }
+ 
+@@ -8813,7 +8819,9 @@ static void spirv_compiler_emit_deriv_instruction(struct spirv_compiler *compile
+     }
+     if (!info)
+     {
+-        ERR("Unexpected instruction %#x.\n", instruction->opcode);
++        spirv_compiler_error(compiler, VKD3D_SHADER_ERROR_SPV_NOT_IMPLEMENTED,
++                "Unhandled instruction \"%s\" (%#x).",
++                vsir_opcode_get_name(instruction->opcode, "<unknown>"), instruction->opcode);
+         return;
+     }
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
+index 783f4e6134c..2cd23cba1f5 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
+@@ -1829,6 +1829,10 @@ int vkd3d_shader_compile(const struct vkd3d_shader_compile_info *compile_info,
+     {
+         ret = fx_parse(compile_info, out, &message_context);
+     }
++    else if (compile_info->source_type == VKD3D_SHADER_SOURCE_TX)
++    {
++        ret = tx_parse(compile_info, out, &message_context);
++    }
+     else
+     {
+         uint64_t config_flags = vkd3d_shader_init_config_flags();
+@@ -2037,6 +2041,7 @@ const enum vkd3d_shader_source_type *vkd3d_shader_get_supported_source_types(uns
+         VKD3D_SHADER_SOURCE_D3D_BYTECODE,
+         VKD3D_SHADER_SOURCE_DXBC_DXIL,
+         VKD3D_SHADER_SOURCE_FX,
++        VKD3D_SHADER_SOURCE_TX,
+     };
+ 
+     TRACE("count %p.\n", count);
+@@ -2101,6 +2106,11 @@ const enum vkd3d_shader_target_type *vkd3d_shader_get_supported_target_types(
+         VKD3D_SHADER_TARGET_D3D_ASM,
+     };
+ 
++    static const enum vkd3d_shader_target_type tx_types[] =
++    {
++        VKD3D_SHADER_TARGET_D3D_ASM,
++    };
++
+     TRACE("source_type %#x, count %p.\n", source_type, count);
+ 
+     switch (source_type)
+@@ -2125,6 +2135,10 @@ const enum vkd3d_shader_target_type *vkd3d_shader_get_supported_target_types(
+             *count = ARRAY_SIZE(fx_types);
+             return fx_types;
+ 
++        case VKD3D_SHADER_SOURCE_TX:
++            *count = ARRAY_SIZE(tx_types);
++            return tx_types;
++
+         default:
+             *count = 0;
+             return NULL;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+index a5d1b8f4e05..2ae0a57d237 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+@@ -238,7 +238,7 @@ enum vkd3d_shader_error
+     VKD3D_SHADER_WARNING_DXIL_UNDEFINED_OPERAND         = 8310,
+ 
+     VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED             = 9000,
+-    VKD3D_SHADER_ERROR_VSIR_INVALID_HANDLER             = 9001,
++    VKD3D_SHADER_ERROR_VSIR_INVALID_OPCODE              = 9001,
+     VKD3D_SHADER_ERROR_VSIR_INVALID_REGISTER_TYPE       = 9002,
+     VKD3D_SHADER_ERROR_VSIR_INVALID_WRITE_MASK          = 9003,
+     VKD3D_SHADER_ERROR_VSIR_INVALID_MODIFIERS           = 9004,
+@@ -1683,6 +1683,8 @@ int tpf_parse(const struct vkd3d_shader_compile_info *compile_info, uint64_t con
+         struct vkd3d_shader_message_context *message_context, struct vsir_program *program);
+ int fx_parse(const struct vkd3d_shader_compile_info *compile_info,
+         struct vkd3d_shader_code *out, struct vkd3d_shader_message_context *message_context);
++int tx_parse(const struct vkd3d_shader_compile_info *compile_info,
++        struct vkd3d_shader_code *out, struct vkd3d_shader_message_context *message_context);
+ 
+ void free_dxbc_shader_desc(struct dxbc_shader_desc *desc);
+ 
+-- 
+2.47.2
+
