@@ -1,4 +1,4 @@
-From c8fe58f588703421d2e85eb6376d93e3299f0880 Mon Sep 17 00:00:00 2001
+From 32aeea846670432cf1e8d90defe6ca486b710559 Mon Sep 17 00:00:00 2001
 From: "Erich E. Hoover" <erich.e.hoover@gmail.com>
 Date: Thu, 16 Jan 2014 20:56:49 -0700
 Subject: [PATCH] ntdll: Add support for creating reparse points.
@@ -7,16 +7,16 @@ Signed-off-by: Erich E. Hoover <erich.e.hoover@gmail.com>
 ---
  configure.ac            |   2 +
  dlls/ntdll/Makefile.in  |   2 +-
- dlls/ntdll/tests/file.c | 159 ++++++++++++++++++---
+ dlls/ntdll/tests/file.c | 157 ++++++++++++++++++---
  dlls/ntdll/unix/file.c  | 302 ++++++++++++++++++++++++++++++++++++++++
  include/ddk/ntifs.h     |   5 +
- 5 files changed, 451 insertions(+), 19 deletions(-)
+ 5 files changed, 450 insertions(+), 18 deletions(-)
 
 diff --git a/configure.ac b/configure.ac
-index a171e143136..abd91b6b51f 100644
+index 6d093b52526..c9e433f4e6c 100644
 --- a/configure.ac
 +++ b/configure.ac
-@@ -2084,6 +2084,8 @@ AC_CHECK_FUNCS(\
+@@ -2111,6 +2111,8 @@ AC_CHECK_FUNCS(\
  	prctl \
  	sched_getcpu \
  	sched_yield \
@@ -39,7 +39,7 @@ index f7558bb5d86..aad14d17e61 100644
  EXTRADLLFLAGS = -nodefaultlibs
  i386_EXTRADLLFLAGS = -Wl,--image-base,0x7bc00000
 diff --git a/dlls/ntdll/tests/file.c b/dlls/ntdll/tests/file.c
-index cc0afdbdb64..00f90552e84 100644
+index a2ccf3f5332..121ebe5d62a 100644
 --- a/dlls/ntdll/tests/file.c
 +++ b/dlls/ntdll/tests/file.c
 @@ -38,6 +38,7 @@
@@ -50,7 +50,7 @@ index cc0afdbdb64..00f90552e84 100644
  
  #ifndef IO_COMPLETION_ALL_ACCESS
  #define IO_COMPLETION_ALL_ACCESS 0x001F0003
-@@ -6028,32 +6029,154 @@ static void test_mailslot_name(void)
+@@ -5970,32 +5971,154 @@ static void test_mailslot_name(void)
      CloseHandle( device );
  }
  
@@ -127,15 +127,17 @@ index cc0afdbdb64..00f90552e84 100644
 +        RemoveDirectoryW(path);
 +        return;
 +    }
-+
+ 
+-    pRtlInitUnicodeString( &nameW, L"\\??\\C:\\" );
+-    InitializeObjectAttributes( &attr, &nameW, 0, NULL, NULL );
 +    /* Create the folder to be replaced by a junction point */
 +    lstrcpyW(reparse_path, path);
 +    lstrcatW(reparse_path, reparseW);
 +    bret = CreateDirectoryW(reparse_path, NULL);
 +    ok(bret, "Failed to create junction point directory.\n");
  
--    pRtlInitUnicodeString( &nameW, L"\\??\\C:\\" );
--    InitializeObjectAttributes( &attr, &nameW, 0, NULL, NULL );
+-    status = pNtOpenFile( &handle, READ_CONTROL, &attr, &io, 0, 0 );
+-    ok( !status, "open %s failed %#lx\n", wine_dbgstr_w(nameW.Buffer), status );
 +    /* Create a destination folder for the junction point to target */
 +    lstrcpyW(target_path, path);
 +    for (int i=0; i<1; i++)
@@ -148,8 +150,8 @@ index cc0afdbdb64..00f90552e84 100644
 +    ok(bret, "Failed to create junction point target directory.\n");
 +    pRtlDosPathNameToNtPathName_U(path, &nameW, NULL, NULL);
  
--    status = pNtOpenFile( &handle, READ_CONTROL, &attr, &io, 0, 0 );
--    ok( !status, "open %s failed %#lx\n", wine_dbgstr_w(nameW.Buffer), status );
+-    status = pNtFsControlFile( handle, NULL, NULL, NULL, &io, FSCTL_GET_REPARSE_POINT, NULL, 0, NULL, 0 );
+-    ok( status == STATUS_INVALID_USER_BUFFER, "expected %#lx, got %#lx\n", STATUS_INVALID_USER_BUFFER, status );
 +    /* construct a too long pathname (resulting reparse buffer over 16 kiB limit) */
 +    long_path = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, 32767);
 +    lstrcpyW(long_path, nameW.Buffer);
@@ -159,7 +161,9 @@ index cc0afdbdb64..00f90552e84 100644
 +        lstrcatW(long_path, path);
 +    }
 +    lstrcatW(long_path, targetW);
-+
+ 
+-    status = pNtFsControlFile( handle, NULL, NULL, NULL, &io, FSCTL_GET_REPARSE_POINT, NULL, 0, reparse_data, 0 );
+-    ok( status == STATUS_INVALID_USER_BUFFER, "expected %#lx, got %#lx\n", STATUS_INVALID_USER_BUFFER, status );
 +    /* Create the junction point */
 +    handle = CreateFileW(reparse_path, GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING,
 +                         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, 0);
@@ -174,8 +178,9 @@ index cc0afdbdb64..00f90552e84 100644
 +    HeapFree(GetProcessHeap(), 0, buffer);
 +    CloseHandle(handle);
  
--    status = pNtFsControlFile( handle, NULL, NULL, NULL, &io, FSCTL_GET_REPARSE_POINT, NULL, 0, NULL, 0 );
--    ok( status == STATUS_INVALID_USER_BUFFER, "expected %#lx, got %#lx\n", STATUS_INVALID_USER_BUFFER, status );
+-    /* a volume cannot be a reparse point by definition */
+-    status = pNtFsControlFile( handle, NULL, NULL, NULL, &io, FSCTL_GET_REPARSE_POINT, NULL, 0, reparse_data, 1 );
+-    ok( status == STATUS_NOT_A_REPARSE_POINT, "expected %#lx, got %#lx\n", STATUS_NOT_A_REPARSE_POINT, status );
 +    /* construct a long pathname to demonstrate correct behavior with very large reparse points */
 +    pRtlDosPathNameToNtPathName_U(path, &nameW, NULL, NULL);
 +    lstrcpyW(long_path, nameW.Buffer);
@@ -186,15 +191,11 @@ index cc0afdbdb64..00f90552e84 100644
 +    }
 +    lstrcatW(long_path, targetW);
  
--    status = pNtFsControlFile( handle, NULL, NULL, NULL, &io, FSCTL_GET_REPARSE_POINT, NULL, 0, reparse_data, 0 );
--    ok( status == STATUS_INVALID_USER_BUFFER, "expected %#lx, got %#lx\n", STATUS_INVALID_USER_BUFFER, status );
+-    CloseHandle( handle );
 +    /* use a sane (not obscenely long) target for the rest of testing */
 +    pRtlFreeUnicodeString(&nameW);
 +    pRtlDosPathNameToNtPathName_U(target_path, &nameW, NULL, NULL);
- 
--    /* a volume cannot be a reparse point by definition */
--    status = pNtFsControlFile( handle, NULL, NULL, NULL, &io, FSCTL_GET_REPARSE_POINT, NULL, 0, reparse_data, 1 );
--    ok( status == STATUS_NOT_A_REPARSE_POINT, "expected %#lx, got %#lx\n", STATUS_NOT_A_REPARSE_POINT, status );
++
 +    /* Create the junction point */
 +    handle = CreateFileW(reparse_path, GENERIC_READ | GENERIC_WRITE, 0, 0, OPEN_EXISTING,
 +                         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, 0);
@@ -207,8 +208,7 @@ index cc0afdbdb64..00f90552e84 100644
 +    bret = DeviceIoControl(handle, FSCTL_SET_REPARSE_POINT, (LPVOID)buffer, buffer_len, NULL, 0, &dwret, 0);
 +    ok(bret, "Failed to create junction point! (0x%lx)\n", GetLastError());
 +    CloseHandle(handle);
- 
--    CloseHandle( handle );
++
 +cleanup:
 +    /* Cleanup */
 +    pRtlFreeUnicodeString(&nameW);
@@ -222,16 +222,8 @@ index cc0afdbdb64..00f90552e84 100644
  }
  
  static void test_set_io_completion_ex(void)
-@@ -6193,6 +6316,6 @@ START_TEST(file)
-     test_ioctl();
-     test_query_ea();
-     test_flush_buffers_file();
--    test_mailslot_name();
-     test_reparse_points();
-+    test_mailslot_name();
- }
 diff --git a/dlls/ntdll/unix/file.c b/dlls/ntdll/unix/file.c
-index faef06ae084..a47c3d90df4 100644
+index 8d2809ca193..672a1d1fa27 100644
 --- a/dlls/ntdll/unix/file.c
 +++ b/dlls/ntdll/unix/file.c
 @@ -36,6 +36,8 @@
@@ -264,7 +256,7 @@ index faef06ae084..a47c3d90df4 100644
  #ifdef linux
  
  /* We want the real kernel dirent structure, not the libc one */
-@@ -243,6 +252,95 @@ static const BOOL is_case_sensitive = FALSE;
+@@ -244,6 +253,95 @@ static const BOOL is_case_sensitive = FALSE;
  static pthread_mutex_t dir_mutex = PTHREAD_MUTEX_INITIALIZER;
  static pthread_mutex_t mnt_mutex = PTHREAD_MUTEX_INITIALIZER;
  
@@ -360,7 +352,7 @@ index faef06ae084..a47c3d90df4 100644
  /* check if a given Unicode char is OK in a DOS short name */
  static inline BOOL is_invalid_dos_char( WCHAR ch )
  {
-@@ -1641,6 +1739,28 @@ static int parse_samba_dos_attrib_data( char *data, int len )
+@@ -1665,6 +1763,28 @@ static int parse_samba_dos_attrib_data( char *data, int len )
  }
  
  
@@ -389,7 +381,7 @@ index faef06ae084..a47c3d90df4 100644
  static BOOL fd_is_mount_point( int fd, const struct stat *st )
  {
      struct stat parent;
-@@ -3441,6 +3561,181 @@ done:
+@@ -3528,6 +3648,181 @@ done:
  }
  
  
@@ -571,7 +563,7 @@ index faef06ae084..a47c3d90df4 100644
  /******************************************************************************
   *           lookup_unix_name
   *
-@@ -6271,6 +6566,13 @@ NTSTATUS WINAPI NtFsControlFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE ap
+@@ -6415,6 +6710,13 @@ NTSTATUS WINAPI NtFsControlFile( HANDLE handle, HANDLE event, PIO_APC_ROUTINE ap
          break;
      }
  
