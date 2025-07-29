@@ -1,0 +1,823 @@
+From 362cd620cd04c3a6eaed93334690acb5193d8d4e Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Tue, 29 Jul 2025 18:36:33 +1000
+Subject: [PATCH] Updated vkd3d to f7866df201e491aa6033cc4618ab21cedd12a2e2.
+
+---
+ libs/vkd3d/libs/vkd3d-shader/dxil.c           |  4 +
+ libs/vkd3d/libs/vkd3d-shader/fx.c             | 36 ++++++-
+ libs/vkd3d/libs/vkd3d-shader/hlsl.c           | 43 ++-------
+ libs/vkd3d/libs/vkd3d-shader/hlsl.h           | 16 ++--
+ libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c   | 94 ++++++-------------
+ libs/vkd3d/libs/vkd3d-shader/ir.c             | 86 ++++++++++++++++-
+ libs/vkd3d/libs/vkd3d-shader/msl.c            | 74 +++++++++++----
+ libs/vkd3d/libs/vkd3d-shader/spirv.c          | 23 ++++-
+ .../libs/vkd3d-shader/vkd3d_shader_main.c     | 22 ++++-
+ .../libs/vkd3d-shader/vkd3d_shader_private.h  |  6 +-
+ libs/vkd3d/libs/vkd3d/device.c                |  7 +-
+ 11 files changed, 274 insertions(+), 137 deletions(-)
+
+diff --git a/libs/vkd3d/libs/vkd3d-shader/dxil.c b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+index 66e3c1ecd36..19e9f54edda 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/dxil.c
++++ b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+@@ -6291,6 +6291,10 @@ static void sm6_parser_emit_dx_texture_gather(struct sm6_parser *sm6, enum dx_in
+         return;
+     }
+ 
++    /* DXIL doesn't know about signedness, but vsir expects the offset to be signed. */
++    if (extended_offset)
++        offset.data_type = VSIR_DATA_I32;
++
+     ins = state->ins;
+     if (op == DX_TEXTURE_GATHER)
+     {
+diff --git a/libs/vkd3d/libs/vkd3d-shader/fx.c b/libs/vkd3d/libs/vkd3d-shader/fx.c
+index e5a792583b3..5b776108c95 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d/libs/vkd3d-shader/fx.c
+@@ -20,6 +20,8 @@
+ 
+ #include "hlsl.h"
+ 
++#define TAG_FX20 0x46580200
++
+ static inline size_t put_u32_unaligned(struct vkd3d_bytecode_buffer *buffer, uint32_t value)
+ {
+     return bytecode_put_bytes_unaligned(buffer, &value, sizeof(value));
+@@ -4333,6 +4335,32 @@ static void fx_parse_fx_2_array_selector(struct fx_parser *parser)
+     }
+ }
+ 
++static void fx_2_parse_code_blob(struct fx_parser *parser, const uint32_t *blob, uint32_t size)
++{
++    uint32_t tag;
++
++    if (size < sizeof(tag))
++        return;
++
++    tag = *blob;
++
++    if (tag == TAG_FX20)
++    {
++        fx_2_parse_fxlvm_expression(parser, blob, size);
++        return;
++    }
++
++    tag >>= 16;
++    if (tag == 0xfffe || tag == 0xffff)
++    {
++        fx_parse_shader_blob(parser, VKD3D_SHADER_SOURCE_D3D_BYTECODE, blob, size);
++        vkd3d_string_buffer_printf(&parser->buffer, "\n");
++        return;
++    }
++
++    fx_parser_error(parser, VKD3D_SHADER_ERROR_FX_INVALID_DATA, "Unrecognized code blob type, tag 0x%08x.", *blob);
++}
++
+ static void fx_parse_fx_2_complex_state(struct fx_parser *parser)
+ {
+     struct
+@@ -4374,7 +4402,7 @@ static void fx_parse_fx_2_complex_state(struct fx_parser *parser)
+         size = fx_parser_read_u32(parser);
+         data = fx_parser_get_ptr(parser, size);
+         vkd3d_string_buffer_printf(&parser->buffer, "blob size %u\n", size);
+-        fx_2_parse_fxlvm_expression(parser, data, size);
++        fx_2_parse_code_blob(parser, data, size);
+         fx_parser_skip(parser, align(size, 4));
+     }
+     else
+@@ -5164,6 +5192,12 @@ static void fx_2_parse_fxlvm_expression(struct fx_parser *parser, const uint32_t
+     code.ptr = find_d3dbc_section(blob, count, TAG_FXLC, &count);
+     code.end = code.ptr + count;
+ 
++    if (!code.ptr)
++    {
++        fx_parser_error(parser, VKD3D_SHADER_ERROR_FX_INVALID_DATA, "Failed to locate expression code section.");
++        return;
++    }
++
+     fx_parse_fxlvm_expression(parser, &code);
+ }
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.c b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+index e2c68d4afb5..a089651eaf7 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+@@ -5016,9 +5016,12 @@ int hlsl_compile_shader(const struct vkd3d_shader_compile_info *compile_info,
+ {
+     enum vkd3d_shader_target_type target_type = compile_info->target_type;
+     const struct vkd3d_shader_hlsl_source_info *hlsl_source_info;
++    uint64_t config_flags = vkd3d_shader_init_config_flags();
+     struct hlsl_ir_function_decl *decl, *entry_func = NULL;
++    struct vkd3d_shader_code reflection_data = {0};
+     const struct hlsl_profile_info *profile;
+     struct hlsl_ir_function *func;
++    struct vsir_program program;
+     const char *entry_point;
+     struct hlsl_ctx ctx;
+     int ret;
+@@ -5118,43 +5121,15 @@ int hlsl_compile_shader(const struct vkd3d_shader_compile_info *compile_info,
+         return VKD3D_ERROR_INVALID_SHADER;
+     }
+ 
+-    if (target_type == VKD3D_SHADER_TARGET_SPIRV_BINARY
+-            || target_type == VKD3D_SHADER_TARGET_SPIRV_TEXT
+-            || target_type == VKD3D_SHADER_TARGET_GLSL
+-            || target_type == VKD3D_SHADER_TARGET_D3D_ASM)
++    if ((ret = hlsl_emit_vsir(&ctx, compile_info, entry_func, &program, &reflection_data)) >= 0)
+     {
+-        uint64_t config_flags = vkd3d_shader_init_config_flags();
+-        struct vkd3d_shader_compile_info info = *compile_info;
+-        struct vsir_program program;
+-
+-        if (profile->major_version < 4)
+-        {
+-            if ((ret = hlsl_emit_bytecode(&ctx, entry_func, VKD3D_SHADER_TARGET_D3D_BYTECODE, &info.source)) < 0)
+-                goto done;
+-            info.source_type = VKD3D_SHADER_SOURCE_D3D_BYTECODE;
+-            ret = d3dbc_parse(&info, config_flags, message_context, &program);
+-        }
+-        else
+-        {
+-            if ((ret = hlsl_emit_bytecode(&ctx, entry_func, VKD3D_SHADER_TARGET_DXBC_TPF, &info.source)) < 0)
+-                goto done;
+-            info.source_type = VKD3D_SHADER_SOURCE_DXBC_TPF;
+-            ret = tpf_parse(&info, config_flags, message_context, &program);
+-        }
+-        if (ret >= 0)
+-        {
+-            ret = vsir_program_compile(&program, config_flags, &info, out, message_context);
+-            vsir_program_cleanup(&program);
+-        }
+-        vkd3d_shader_free_shader_code(&info.source);
+-    }
+-    else
+-    {
+-        ret = hlsl_emit_bytecode(&ctx, entry_func, target_type, out);
++        vsir_program_trace(&program);
++        ret = vsir_program_compile(&program, &reflection_data, config_flags, compile_info, out, message_context);
++        vkd3d_shader_free_shader_code(&reflection_data);
++        vsir_program_cleanup(&program);
+     }
+-
+-done:
+     hlsl_ctx_cleanup(&ctx);
++
+     return ret;
+ }
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.h b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+index 47cc361a48a..d899c33f8a2 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.h
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+@@ -278,11 +278,12 @@ struct hlsl_struct_field
+     size_t name_bytecode_offset;
+ };
+ 
+-/* Information of the register(s) allocated for an instruction node or variable.
+- * These values are initialized at the end of hlsl_emit_bytecode(), after the compilation passes,
+- *   just before writing the bytecode.
+- * The type of register (register class) is implied from its use, so it is not stored in this
+- *   struct. */
++/* Information about the register(s) allocated for an instruction node or
++ * variable. These values are initialised at the end of hlsl_emit_vsir(),
++ * after the compilation passes, as vsir starts being generated from HLSL IR.
++ *
++ * The type of register (register class) is implied by its usage, so it is not
++ * stored in this structure. */
+ struct hlsl_reg
+ {
+     /* Register number of the first register allocated. */
+@@ -1625,9 +1626,10 @@ struct hlsl_state_block_entry *clone_stateblock_entry(struct hlsl_ctx *ctx,
+ 
+ void hlsl_lower_index_loads(struct hlsl_ctx *ctx, struct hlsl_block *body);
+ void hlsl_run_const_passes(struct hlsl_ctx *ctx, struct hlsl_block *body);
+-int hlsl_emit_bytecode(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl *entry_func,
+-        enum vkd3d_shader_target_type target_type, struct vkd3d_shader_code *out);
+ int hlsl_emit_effect_binary(struct hlsl_ctx *ctx, struct vkd3d_shader_code *out);
++int hlsl_emit_vsir(struct hlsl_ctx *ctx, const struct vkd3d_shader_compile_info *compile_info,
++        struct hlsl_ir_function_decl *entry_func, struct vsir_program *program,
++        struct vkd3d_shader_code *reflection_data);
+ 
+ bool hlsl_init_deref(struct hlsl_ctx *ctx, struct hlsl_deref *deref, struct hlsl_ir_var *var, unsigned int path_len);
+ bool hlsl_init_deref_from_index_chain(struct hlsl_ctx *ctx, struct hlsl_deref *deref, struct hlsl_ir_node *chain);
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+index 8bfa157a12b..e3ca1b25eb9 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+@@ -9606,8 +9606,9 @@ static void sm1_generate_vsir_block(struct hlsl_ctx *ctx, struct hlsl_block *blo
+     }
+ }
+ 
+-static void sm1_generate_vsir(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl *func,
+-        struct list *semantic_vars, struct hlsl_block *body, uint64_t config_flags, struct vsir_program *program)
++static void sm1_generate_vsir(struct hlsl_ctx *ctx, const struct vkd3d_shader_compile_info *compile_info,
++        struct hlsl_ir_function_decl *func, struct list *semantic_vars,
++        struct hlsl_block *body, uint64_t config_flags, struct vsir_program *program)
+ {
+     struct vkd3d_shader_version version = {0};
+     struct hlsl_block block;
+@@ -9615,7 +9616,7 @@ static void sm1_generate_vsir(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl
+     version.major = ctx->profile->major_version;
+     version.minor = ctx->profile->minor_version;
+     version.type = ctx->profile->type;
+-    if (!vsir_program_init(program, NULL, &version, 0, VSIR_CF_STRUCTURED, VSIR_NORMALISED_SM4))
++    if (!vsir_program_init(program, compile_info, &version, 0, VSIR_CF_STRUCTURED, VSIR_NORMALISED_SM4))
+     {
+         ctx->result = VKD3D_ERROR_OUT_OF_MEMORY;
+         return;
+@@ -12339,7 +12340,8 @@ static void sm4_generate_vsir_add_dcl_stream(struct hlsl_ctx *ctx,
+ /* OBJECTIVE: Translate all the information from ctx and entry_func to the
+  * vsir_program, so it can be used as input to tpf_compile() without relying
+  * on ctx and entry_func. */
+-static void sm4_generate_vsir(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl *func,
++static void sm4_generate_vsir(struct hlsl_ctx *ctx,
++        const struct vkd3d_shader_compile_info *compile_info, struct hlsl_ir_function_decl *func,
+         struct list *semantic_vars, struct hlsl_block *body, struct list *patch_semantic_vars,
+         struct hlsl_block *patch_body, uint64_t config_flags, struct vsir_program *program)
+ {
+@@ -12352,7 +12354,7 @@ static void sm4_generate_vsir(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl
+     version.minor = ctx->profile->minor_version;
+     version.type = ctx->profile->type;
+ 
+-    if (!vsir_program_init(program, NULL, &version, 0, VSIR_CF_STRUCTURED, VSIR_NORMALISED_SM4))
++    if (!vsir_program_init(program, compile_info, &version, 0, VSIR_CF_STRUCTURED, VSIR_NORMALISED_SM4))
+     {
+         ctx->result = VKD3D_ERROR_OUT_OF_MEMORY;
+         return;
+@@ -13902,10 +13904,12 @@ static void process_entry_function(struct hlsl_ctx *ctx, struct list *semantic_v
+         validate_max_output_size(ctx, semantic_vars, output_reg_count, &entry_func->loc);
+ }
+ 
+-int hlsl_emit_bytecode(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl *entry_func,
+-        enum vkd3d_shader_target_type target_type, struct vkd3d_shader_code *out)
++int hlsl_emit_vsir(struct hlsl_ctx *ctx, const struct vkd3d_shader_compile_info *compile_info,
++        struct hlsl_ir_function_decl *entry_func, struct vsir_program *program,
++        struct vkd3d_shader_code *reflection_data)
+ {
+     struct hlsl_block global_uniform_block, body, patch_body;
++    uint32_t config_flags = vkd3d_shader_init_config_flags();
+     const struct hlsl_profile_info *profile = ctx->profile;
+     struct list semantic_vars, patch_semantic_vars;
+     struct hlsl_ir_var *var;
+@@ -13976,65 +13980,29 @@ int hlsl_emit_bytecode(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl *entry
+     if (ctx->result)
+         return ctx->result;
+ 
+-    switch (target_type)
++    if (ctx->profile->major_version < 4)
+     {
+-        case VKD3D_SHADER_TARGET_D3D_BYTECODE:
+-        {
+-            uint32_t config_flags = vkd3d_shader_init_config_flags();
+-            struct vkd3d_shader_code ctab = {0};
+-            struct vsir_program program;
+-            int result;
+-
+-            sm1_generate_ctab(ctx, &ctab);
+-            if (ctx->result)
+-                return ctx->result;
+-
+-            sm1_generate_vsir(ctx, entry_func, &semantic_vars, &body, config_flags, &program);
+-            if (ctx->result)
+-            {
+-                vsir_program_cleanup(&program);
+-                vkd3d_shader_free_shader_code(&ctab);
+-                return ctx->result;
+-            }
+-
+-            vsir_program_trace(&program);
+-
+-            result = d3dbc_compile(&program, config_flags, NULL, &ctab, out, ctx->message_context);
+-            vsir_program_cleanup(&program);
+-            vkd3d_shader_free_shader_code(&ctab);
+-            return result;
+-        }
+-
+-        case VKD3D_SHADER_TARGET_DXBC_TPF:
+-        {
+-            uint32_t config_flags = vkd3d_shader_init_config_flags();
+-            struct vkd3d_shader_code rdef = {0};
+-            struct vsir_program program;
+-            int result;
+-
+-            sm4_generate_rdef(ctx, &rdef);
+-            if (ctx->result)
+-                return ctx->result;
+-
+-            sm4_generate_vsir(ctx, entry_func, &semantic_vars, &body,
+-                    &patch_semantic_vars, &patch_body, config_flags, &program);
+-            if (ctx->result)
+-            {
+-                vsir_program_cleanup(&program);
+-                vkd3d_shader_free_shader_code(&rdef);
+-                return ctx->result;
+-            }
++        sm1_generate_ctab(ctx, reflection_data);
++        if (ctx->result)
++            return ctx->result;
+ 
+-            vsir_program_trace(&program);
++        sm1_generate_vsir(ctx, compile_info, entry_func, &semantic_vars, &body, config_flags, program);
++    }
++    else
++    {
++        sm4_generate_rdef(ctx, reflection_data);
++        if (ctx->result)
++            return ctx->result;
+ 
+-            result = tpf_compile(&program, config_flags, &rdef, out, ctx->message_context);
+-            vsir_program_cleanup(&program);
+-            vkd3d_shader_free_shader_code(&rdef);
+-            return result;
+-        }
++        sm4_generate_vsir(ctx, compile_info, entry_func, &semantic_vars, &body,
++                &patch_semantic_vars, &patch_body, config_flags, program);
++    }
+ 
+-        default:
+-            ERR("Unsupported shader target type %#x.\n", target_type);
+-            return VKD3D_ERROR_INVALID_ARGUMENT;
++    if (ctx->result)
++    {
++        vsir_program_cleanup(program);
++        vkd3d_shader_free_shader_code(reflection_data);
+     }
++
++    return ctx->result;
+ }
+diff --git a/libs/vkd3d/libs/vkd3d-shader/ir.c b/libs/vkd3d/libs/vkd3d-shader/ir.c
+index 92580a6a2df..c3bcf9058e1 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/ir.c
++++ b/libs/vkd3d/libs/vkd3d-shader/ir.c
+@@ -10800,6 +10800,38 @@ static void vsir_validate_cast_operation(struct validation_context *ctx,
+                 dst_data_type, vsir_opcode_get_name(instruction->opcode, "<unknown>"), instruction->opcode);
+ }
+ 
++static void vsir_validate_shift_operation(struct validation_context *ctx,
++        const struct vkd3d_shader_instruction *instruction)
++{
++    enum vsir_data_type data_type;
++
++    static const bool types[] =
++    {
++        [VSIR_DATA_I32] = true,
++        [VSIR_DATA_U32] = true,
++        [VSIR_DATA_U64] = true,
++    };
++
++    data_type = instruction->dst[0].reg.data_type;
++    if ((size_t)data_type >= ARRAY_SIZE(types) || !types[data_type])
++        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
++                "Invalid destination data type %#x for shift operation \"%s\" (%#x).",
++                data_type, vsir_opcode_get_name(instruction->opcode, "<unknown>"), instruction->opcode);
++
++    if (instruction->src[0].reg.data_type != data_type)
++        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
++                "Data type %#x for source operand 0 doesn't match destination data type %#x "
++                "for shift operation \"%s\" (%#x).",
++                instruction->src[0].reg.data_type, data_type,
++                vsir_opcode_get_name(instruction->opcode, "<unknown>"), instruction->opcode);
++
++    data_type = instruction->src[1].reg.data_type;
++    if ((size_t)data_type >= ARRAY_SIZE(types) || !types[data_type])
++        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
++                "Invalid source operand 1 data type %#x for shift operation \"%s\" (%#x).",
++                data_type, vsir_opcode_get_name(instruction->opcode, "<unknown>"), instruction->opcode);
++}
++
+ static void vsir_validate_branch(struct validation_context *ctx, const struct vkd3d_shader_instruction *instruction)
+ {
+     size_t i;
+@@ -11486,6 +11518,54 @@ static void vsir_validate_ret(struct validation_context *ctx, const struct vkd3d
+     ctx->inside_block = false;
+ }
+ 
++static void vsir_validate_throw_invalid_dst_type_error_with_flags(struct validation_context *ctx,
++        const struct vkd3d_shader_instruction *instruction)
++{
++    enum vsir_data_type dst_data_type = instruction->dst[0].reg.data_type;
++
++    validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
++            "Invalid destination data type %#x for operation \"%s\" (%#x) with flags %#x.", dst_data_type,
++            vsir_opcode_get_name(instruction->opcode, "<unknown>"), instruction->opcode, instruction->flags);
++}
++
++static void vsir_validate_sample_info(struct validation_context *ctx,
++        const struct vkd3d_shader_instruction *instruction)
++{
++    enum vsir_data_type dst_data_type = instruction->dst[0].reg.data_type;
++
++    switch (dst_data_type)
++    {
++        case VSIR_DATA_F32:
++        case VSIR_DATA_U32:
++            if (!!(instruction->flags & VKD3DSI_SAMPLE_INFO_UINT) != (dst_data_type == VSIR_DATA_U32))
++                vsir_validate_throw_invalid_dst_type_error_with_flags(ctx, instruction);
++            break;
++
++        default:
++            vsir_validate_throw_invalid_dst_type_error_with_flags(ctx, instruction);
++            break;
++    }
++}
++
++static void vsir_validate_resinfo(struct validation_context *ctx,
++        const struct vkd3d_shader_instruction *instruction)
++{
++    enum vsir_data_type dst_data_type = instruction->dst[0].reg.data_type;
++
++    switch (dst_data_type)
++    {
++        case VSIR_DATA_F32:
++        case VSIR_DATA_U32:
++            if (!!(instruction->flags & VKD3DSI_RESINFO_UINT) != (dst_data_type == VSIR_DATA_U32))
++                vsir_validate_throw_invalid_dst_type_error_with_flags(ctx, instruction);
++            break;
++
++        default:
++            vsir_validate_throw_invalid_dst_type_error_with_flags(ctx, instruction);
++            break;
++    }
++}
++
+ static void vsir_validate_switch(struct validation_context *ctx, const struct vkd3d_shader_instruction *instruction)
+ {
+     vsir_validate_cf_type(ctx, instruction, VSIR_CF_STRUCTURED);
+@@ -11629,8 +11709,8 @@ static const struct vsir_validator_instruction_desc vsir_validator_instructions[
+     [VSIR_OP_INEG] =                             {1,   1, vsir_validate_integer_elementwise_operation},
+     [VSIR_OP_IREM] =                             {1,   2, vsir_validate_integer_elementwise_operation},
+     [VSIR_OP_ISFINITE] =                         {1,   1, vsir_validate_float_comparison_operation},
+-    [VSIR_OP_ISHL] =                             {1,   2, vsir_validate_integer_elementwise_operation},
+-    [VSIR_OP_ISHR] =                             {1,   2, vsir_validate_integer_elementwise_operation},
++    [VSIR_OP_ISHL] =                             {1,   2, vsir_validate_shift_operation},
++    [VSIR_OP_ISHR] =                             {1,   2, vsir_validate_shift_operation},
+     [VSIR_OP_ISINF] =                            {1,   1, vsir_validate_float_comparison_operation},
+     [VSIR_OP_ISNAN] =                            {1,   1, vsir_validate_float_comparison_operation},
+     [VSIR_OP_ITOF] =                             {1,   1, vsir_validate_itof},
+@@ -11653,9 +11733,11 @@ static const struct vsir_validator_instruction_desc vsir_validator_instructions[
+     [VSIR_OP_PHI] =                              {1, ~0u, vsir_validate_phi},
+     [VSIR_OP_RCP] =                              {1,   1, vsir_validate_float_elementwise_operation},
+     [VSIR_OP_REP] =                              {0,   1, vsir_validate_rep},
++    [VSIR_OP_RESINFO] =                          {1,   2, vsir_validate_resinfo},
+     [VSIR_OP_RET] =                              {0,   0, vsir_validate_ret},
+     [VSIR_OP_ROUND_NE] =                         {1,   1, vsir_validate_float_elementwise_operation},
+     [VSIR_OP_ROUND_NI] =                         {1,   1, vsir_validate_float_elementwise_operation},
++    [VSIR_OP_SAMPLE_INFO] =                      {1,   1, vsir_validate_sample_info},
+     [VSIR_OP_SWITCH] =                           {0,   1, vsir_validate_switch},
+     [VSIR_OP_SWITCH_MONOLITHIC] =                {0, ~0u, vsir_validate_switch_monolithic},
+ };
+diff --git a/libs/vkd3d/libs/vkd3d-shader/msl.c b/libs/vkd3d/libs/vkd3d-shader/msl.c
+index d95b95f9738..d07608bd26f 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/msl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/msl.c
+@@ -18,6 +18,8 @@
+ 
+ #include "vkd3d_shader_private.h"
+ 
++#define MAX_IO_REG_COUNT 32
++
+ enum msl_data_type
+ {
+     MSL_DATA_FLOAT,
+@@ -481,7 +483,7 @@ static enum msl_data_type msl_print_register_name(struct vkd3d_string_buffer *bu
+                         "Internal compiler error: Unhandled sample coverage mask in shader type #%x.",
+                         gen->program->shader_version.type);
+             vkd3d_string_buffer_printf(buffer, "o_mask");
+-            return MSL_DATA_FLOAT;
++            return MSL_DATA_UNION;
+ 
+         default:
+             msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+@@ -946,10 +948,10 @@ static void msl_ld(struct msl_generator *gen, const struct vkd3d_shader_instruct
+     const struct vkd3d_shader_descriptor_info1 *descriptor;
+     const struct vkd3d_shader_descriptor_binding *binding;
+     enum vkd3d_shader_resource_type resource_type;
++    uint32_t coord_mask, write_mask_size;
+     struct vkd3d_string_buffer *read;
+     enum vsir_data_type data_type;
+     unsigned int srv_binding;
+-    uint32_t coord_mask;
+     struct msl_dst dst;
+ 
+     if (vkd3d_shader_instruction_has_texel_offset(ins))
+@@ -1009,7 +1011,12 @@ static void msl_ld(struct msl_generator *gen, const struct vkd3d_shader_instruct
+     msl_dst_init(&dst, gen, ins, &ins->dst[0]);
+     read = vkd3d_string_buffer_get(&gen->string_buffers);
+ 
+-    vkd3d_string_buffer_printf(read, "as_type<uint4>(");
++    vkd3d_string_buffer_printf(read, "as_type<");
++    msl_print_resource_datatype(gen, read, ins->dst[0].reg.data_type);
++    write_mask_size = vkd3d_popcount(ins->dst[0].write_mask);
++    if (write_mask_size != 1)
++        vkd3d_string_buffer_printf(read, "%u", write_mask_size);
++    vkd3d_string_buffer_printf(read, ">(");
+     msl_print_srv_name(read, gen, srv_binding, resource_type_info, data_type, false);
+     vkd3d_string_buffer_printf(read, ".read(");
+     msl_print_src_with_type(read, gen, &ins->src[0], coord_mask, VSIR_DATA_U32);
+@@ -1026,8 +1033,9 @@ static void msl_ld(struct msl_generator *gen, const struct vkd3d_shader_instruct
+         else
+             msl_print_src_with_type(read, gen, &ins->src[2], VKD3DSP_WRITEMASK_0, VSIR_DATA_U32);
+     }
+-    vkd3d_string_buffer_printf(read, "))");
++    vkd3d_string_buffer_printf(read, ")");
+     msl_print_swizzle(read, ins->src[1].swizzle, ins->dst[0].write_mask);
++    vkd3d_string_buffer_printf(read, ")");
+ 
+     msl_print_assignment(gen, &dst, "%s", read->buffer);
+ 
+@@ -1046,10 +1054,10 @@ static void msl_sample(struct msl_generator *gen, const struct vkd3d_shader_inst
+     const struct vkd3d_shader_descriptor_info1 *d;
+     enum vkd3d_shader_resource_type resource_type;
+     unsigned int srv_binding, sampler_binding;
++    uint32_t coord_mask, write_mask_size;
+     struct vkd3d_string_buffer *sample;
+     enum vsir_data_type data_type;
+     unsigned int component_idx;
+-    uint32_t coord_mask;
+     struct msl_dst dst;
+ 
+     bias = ins->opcode == VSIR_OP_SAMPLE_B;
+@@ -1168,8 +1176,12 @@ static void msl_sample(struct msl_generator *gen, const struct vkd3d_shader_inst
+     msl_dst_init(&dst, gen, ins, &ins->dst[0]);
+     sample = vkd3d_string_buffer_get(&gen->string_buffers);
+ 
+-    if (ins->dst[0].reg.data_type == VSIR_DATA_U32)
+-        vkd3d_string_buffer_printf(sample, "as_type<uint4>(");
++    vkd3d_string_buffer_printf(sample, "as_type<");
++    msl_print_resource_datatype(gen, sample, ins->dst[0].reg.data_type);
++    write_mask_size = vkd3d_popcount(ins->dst[0].write_mask);
++    if (write_mask_size != 1)
++        vkd3d_string_buffer_printf(sample, "%u", write_mask_size);
++    vkd3d_string_buffer_printf(sample, ">(");
+     msl_print_srv_name(sample, gen, srv_binding, resource_type_info, data_type, compare);
+     if (gather && compare)
+         vkd3d_string_buffer_printf(sample, ".gather_compare(");
+@@ -1238,10 +1250,9 @@ static void msl_sample(struct msl_generator *gen, const struct vkd3d_shader_inst
+         vkd3d_string_buffer_printf(sample, ", component::%c", "xyzw"[component_idx]);
+     }
+     vkd3d_string_buffer_printf(sample, ")");
+-    if (ins->dst[0].reg.data_type == VSIR_DATA_U32)
+-        vkd3d_string_buffer_printf(sample, ")");
+     if (!compare || gather)
+         msl_print_swizzle(sample, resource->swizzle, ins->dst[0].write_mask);
++    vkd3d_string_buffer_printf(sample, ")");
+ 
+     msl_print_assignment(gen, &dst, "%s", sample->buffer);
+ 
+@@ -1402,8 +1413,9 @@ static void msl_ret(struct msl_generator *gen, const struct vkd3d_shader_instruc
+ 
+ static void msl_dcl_indexable_temp(struct msl_generator *gen, const struct vkd3d_shader_instruction *ins)
+ {
++    const char *type = ins->declaration.indexable_temp.component_count == 4 ? "vkd3d_vec4" : "vkd3d_scalar";
+     msl_print_indent(gen->buffer, gen->indent);
+-    vkd3d_string_buffer_printf(gen->buffer, "vkd3d_vec4 x%u[%u];\n",
++    vkd3d_string_buffer_printf(gen->buffer, "%s x%u[%u];\n", type,
+             ins->declaration.indexable_temp.register_idx,
+             ins->declaration.indexable_temp.register_size);
+ }
+@@ -1613,6 +1625,7 @@ static void msl_generate_input_struct_declarations(struct msl_generator *gen)
+     const struct shader_signature *signature = &gen->program->input_signature;
+     enum vkd3d_shader_type type = gen->program->shader_version.type;
+     struct vkd3d_string_buffer *buffer = gen->buffer;
++    bool locations[MAX_IO_REG_COUNT] = {0};
+     const struct signature_element *e;
+     unsigned int i;
+ 
+@@ -1625,6 +1638,18 @@ static void msl_generate_input_struct_declarations(struct msl_generator *gen)
+         if (e->target_location == SIGNATURE_TARGET_LOCATION_UNUSED)
+             continue;
+ 
++        if (e->target_location >= ARRAY_SIZE(locations))
++        {
++            msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
++                    "Internal compiler error: Unhandled input target location %u.", e->target_location);
++            continue;
++        }
++
++        if (locations[e->target_location])
++            msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
++                    "Internal compiler error: Unhandled duplicate input target location %u.", e->target_location);
++        locations[e->target_location] = true;
++
+         switch (e->sysval_semantic)
+         {
+             case VKD3D_SHADER_SV_NONE:
+@@ -1776,6 +1801,7 @@ static void msl_generate_output_struct_declarations(struct msl_generator *gen)
+     const struct shader_signature *signature = &gen->program->output_signature;
+     enum vkd3d_shader_type type = gen->program->shader_version.type;
+     struct vkd3d_string_buffer *buffer = gen->buffer;
++    bool locations[MAX_IO_REG_COUNT] = {0};
+     const struct signature_element *e;
+     unsigned int i;
+ 
+@@ -1789,17 +1815,22 @@ static void msl_generate_output_struct_declarations(struct msl_generator *gen)
+                 || e->sysval_semantic == VKD3D_SHADER_SV_DEPTH)
+             continue;
+ 
+-        if (e->min_precision != VKD3D_SHADER_MINIMUM_PRECISION_NONE)
++        if (e->target_location >= ARRAY_SIZE(locations))
+         {
+             msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+-                    "Internal compiler error: Unhandled minimum precision %#x.", e->min_precision);
++                    "Internal compiler error: Unhandled input target location %u.", e->target_location);
+             continue;
+         }
+ 
+-        if (e->interpolation_mode != VKD3DSIM_NONE)
++        if (locations[e->target_location])
++            msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
++                    "Internal compiler error: Unhandled duplicate input target location %u.", e->target_location);
++        locations[e->target_location] = true;
++
++        if (e->min_precision != VKD3D_SHADER_MINIMUM_PRECISION_NONE)
+         {
+             msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+-                    "Internal compiler error: Unhandled interpolation mode %#x.", e->interpolation_mode);
++                    "Internal compiler error: Unhandled minimum precision %#x.", e->min_precision);
+             continue;
+         }
+ 
+@@ -1958,7 +1989,7 @@ static void msl_generate_entrypoint_epilogue(struct msl_generator *gen)
+     }
+ 
+     if (bitmap_is_set(gen->program->io_dcls, VKD3DSPR_SAMPLEMASK))
+-        vkd3d_string_buffer_printf(gen->buffer, "    output.shader_out_mask = as_type<uint>(o_mask);\n");
++        vkd3d_string_buffer_printf(gen->buffer, "    output.shader_out_mask = o_mask.u;\n");
+ }
+ 
+ static void msl_generate_entrypoint(struct msl_generator *gen)
+@@ -2001,11 +2032,11 @@ static void msl_generate_entrypoint(struct msl_generator *gen)
+     vkd3d_string_buffer_printf(gen->buffer, "vkd3d_%s_in input [[stage_in]])\n{\n", gen->prefix);
+ 
+     /* TODO: declare #maximum_register + 1 */
+-    vkd3d_string_buffer_printf(gen->buffer, "    vkd3d_vec4 %s_in[%u];\n", gen->prefix, 32);
+-    vkd3d_string_buffer_printf(gen->buffer, "    vkd3d_vec4 %s_out[%u];\n", gen->prefix, 32);
++    vkd3d_string_buffer_printf(gen->buffer, "    vkd3d_vec4 %s_in[%u];\n", gen->prefix, MAX_IO_REG_COUNT);
++    vkd3d_string_buffer_printf(gen->buffer, "    vkd3d_vec4 %s_out[%u];\n", gen->prefix, MAX_IO_REG_COUNT);
+     vkd3d_string_buffer_printf(gen->buffer, "    vkd3d_%s_out output;\n", gen->prefix);
+     if (bitmap_is_set(gen->program->io_dcls, VKD3DSPR_SAMPLEMASK))
+-        vkd3d_string_buffer_printf(gen->buffer, "    float o_mask;\n");
++        vkd3d_string_buffer_printf(gen->buffer, "    vkd3d_scalar o_mask;\n");
+     vkd3d_string_buffer_printf(gen->buffer, "\n");
+ 
+     msl_generate_entrypoint_prologue(gen);
+@@ -2042,6 +2073,11 @@ static int msl_generator_generate(struct msl_generator *gen, struct vkd3d_shader
+         msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+                 "Internal compiler error: Unhandled global flags %#"PRIx64".", (uint64_t)gen->program->global_flags);
+ 
++    vkd3d_string_buffer_printf(gen->buffer, "union vkd3d_scalar\n{\n");
++    vkd3d_string_buffer_printf(gen->buffer, "    uint u;\n");
++    vkd3d_string_buffer_printf(gen->buffer, "    int i;\n");
++    vkd3d_string_buffer_printf(gen->buffer, "    float f;\n};\n\n");
++
+     vkd3d_string_buffer_printf(gen->buffer, "union vkd3d_vec4\n{\n");
+     vkd3d_string_buffer_printf(gen->buffer, "    uint4 u;\n");
+     vkd3d_string_buffer_printf(gen->buffer, "    int4 i;\n");
+@@ -2082,7 +2118,7 @@ static int msl_generator_generate(struct msl_generator *gen, struct vkd3d_shader
+     if (bitmap_is_set(gen->program->io_dcls, VKD3DSPR_DEPTHOUT))
+         vkd3d_string_buffer_printf(gen->buffer, ", thread float &o_depth");
+     if (bitmap_is_set(gen->program->io_dcls, VKD3DSPR_SAMPLEMASK))
+-        vkd3d_string_buffer_printf(gen->buffer, ", thread float &o_mask");
++        vkd3d_string_buffer_printf(gen->buffer, ", thread vkd3d_scalar &o_mask");
+     if (gen->program->descriptors.descriptor_count)
+         vkd3d_string_buffer_printf(gen->buffer, ", constant descriptor *descriptors");
+     vkd3d_string_buffer_printf(gen->buffer, ")\n{\n");
+diff --git a/libs/vkd3d/libs/vkd3d-shader/spirv.c b/libs/vkd3d/libs/vkd3d-shader/spirv.c
+index 2e6d0c786d0..8400db85084 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/spirv.c
++++ b/libs/vkd3d/libs/vkd3d-shader/spirv.c
+@@ -982,6 +982,7 @@ struct vkd3d_spirv_builder
+     SpvExecutionModel execution_model;
+ 
+     uint32_t current_id;
++    uint32_t source_name_id;
+     uint32_t main_function_id;
+     struct rb_tree declarations;
+     uint32_t type_sampler_id;
+@@ -1568,10 +1569,15 @@ static uint32_t vkd3d_spirv_build_op_string(struct vkd3d_spirv_builder *builder,
+ static void vkd3d_spirv_build_op_source(struct vkd3d_spirv_builder *builder, const char *source_name)
+ {
+     struct vkd3d_spirv_stream *stream = &builder->debug_stream;
+-    uint32_t source_id;
+ 
+-    source_id = vkd3d_spirv_build_op_string(builder, source_name ? source_name : "<anonymous>");
+-    vkd3d_spirv_build_op3(stream, SpvOpSource, 0, 0, source_id);
++    builder->source_name_id = vkd3d_spirv_build_op_string(builder, source_name ? source_name : "<anonymous>");
++    vkd3d_spirv_build_op3(stream, SpvOpSource, 0, 0, builder->source_name_id);
++}
++
++static void vkd3d_spirv_build_op_line(struct vkd3d_spirv_builder *builder, const struct vkd3d_shader_location *location)
++{
++    vkd3d_spirv_build_op3(&builder->function_stream, SpvOpLine,
++            builder->source_name_id, location->line, location->column);
+ }
+ 
+ static void vkd3d_spirv_build_op_member_name(struct vkd3d_spirv_builder *builder,
+@@ -10548,6 +10554,17 @@ static int spirv_compiler_handle_instruction(struct spirv_compiler *compiler,
+     int ret = VKD3D_OK;
+ 
+     compiler->location = instruction->location;
++    /* radeonsi from Mesa 20.3.5 seems to get confused by OpLine instructions
++     * before OpFunction, seemingly causing it to fail to find the entry
++     * point. As far as I can tell that's not prohibited, and the validation
++     * layers don't seem to mind either, but perhaps it's best avoided.
++     * Notably, radv from the same Mesa version doesn't mind either.
++     *
++     * This is an issue for hull shaders in particular, because we don't go
++     * through vkd3d_spirv_builder_begin_main_function() before getting here
++     * in that case. */
++    if (!compiler->strip_debug && compiler->spirv_builder.function_stream.word_count)
++        vkd3d_spirv_build_op_line(&compiler->spirv_builder, &instruction->location);
+ 
+     switch (instruction->opcode)
+     {
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
+index a3c00af5d8b..a91846a46b9 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
+@@ -1733,9 +1733,9 @@ int vkd3d_shader_scan(const struct vkd3d_shader_compile_info *compile_info, char
+     return ret;
+ }
+ 
+-int vsir_program_compile(struct vsir_program *program, uint64_t config_flags,
+-        const struct vkd3d_shader_compile_info *compile_info, struct vkd3d_shader_code *out,
+-        struct vkd3d_shader_message_context *message_context)
++int vsir_program_compile(struct vsir_program *program, const struct vkd3d_shader_code *reflection_data,
++        uint64_t config_flags, const struct vkd3d_shader_compile_info *compile_info,
++        struct vkd3d_shader_code *out, struct vkd3d_shader_message_context *message_context)
+ {
+     struct vkd3d_shader_scan_combined_resource_sampler_info combined_sampler_info;
+     struct vkd3d_shader_compile_info scan_info;
+@@ -1746,9 +1746,23 @@ int vsir_program_compile(struct vsir_program *program, uint64_t config_flags,
+     switch (compile_info->target_type)
+     {
+         case VKD3D_SHADER_TARGET_D3D_ASM:
++            if ((ret = vsir_program_scan(program, &scan_info, message_context, true)) < 0)
++                return ret;
+             ret = d3d_asm_compile(program, compile_info, out, VSIR_ASM_FLAG_NONE);
+             break;
+ 
++        case VKD3D_SHADER_TARGET_D3D_BYTECODE:
++            if ((ret = vsir_program_scan(program, &scan_info, message_context, true)) < 0)
++                return ret;
++            ret = d3dbc_compile(program, config_flags, compile_info, reflection_data, out, message_context);
++            break;
++
++        case VKD3D_SHADER_TARGET_DXBC_TPF:
++            if ((ret = vsir_program_scan(program, &scan_info, message_context, true)) < 0)
++                return ret;
++            ret = tpf_compile(program, config_flags, reflection_data, out, message_context);
++            break;
++
+         case VKD3D_SHADER_TARGET_GLSL:
+             combined_sampler_info.type = VKD3D_SHADER_STRUCTURE_TYPE_SCAN_COMBINED_RESOURCE_SAMPLER_INFO;
+             combined_sampler_info.next = scan_info.next;
+@@ -1843,7 +1857,7 @@ int vkd3d_shader_compile(const struct vkd3d_shader_compile_info *compile_info,
+ 
+         if (!(ret = vsir_parse(compile_info, config_flags, &message_context, &program)))
+         {
+-            ret = vsir_program_compile(&program, config_flags, compile_info, out, &message_context);
++            ret = vsir_program_compile(&program, NULL, config_flags, compile_info, out, &message_context);
+             vsir_program_cleanup(&program);
+         }
+     }
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+index a0d7faaa407..d1c2057b38e 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+@@ -1565,9 +1565,9 @@ enum vkd3d_result vsir_allocate_temp_registers(struct vsir_program *program,
+ enum vkd3d_result vsir_update_dcl_temps(struct vsir_program *program,
+         struct vkd3d_shader_message_context *message_context);
+ void vsir_program_cleanup(struct vsir_program *program);
+-int vsir_program_compile(struct vsir_program *program, uint64_t config_flags,
+-        const struct vkd3d_shader_compile_info *compile_info, struct vkd3d_shader_code *out,
+-        struct vkd3d_shader_message_context *message_context);
++int vsir_program_compile(struct vsir_program *program, const struct vkd3d_shader_code *reflection_data,
++        uint64_t config_flags, const struct vkd3d_shader_compile_info *compile_info,
++        struct vkd3d_shader_code *out, struct vkd3d_shader_message_context *message_context);
+ const struct vkd3d_shader_parameter1 *vsir_program_get_parameter(
+         const struct vsir_program *program, enum vkd3d_shader_parameter_name name);
+ bool vsir_program_init(struct vsir_program *program, const struct vkd3d_shader_compile_info *compile_info,
+diff --git a/libs/vkd3d/libs/vkd3d/device.c b/libs/vkd3d/libs/vkd3d/device.c
+index b2636fd5585..67f84aafa29 100644
+--- a/libs/vkd3d/libs/vkd3d/device.c
++++ b/libs/vkd3d/libs/vkd3d/device.c
+@@ -5193,7 +5193,12 @@ static HRESULT STDMETHODCALLTYPE d3d12_device_EnumerateMetaCommands(ID3D12Device
+     FIXME("iface %p, num_meta_commands %p, command_desc %p stub!\n", iface,
+             num_meta_commands, command_desc);
+ 
+-    return E_NOTIMPL;
++    if (!num_meta_commands)
++        return E_INVALIDARG;
++
++    *num_meta_commands = 0;
++
++    return S_OK;
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE d3d12_device_EnumerateMetaCommandParameters(ID3D12Device9 *iface,
+-- 
+2.47.2
+
