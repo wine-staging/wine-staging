@@ -1,0 +1,365 @@
+From 0834b82af4990aad006eb709f50090babb2bf1ee Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Tue, 2 Sep 2025 07:37:13 +1000
+Subject: [PATCH] Updated vkd3d to 979d7e4b85f2fb8db60219f4a2673fc807142ebd.
+
+---
+ libs/vkd3d/libs/vkd3d-shader/glsl.c  | 26 ++++++++++++++++
+ libs/vkd3d/libs/vkd3d-shader/ir.c    | 44 ++++++++++++++--------------
+ libs/vkd3d/libs/vkd3d-shader/spirv.c | 29 +++++++++---------
+ 3 files changed, 63 insertions(+), 36 deletions(-)
+
+diff --git a/libs/vkd3d/libs/vkd3d-shader/glsl.c b/libs/vkd3d/libs/vkd3d-shader/glsl.c
+index 7325661ea7b..b2679beff9f 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/glsl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/glsl.c
+@@ -288,6 +288,14 @@ static void shader_glsl_print_register_name(struct vkd3d_string_buffer *buffer,
+             shader_glsl_print_subscript(buffer, gen, reg->idx[1].rel_addr, reg->idx[1].offset);
+             break;
+ 
++        case VKD3DSPR_SAMPLEMASK:
++            if (gen->program->shader_version.type != VKD3D_SHADER_TYPE_PIXEL)
++                vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                        "Internal compiler error: Unhandled sample coverage mask in shader type #%x.",
++                        gen->program->shader_version.type);
++            vkd3d_string_buffer_printf(buffer, "o_mask");
++            break;
++
+         default:
+             vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
+                     "Internal compiler error: Unhandled register type %#x.", reg->type);
+@@ -1286,6 +1294,13 @@ static void shader_glsl_print_sysval_name(struct vkd3d_string_buffer *buffer, st
+             vkd3d_string_buffer_printf(buffer, "intBitsToFloat(ivec4(gl_VertexID, 0, 0, 0))");
+             break;
+ 
++        case VKD3D_SHADER_SV_INSTANCE_ID:
++            if (version->type != VKD3D_SHADER_TYPE_VERTEX)
++                vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
++                        "Internal compiler error: Unhandled SV_INSTANCE_ID in shader type #%x.", version->type);
++            vkd3d_string_buffer_printf(buffer, "intBitsToFloat(ivec4(gl_InstanceID, 0, 0, 0))");
++            break;
++
+         case VKD3D_SHADER_SV_IS_FRONT_FACE:
+             if (version->type != VKD3D_SHADER_TYPE_PIXEL)
+                 vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
+@@ -1434,6 +1449,12 @@ static void shader_glsl_shader_epilogue(struct vkd3d_glsl_generator *gen)
+         shader_glsl_print_write_mask(buffer, e->mask);
+         vkd3d_string_buffer_printf(buffer, ";\n");
+     }
++
++    if (bitmap_is_set(gen->program->io_dcls, VKD3DSPR_SAMPLEMASK))
++    {
++        shader_glsl_print_indent(buffer, gen->indent);
++        vkd3d_string_buffer_printf(gen->buffer, "gl_SampleMask[0] = floatBitsToInt(o_mask);\n");
++    }
+ }
+ 
+ static void shader_glsl_ret(struct vkd3d_glsl_generator *gen, const struct vkd3d_shader_instruction *ins)
+@@ -1650,6 +1671,9 @@ static void vkd3d_glsl_handle_instruction(struct vkd3d_glsl_generator *gen,
+         case VSIR_OP_UDIV_SIMPLE:
+             shader_glsl_binop(gen, ins, "/");
+             break;
++        case VSIR_OP_UREM:
++            shader_glsl_binop(gen, ins, "%");
++            break;
+         case VSIR_OP_XOR:
+             shader_glsl_binop(gen, ins, "^");
+             break;
+@@ -2339,6 +2363,8 @@ static void shader_glsl_generate_declarations(struct vkd3d_glsl_generator *gen)
+         vkd3d_string_buffer_printf(buffer, "vec4 %s_in[%u];\n", gen->prefix, gen->limits.input_count);
+     if (gen->limits.output_count)
+         vkd3d_string_buffer_printf(buffer, "vec4 %s_out[%u];\n", gen->prefix, gen->limits.output_count);
++    if (bitmap_is_set(gen->program->io_dcls, VKD3DSPR_SAMPLEMASK))
++        vkd3d_string_buffer_printf(gen->buffer, "float o_mask;\n");
+     if (program->temp_count)
+         vkd3d_string_buffer_printf(buffer, "vec4 r[%u];\n", program->temp_count);
+     vkd3d_string_buffer_printf(buffer, "\n");
+diff --git a/libs/vkd3d/libs/vkd3d-shader/ir.c b/libs/vkd3d/libs/vkd3d-shader/ir.c
+index 396562e65e4..1ab406a9d84 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/ir.c
++++ b/libs/vkd3d/libs/vkd3d-shader/ir.c
+@@ -1750,6 +1750,8 @@ static enum vkd3d_result vsir_program_lower_instructions(struct vsir_program *pr
+             case VSIR_OP_DCL:
+             case VSIR_OP_DCL_CONSTANT_BUFFER:
+             case VSIR_OP_DCL_GLOBAL_FLAGS:
++            case VSIR_OP_DCL_INPUT_PRIMITIVE:
++            case VSIR_OP_DCL_OUTPUT_TOPOLOGY:
+             case VSIR_OP_DCL_SAMPLER:
+             case VSIR_OP_DCL_TEMPS:
+             case VSIR_OP_DCL_TESSELLATOR_DOMAIN:
+@@ -7167,7 +7169,6 @@ static enum vkd3d_result vsir_program_insert_clip_planes(struct vsir_program *pr
+     unsigned int low_signature_idx = ~0u, high_signature_idx = ~0u;
+     const struct vkd3d_shader_parameter1 *mask_parameter = NULL;
+     uint32_t position_signature_idx, position_temp, mask;
+-    static const struct vkd3d_shader_location no_loc;
+     struct signature_element *clip_element;
+     struct vkd3d_shader_instruction *ins;
+     unsigned int plane_count;
+@@ -7189,13 +7190,13 @@ static enum vkd3d_result vsir_program_insert_clip_planes(struct vsir_program *pr
+ 
+     if (mask_parameter->type != VKD3D_SHADER_PARAMETER_TYPE_IMMEDIATE_CONSTANT)
+     {
+-        vkd3d_shader_error(ctx->message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED,
++        vkd3d_shader_error(ctx->message_context, NULL, VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED,
+                 "Unsupported clip plane mask parameter type %#x.", mask_parameter->type);
+         return VKD3D_ERROR_NOT_IMPLEMENTED;
+     }
+     if (mask_parameter->data_type != VKD3D_SHADER_PARAMETER_DATA_TYPE_UINT32)
+     {
+-        vkd3d_shader_error(ctx->message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
++        vkd3d_shader_error(ctx->message_context, NULL, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
+                 "Invalid clip plane mask parameter data type %#x.", mask_parameter->data_type);
+         return VKD3D_ERROR_INVALID_ARGUMENT;
+     }
+@@ -7208,7 +7209,7 @@ static enum vkd3d_result vsir_program_insert_clip_planes(struct vsir_program *pr
+     {
+         if (signature->elements[i].sysval_semantic == VKD3D_SHADER_SV_CLIP_DISTANCE)
+         {
+-            vkd3d_shader_error(ctx->message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_INVALID_PARAMETER,
++            vkd3d_shader_error(ctx->message_context, &ctx->null_location, VKD3D_SHADER_ERROR_VSIR_INVALID_PARAMETER,
+                     "Clip planes cannot be used if the shader writes clip distance.");
+             return VKD3D_ERROR_INVALID_ARGUMENT;
+         }
+@@ -7216,7 +7217,7 @@ static enum vkd3d_result vsir_program_insert_clip_planes(struct vsir_program *pr
+ 
+     if (!vsir_signature_find_sysval(signature, VKD3D_SHADER_SV_POSITION, 0, &position_signature_idx))
+     {
+-        vkd3d_shader_error(ctx->message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_MISSING_SEMANTIC,
++        vkd3d_shader_error(ctx->message_context, &ctx->null_location, VKD3D_SHADER_ERROR_VSIR_MISSING_SEMANTIC,
+                 "Shader does not write position.");
+         return VKD3D_ERROR_INVALID_SHADER;
+     }
+@@ -7306,7 +7307,6 @@ static enum vkd3d_result vsir_program_insert_point_size(struct vsir_program *pro
+ {
+     struct vsir_program_iterator it = vsir_program_iterator(&program->instructions);
+     const struct vkd3d_shader_parameter1 *size_parameter = NULL;
+-    static const struct vkd3d_shader_location no_loc;
+     struct vkd3d_shader_instruction *ins;
+ 
+     if (program->has_point_size)
+@@ -7328,7 +7328,7 @@ static enum vkd3d_result vsir_program_insert_point_size(struct vsir_program *pro
+ 
+     if (size_parameter->data_type != VKD3D_SHADER_PARAMETER_DATA_TYPE_FLOAT32)
+     {
+-        vkd3d_shader_error(ctx->message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
++        vkd3d_shader_error(ctx->message_context, NULL, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
+                 "Invalid point size parameter data type %#x.", size_parameter->data_type);
+         return VKD3D_ERROR_INVALID_ARGUMENT;
+     }
+@@ -7355,7 +7355,6 @@ static enum vkd3d_result vsir_program_insert_point_size_clamp(struct vsir_progra
+ {
+     const struct vkd3d_shader_parameter1 *min_parameter = NULL, *max_parameter = NULL;
+     struct vsir_program_iterator it = vsir_program_iterator(&program->instructions);
+-    static const struct vkd3d_shader_location no_loc;
+     struct vkd3d_shader_instruction *ins;
+ 
+     if (!program->has_point_size)
+@@ -7379,14 +7378,14 @@ static enum vkd3d_result vsir_program_insert_point_size_clamp(struct vsir_progra
+ 
+     if (min_parameter && min_parameter->data_type != VKD3D_SHADER_PARAMETER_DATA_TYPE_FLOAT32)
+     {
+-        vkd3d_shader_error(ctx->message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
++        vkd3d_shader_error(ctx->message_context, NULL, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
+                 "Invalid minimum point size parameter data type %#x.", min_parameter->data_type);
+         return VKD3D_ERROR_INVALID_ARGUMENT;
+     }
+ 
+     if (max_parameter && max_parameter->data_type != VKD3D_SHADER_PARAMETER_DATA_TYPE_FLOAT32)
+     {
+-        vkd3d_shader_error(ctx->message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
++        vkd3d_shader_error(ctx->message_context, NULL, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
+                 "Invalid maximum point size parameter data type %#x.", max_parameter->data_type);
+         return VKD3D_ERROR_INVALID_ARGUMENT;
+     }
+@@ -7529,7 +7528,7 @@ static enum vkd3d_result vsir_program_insert_point_coord(struct vsir_program *pr
+ {
+     struct vsir_program_iterator it = vsir_program_iterator(&program->instructions), it2;
+     const struct vkd3d_shader_parameter1 *sprite_parameter = NULL;
+-    static const struct vkd3d_shader_location no_loc;
++    struct vkd3d_shader_location loc = ctx->null_location;
+     struct vkd3d_shader_instruction *ins;
+     bool used_texcoord = false;
+     unsigned int coord_temp;
+@@ -7551,13 +7550,13 @@ static enum vkd3d_result vsir_program_insert_point_coord(struct vsir_program *pr
+ 
+     if (sprite_parameter->type != VKD3D_SHADER_PARAMETER_TYPE_IMMEDIATE_CONSTANT)
+     {
+-        vkd3d_shader_error(ctx->message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED,
++        vkd3d_shader_error(ctx->message_context, NULL, VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED,
+                 "Unsupported point sprite parameter type %#x.", sprite_parameter->type);
+         return VKD3D_ERROR_NOT_IMPLEMENTED;
+     }
+     if (sprite_parameter->data_type != VKD3D_SHADER_PARAMETER_DATA_TYPE_UINT32)
+     {
+-        vkd3d_shader_error(ctx->message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
++        vkd3d_shader_error(ctx->message_context, NULL, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
+                 "Invalid point sprite parameter data type %#x.", sprite_parameter->data_type);
+         return VKD3D_ERROR_INVALID_ARGUMENT;
+     }
+@@ -7577,7 +7576,10 @@ static enum vkd3d_result vsir_program_insert_point_coord(struct vsir_program *pr
+     for (ins = vsir_program_iterator_head(&it); ins; ins = vsir_program_iterator_next(&it))
+     {
+         if (!vsir_instruction_is_dcl(ins) && ins->opcode != VSIR_OP_LABEL && ins->opcode != VSIR_OP_NOP)
++        {
++            loc = ins->location;
+             break;
++        }
+     }
+ 
+     it2 = it;
+@@ -7615,7 +7617,7 @@ static enum vkd3d_result vsir_program_insert_point_coord(struct vsir_program *pr
+         if (!(ins = vsir_program_iterator_insert_before_and_move(&it, 2)))
+             return VKD3D_ERROR_OUT_OF_MEMORY;
+ 
+-        vsir_instruction_init_with_params(program, ins, &no_loc, VSIR_OP_MOV, 1, 1);
++        vsir_instruction_init_with_params(program, ins, &loc, VSIR_OP_MOV, 1, 1);
+         dst_param_init_temp_float4(&ins->dst[0], coord_temp);
+         ins->dst[0].write_mask = VKD3DSP_WRITEMASK_0 | VKD3DSP_WRITEMASK_1;
+         vsir_src_param_init(&ins->src[0], VKD3DSPR_POINT_COORD, VSIR_DATA_F32, 0);
+@@ -7623,7 +7625,7 @@ static enum vkd3d_result vsir_program_insert_point_coord(struct vsir_program *pr
+         ins->src[0].swizzle = VKD3D_SHADER_NO_SWIZZLE;
+         ins = vsir_program_iterator_next(&it);
+ 
+-        vsir_instruction_init_with_params(program, ins, &no_loc, VSIR_OP_MOV, 1, 1);
++        vsir_instruction_init_with_params(program, ins, &loc, VSIR_OP_MOV, 1, 1);
+         dst_param_init_temp_float4(&ins->dst[0], coord_temp);
+         ins->dst[0].write_mask = VKD3DSP_WRITEMASK_2 | VKD3DSP_WRITEMASK_3;
+         vsir_src_param_init(&ins->src[0], VKD3DSPR_IMMCONST, VSIR_DATA_F32, 0);
+@@ -7804,7 +7806,6 @@ static enum vkd3d_result vsir_program_insert_fragment_fog(struct vsir_program *p
+     struct vkd3d_shader_message_context *message_context = ctx->message_context;
+     uint32_t colour_signature_idx, fog_signature_idx, colour_temp;
+     const struct vkd3d_shader_parameter1 *mode_parameter = NULL;
+-    static const struct vkd3d_shader_location no_loc;
+     const struct signature_element *fog_element;
+     enum vkd3d_shader_fog_fragment_mode mode;
+     struct vkd3d_shader_instruction *ins;
+@@ -7821,13 +7822,13 @@ static enum vkd3d_result vsir_program_insert_fragment_fog(struct vsir_program *p
+ 
+     if (mode_parameter->type != VKD3D_SHADER_PARAMETER_TYPE_IMMEDIATE_CONSTANT)
+     {
+-        vkd3d_shader_error(message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED,
++        vkd3d_shader_error(message_context, NULL, VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED,
+                 "Unsupported fog fragment mode parameter type %#x.", mode_parameter->type);
+         return VKD3D_ERROR_NOT_IMPLEMENTED;
+     }
+     if (mode_parameter->data_type != VKD3D_SHADER_PARAMETER_DATA_TYPE_UINT32)
+     {
+-        vkd3d_shader_error(message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
++        vkd3d_shader_error(message_context, NULL, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
+                 "Invalid fog fragment mode parameter data type %#x.", mode_parameter->data_type);
+         return VKD3D_ERROR_INVALID_ARGUMENT;
+     }
+@@ -7951,7 +7952,6 @@ static enum vkd3d_result vsir_program_insert_vertex_fog(struct vsir_program *pro
+     struct vkd3d_shader_message_context *message_context = ctx->message_context;
+     const struct vkd3d_shader_parameter1 *source_parameter = NULL;
+     uint32_t fog_signature_idx, source_signature_idx, temp;
+-    static const struct vkd3d_shader_location no_loc;
+     struct vkd3d_shader_instruction *ins;
+     enum vkd3d_shader_fog_source source;
+     const struct signature_element *e;
+@@ -7964,13 +7964,13 @@ static enum vkd3d_result vsir_program_insert_vertex_fog(struct vsir_program *pro
+ 
+     if (source_parameter->type != VKD3D_SHADER_PARAMETER_TYPE_IMMEDIATE_CONSTANT)
+     {
+-        vkd3d_shader_error(message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED,
++        vkd3d_shader_error(message_context, NULL, VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED,
+                 "Unsupported fog source parameter type %#x.", source_parameter->type);
+         return VKD3D_ERROR_NOT_IMPLEMENTED;
+     }
+     if (source_parameter->data_type != VKD3D_SHADER_PARAMETER_DATA_TYPE_UINT32)
+     {
+-        vkd3d_shader_error(message_context, &no_loc, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
++        vkd3d_shader_error(message_context, NULL, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
+                 "Invalid fog source parameter data type %#x.", source_parameter->data_type);
+         return VKD3D_ERROR_INVALID_ARGUMENT;
+     }
+@@ -7992,7 +7992,7 @@ static enum vkd3d_result vsir_program_insert_vertex_fog(struct vsir_program *pro
+         if (!vsir_signature_find_sysval(&program->output_signature,
+                 VKD3D_SHADER_SV_POSITION, 0, &source_signature_idx))
+         {
+-            vkd3d_shader_error(ctx->message_context, &no_loc,
++            vkd3d_shader_error(ctx->message_context, &ctx->null_location,
+                     VKD3D_SHADER_ERROR_VSIR_MISSING_SEMANTIC, "Shader does not write position.");
+             return VKD3D_ERROR_INVALID_SHADER;
+         }
+diff --git a/libs/vkd3d/libs/vkd3d-shader/spirv.c b/libs/vkd3d/libs/vkd3d-shader/spirv.c
+index 97c0d0e73a8..a57c42b167d 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/spirv.c
++++ b/libs/vkd3d/libs/vkd3d-shader/spirv.c
+@@ -7209,10 +7209,9 @@ static void spirv_compiler_emit_output_vertex_count(struct spirv_compiler *compi
+             SpvExecutionModeOutputVertices, instruction->declaration.count);
+ }
+ 
+-static void spirv_compiler_emit_dcl_input_primitive(struct spirv_compiler *compiler,
+-        const struct vkd3d_shader_instruction *instruction)
++static void spirv_compiler_emit_input_primitive(struct spirv_compiler *compiler)
+ {
+-    enum vkd3d_primitive_type primitive_type = instruction->declaration.primitive_type.type;
++    enum vkd3d_primitive_type primitive_type = compiler->program->input_primitive;
+     SpvExecutionMode mode;
+ 
+     switch (primitive_type)
+@@ -7233,7 +7232,8 @@ static void spirv_compiler_emit_dcl_input_primitive(struct spirv_compiler *compi
+             mode = SpvExecutionModeInputTrianglesAdjacency;
+             break;
+         default:
+-            FIXME("Unhandled primitive type %#x.\n", primitive_type);
++            spirv_compiler_error(compiler, VKD3D_SHADER_ERROR_SPV_NOT_IMPLEMENTED,
++                    "Unhandled input primitive type %#x.", primitive_type);
+             return;
+     }
+ 
+@@ -7263,10 +7263,9 @@ static void spirv_compiler_emit_point_size(struct spirv_compiler *compiler)
+     }
+ }
+ 
+-static void spirv_compiler_emit_dcl_output_topology(struct spirv_compiler *compiler,
+-        const struct vkd3d_shader_instruction *instruction)
++static void spirv_compiler_emit_output_topology(struct spirv_compiler *compiler)
+ {
+-    enum vkd3d_primitive_type primitive_type = instruction->declaration.primitive_type.type;
++    enum vkd3d_primitive_type primitive_type = compiler->program->output_topology;
+     SpvExecutionMode mode;
+ 
+     switch (primitive_type)
+@@ -7282,7 +7281,8 @@ static void spirv_compiler_emit_dcl_output_topology(struct spirv_compiler *compi
+             mode = SpvExecutionModeOutputTriangleStrip;
+             break;
+         default:
+-            ERR("Unexpected primitive type %#x.\n", primitive_type);
++            spirv_compiler_error(compiler, VKD3D_SHADER_ERROR_SPV_NOT_IMPLEMENTED,
++                    "Unhandled output topology %#x.", primitive_type);
+             return;
+     }
+ 
+@@ -10608,12 +10608,6 @@ static int spirv_compiler_handle_instruction(struct spirv_compiler *compiler,
+         case VSIR_OP_DCL_VERTICES_OUT:
+             spirv_compiler_emit_output_vertex_count(compiler, instruction);
+             break;
+-        case VSIR_OP_DCL_INPUT_PRIMITIVE:
+-            spirv_compiler_emit_dcl_input_primitive(compiler, instruction);
+-            break;
+-        case VSIR_OP_DCL_OUTPUT_TOPOLOGY:
+-            spirv_compiler_emit_dcl_output_topology(compiler, instruction);
+-            break;
+         case VSIR_OP_DCL_GS_INSTANCES:
+             spirv_compiler_emit_dcl_gs_instances(compiler, instruction);
+             break;
+@@ -11066,7 +11060,14 @@ static int spirv_compiler_generate_spirv(struct spirv_compiler *compiler,
+     if (program->ssa_count)
+         spirv_compiler_allocate_ssa_register_ids(compiler, program->ssa_count);
+     if (compiler->shader_type == VKD3D_SHADER_TYPE_COMPUTE)
++    {
+         spirv_compiler_emit_thread_group_size(compiler, &program->thread_group_size);
++    }
++    else if (compiler->shader_type == VKD3D_SHADER_TYPE_GEOMETRY)
++    {
++        spirv_compiler_emit_input_primitive(compiler);
++        spirv_compiler_emit_output_topology(compiler);
++    }
+     spirv_compiler_emit_global_flags(compiler, program->global_flags);
+ 
+     spirv_compiler_emit_descriptor_declarations(compiler);
+-- 
+2.50.1
+
