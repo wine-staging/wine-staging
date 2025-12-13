@@ -1,0 +1,434 @@
+From 008de2881eae289c65ee8409f6bc2597d36a71a6 Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Tue, 9 Dec 2025 07:21:23 +1100
+Subject: [PATCH] Updated vkd3d to d0318ca14bc58390847e29e5581dbe6165872770.
+
+---
+ libs/vkd3d/libs/vkd3d-shader/dxil.c         | 101 +++++++++++++-------
+ libs/vkd3d/libs/vkd3d-shader/hlsl.y         |  30 +++++-
+ libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c |  30 +++---
+ libs/vkd3d/libs/vkd3d-shader/ir.c           |  42 ++++++++
+ 4 files changed, 148 insertions(+), 55 deletions(-)
+
+diff --git a/libs/vkd3d/libs/vkd3d-shader/dxil.c b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+index 7a056775a16..f73106d79b2 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/dxil.c
++++ b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+@@ -5021,7 +5021,7 @@ static bool sm6_parser_emit_reg_composite_construct(struct sm6_parser *sm6,
+         const struct vkd3d_shader_register *operand_regs, unsigned int component_count,
+         struct function_emission_state *state, struct vkd3d_shader_register *reg)
+ {
+-    struct vkd3d_shader_instruction *ins = state->ins;
++    struct vkd3d_shader_instruction *ins;
+     struct vsir_src_operand *src_params;
+     struct vsir_dst_operand *dst_param;
+     bool all_constant = true;
+@@ -5050,27 +5050,33 @@ static bool sm6_parser_emit_reg_composite_construct(struct sm6_parser *sm6,
+     register_init_with_id(reg, VKD3DSPR_TEMP, operand_regs[0].data_type, state->temp_idx++);
+     reg->dimension = VSIR_DIMENSION_VEC4;
+ 
+-    for (i = 0; i < component_count; ++i, ++ins)
++    for (i = 0; i < component_count; ++i)
+     {
++        if (!(ins = sm6_parser_add_function_instruction(sm6, state)))
++            return false;
++
++        state->ins = ins + 1;
++
+         vsir_instruction_init(ins, &sm6->p.location, VSIR_OP_MOV);
+ 
+         if (!(src_params = instruction_src_params_alloc(ins, 1, sm6)))
+-            return false;
++            goto error;
+ 
+         src_param_init(&src_params[0]);
+         src_params[0].reg = operand_regs[i];
+ 
+         if (!(dst_param = instruction_dst_params_alloc(ins, 1, sm6)))
+-            return false;
++            goto error;
+ 
+         dst_param_init_scalar(dst_param, i);
+         dst_param->reg = *reg;
+     }
+ 
+-    state->ins = ins;
+-    state->function->instructions.count += component_count;
+-
+     return true;
++
++error:
++    vkd3d_shader_instruction_make_nop(ins);
++    return false;
+ }
+ 
+ static bool sm6_parser_emit_composite_construct(struct sm6_parser *sm6, const struct sm6_value **operands,
+@@ -5417,7 +5423,7 @@ static void sm6_parser_emit_dx_barrier(struct sm6_parser *dxil, enum dx_intrinsi
+ static void sm6_parser_emit_dx_buffer_update_counter(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
+         const struct sm6_value **operands, struct function_emission_state *state)
+ {
+-    struct vkd3d_shader_instruction *ins = state->ins;
++    struct vkd3d_shader_instruction *ins;
+     struct vsir_src_operand *src_params;
+     const struct sm6_value *resource;
+     unsigned int i;
+@@ -5435,19 +5441,27 @@ static void sm6_parser_emit_dx_buffer_update_counter(struct sm6_parser *sm6, enu
+     }
+     i = sm6_value_get_constant_uint(operands[1], sm6);
+     if (i != 1 && i != 255)
+-    {
+-        WARN("Unexpected update value %#x.\n", i);
+         vkd3d_shader_parser_warning(&sm6->p, VKD3D_SHADER_WARNING_DXIL_IGNORING_OPERANDS,
+                 "Update value %#x for a UAV counter operation is not supported.", i);
+-    }
+     inc = i;
+ 
++    if (!(ins = sm6_parser_add_function_instruction(sm6, state)))
++        return;
++
++    state->pushed_instruction = true;
++
+     vsir_instruction_init(ins, &sm6->p.location, (inc < 0) ? VSIR_OP_IMM_ATOMIC_CONSUME : VSIR_OP_IMM_ATOMIC_ALLOC);
++
+     if (!(src_params = instruction_src_params_alloc(ins, 1, sm6)))
++    {
++        vkd3d_shader_instruction_make_nop(ins);
+         return;
++    }
++
+     src_param_init_vector_from_handle(sm6, &src_params[0], &resource->u.handle);
+ 
+-    instruction_dst_param_init_ssa_scalar(ins, 0, sm6);
++    if (!instruction_dst_param_init_ssa_scalar(ins, 0, sm6))
++        vkd3d_shader_instruction_make_nop(ins);
+ }
+ 
+ static void sm6_parser_emit_dx_calculate_lod(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
+@@ -5463,32 +5477,40 @@ static void sm6_parser_emit_dx_calculate_lod(struct sm6_parser *sm6, enum dx_int
+     sampler = operands[1];
+     if (!sm6_value_validate_is_texture_handle(resource, op, sm6)
+             || !sm6_value_validate_is_sampler_handle(sampler, op, sm6))
+-    {
+         return;
+-    }
+ 
+     if (!sm6_parser_emit_coordinate_construct(sm6, &operands[2], 3, NULL, state, &coord))
+         return;
+ 
+     clamp = sm6_value_get_constant_uint(operands[5], sm6);
+ 
+-    ins = state->ins;
++    if (!(ins = sm6_parser_add_function_instruction(sm6, state)))
++        return;
++
++    state->pushed_instruction = true;
++
+     vsir_instruction_init(ins, &sm6->p.location, VSIR_OP_LOD);
++
+     if (!(src_params = instruction_src_params_alloc(ins, 3, sm6)))
++    {
++        vkd3d_shader_instruction_make_nop(ins);
+         return;
++    }
++
+     src_param_init_vector_from_reg(&src_params[0], &coord);
+     sm6_register_from_handle(sm6, &resource->u.handle, &src_params[1].reg);
+     src_param_init_scalar(&src_params[1], !clamp);
+     src_param_init_vector_from_handle(sm6, &src_params[2], &sampler->u.handle);
+ 
+-    instruction_dst_param_init_ssa_scalar(ins, 0, sm6);
++    if (!instruction_dst_param_init_ssa_scalar(ins, 0, sm6))
++        vkd3d_shader_instruction_make_nop(ins);
+ }
+ 
+ static void sm6_parser_emit_dx_cbuffer_load(struct sm6_parser *sm6, enum dx_intrinsic_opcode op,
+         const struct sm6_value **operands, struct function_emission_state *state)
+ {
+     struct sm6_value *dst = sm6_parser_get_current_value(sm6);
+-    struct vkd3d_shader_instruction *ins = state->ins;
++    struct vkd3d_shader_instruction *ins;
+     struct vsir_src_operand *src_param;
+     const struct sm6_value *buffer;
+     const struct sm6_type *type;
+@@ -5497,10 +5519,19 @@ static void sm6_parser_emit_dx_cbuffer_load(struct sm6_parser *sm6, enum dx_intr
+     if (!sm6_value_validate_is_handle(buffer, sm6))
+         return;
+ 
++    if (!(ins = sm6_parser_add_function_instruction(sm6, state)))
++        return;
++
++    state->pushed_instruction = true;
++
+     vsir_instruction_init(ins, &sm6->p.location, VSIR_OP_MOV);
+ 
+     if (!(src_param = instruction_src_params_alloc(ins, 1, sm6)))
++    {
++        vkd3d_shader_instruction_make_nop(ins);
+         return;
++    }
++
+     src_param_init_vector_from_handle(sm6, src_param, &buffer->u.handle);
+     /* Differently from other descriptors, constant buffers require an
+      * additional index, used to index within the constant buffer itself. */
+@@ -5515,7 +5546,8 @@ static void sm6_parser_emit_dx_cbuffer_load(struct sm6_parser *sm6, enum dx_intr
+     else
+         register_convert_to_minimum_precision(&src_param->reg);
+ 
+-    instruction_dst_param_init_ssa_vector(ins, sm6_type_max_vector_size(type), sm6);
++    if (!instruction_dst_param_init_ssa_vector(ins, sm6_type_max_vector_size(type), sm6))
++        vkd3d_shader_instruction_make_nop(ins);
+ }
+ 
+ static void sm6_parser_dcl_register_builtin(struct sm6_parser *dxil, enum vkd3d_shader_opcode opcode,
+@@ -6289,29 +6321,23 @@ static void sm6_parser_emit_dx_buffer_store(struct sm6_parser *sm6, enum dx_intr
+ 
+     if (resource->u.handle.d->kind == RESOURCE_KIND_RAWBUFFER
+             || resource->u.handle.d->kind == RESOURCE_KIND_STRUCTUREDBUFFER)
+-    {
+         return sm6_parser_emit_dx_raw_buffer_store(sm6, op, operands, state);
+-    }
+ 
+     if (resource->u.handle.d->kind != RESOURCE_KIND_TYPEDBUFFER)
+-    {
+-        WARN("Resource is not a typed buffer.\n");
+         vkd3d_shader_parser_warning(&sm6->p, VKD3D_SHADER_WARNING_DXIL_INVALID_OPERATION,
+                 "Resource for a typed buffer store is not a typed buffer.");
+-    }
+ 
+     write_mask = sm6_value_get_constant_uint(operands[7], sm6);
+     if (!write_mask || write_mask > VKD3DSP_WRITEMASK_ALL)
+     {
+-        WARN("Invalid write mask %#x.\n", write_mask);
+         vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_OPERAND,
+                 "Write mask %#x for a typed buffer store operation is invalid.", write_mask);
+         return;
+     }
+     else if (write_mask & (write_mask + 1))
+     {
+-        /* In this case, it is unclear which source operands will be defined unless we encounter it in a shader. */
+-        FIXME("Unhandled write mask %#x.\n", write_mask);
++        /* In this case, it is unclear which source operands will be defined
++         * unless we encounter it in a shader. */
+         vkd3d_shader_parser_error(&sm6->p, VKD3D_SHADER_ERROR_DXIL_INVALID_OPERAND,
+                 "Write mask %#x for a typed buffer store operation is unhandled.", write_mask);
+     }
+@@ -6320,22 +6346,33 @@ static void sm6_parser_emit_dx_buffer_store(struct sm6_parser *sm6, enum dx_intr
+     if (!sm6_parser_emit_composite_construct(sm6, &operands[3], component_count, state, &texel))
+         return;
+ 
+-    ins = state->ins;
++    if (!(ins = sm6_parser_add_function_instruction(sm6, state)))
++        return;
++
++    state->pushed_instruction = true;
++
+     vsir_instruction_init(ins, &sm6->p.location, VSIR_OP_STORE_UAV_TYPED);
+ 
+     if (!(src_params = instruction_src_params_alloc(ins, 2, sm6)))
++    {
++        vkd3d_shader_instruction_make_nop(ins);
+         return;
++    }
++
+     src_param_init_from_value(&src_params[0], operands[1], 0, sm6);
+     if (!sm6_value_is_undef(operands[2]))
+-    {
+-        /* Constant zero would have no effect, but is not worth checking for unless it shows up. */
+-        WARN("Ignoring structure offset.\n");
++        /* Constant zero would have no effect, but is not worth checking for
++         * unless it shows up. */
+         vkd3d_shader_parser_warning(&sm6->p, VKD3D_SHADER_WARNING_DXIL_IGNORING_OPERANDS,
+                 "Ignoring structure offset for a typed buffer store.");
+-    }
+     src_param_init_vector_from_reg(&src_params[1], &texel);
+ 
+-    dst_param = instruction_dst_params_alloc(ins, 1, sm6);
++    if (!(dst_param = instruction_dst_params_alloc(ins, 1, sm6)))
++    {
++        vkd3d_shader_instruction_make_nop(ins);
++        return;
++    }
++
+     dst_param_init_with_mask(dst_param, write_mask);
+     sm6_register_from_handle(sm6, &resource->u.handle, &dst_param->reg);
+ }
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.y b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+index 4efa1cd2873..d5dcc775a00 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.y
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+@@ -2410,6 +2410,21 @@ static void check_invalid_object_fields(struct hlsl_ctx *ctx, const struct hlsl_
+                 "Target profile doesn't support objects as struct members in uniform variables.");
+ }
+ 
++static void validate_groupshared_var(struct hlsl_ctx *ctx, const struct hlsl_ir_var *var)
++{
++    if (type_has_object_components(var->data_type))
++    {
++        struct vkd3d_string_buffer *string;
++
++        if ((string = hlsl_type_to_string(ctx, var->data_type)))
++        {
++            hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
++                    "Groupshared type %s is not numeric.", string->buffer);
++            hlsl_release_string_buffer(ctx, string);
++        }
++    }
++}
++
+ static void declare_var(struct hlsl_ctx *ctx, struct parse_variable_def *v)
+ {
+     uint32_t modifiers = v->modifiers | v->semantic.modifiers;
+@@ -2564,11 +2579,18 @@ static void declare_var(struct hlsl_ctx *ctx, struct parse_variable_def *v)
+             hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_MODIFIER,
+                     "Variable '%s' is declared as both \"uniform\" and \"static\".", var->name);
+ 
+-        if ((modifiers & HLSL_STORAGE_GROUPSHARED) && ctx->profile->type != VKD3D_SHADER_TYPE_COMPUTE)
++        if ((modifiers & HLSL_STORAGE_GROUPSHARED))
+         {
+-            modifiers &= ~HLSL_STORAGE_GROUPSHARED;
+-            hlsl_warning(ctx, &var->loc, VKD3D_SHADER_WARNING_HLSL_IGNORED_MODIFIER,
+-                    "Ignoring the 'groupshared' modifier in a non-compute shader.");
++            /* d3dcompiler/fxc always validates global groupshared variables,
++             * regardless of whether the groupshared modifier is ignored. */
++            validate_groupshared_var(ctx, var);
++
++            if (ctx->profile->type != VKD3D_SHADER_TYPE_COMPUTE)
++            {
++                modifiers &= ~HLSL_STORAGE_GROUPSHARED;
++                hlsl_warning(ctx, &var->loc, VKD3D_SHADER_WARNING_HLSL_IGNORED_MODIFIER,
++                        "Ignoring the 'groupshared' modifier in a non-compute shader.");
++            }
+         }
+ 
+         /* Mark it as uniform. We need to do this here since synthetic
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+index 55d7f1f7c55..7adaeaa4c1e 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+@@ -3715,25 +3715,20 @@ static struct hlsl_ir_node *fold_redundant_casts(struct hlsl_ctx *ctx,
+  * split_array_copies(), split_struct_copies() and
+  * split_matrix_copies(). Inserts new instructions right before
+  * "store". */
+-static bool split_copy(struct hlsl_ctx *ctx, struct hlsl_ir_store *store,
++static void split_copy(struct hlsl_ctx *ctx, struct hlsl_ir_store *store,
+         const struct hlsl_ir_load *load, const unsigned int idx, struct hlsl_type *type)
+ {
+-    struct hlsl_ir_node *split_store, *c;
+-    struct hlsl_ir_load *split_load;
++    struct hlsl_ir_node *c, *split_load;
++    struct hlsl_block block;
+ 
+-    if (!(c = hlsl_new_uint_constant(ctx, idx, &store->node.loc)))
+-        return false;
+-    list_add_before(&store->node.entry, &c->entry);
++    hlsl_block_init(&block);
+ 
+-    if (!(split_load = hlsl_new_load_index(ctx, &load->src, c, &store->node.loc)))
+-        return false;
+-    list_add_before(&store->node.entry, &split_load->node.entry);
++    c = hlsl_block_add_uint_constant(ctx, &block, idx, &store->node.loc);
++    split_load = hlsl_block_add_load_index(ctx, &block, &load->src, c, &store->node.loc);
+ 
+-    if (!(split_store = hlsl_new_store_index(ctx, &store->lhs, c, &split_load->node, 0, &store->node.loc)))
+-        return false;
+-    list_add_before(&store->node.entry, &split_store->entry);
++    hlsl_block_add_store_index(ctx, &block, &store->lhs, c, split_load, 0, &store->node.loc);
+ 
+-    return true;
++    list_move_before(&store->node.entry, &block.instrs);
+ }
+ 
+ static bool split_array_copies(struct hlsl_ctx *ctx, struct hlsl_ir_node *instr, void *context)
+@@ -3762,8 +3757,7 @@ static bool split_array_copies(struct hlsl_ctx *ctx, struct hlsl_ir_node *instr,
+ 
+     for (i = 0; i < type->e.array.elements_count; ++i)
+     {
+-        if (!split_copy(ctx, store, hlsl_ir_load(rhs), i, element_type))
+-            return false;
++        split_copy(ctx, store, hlsl_ir_load(rhs), i, element_type);
+     }
+ 
+     /* Remove the store instruction, so that we can split structs which contain
+@@ -3800,8 +3794,7 @@ static bool split_struct_copies(struct hlsl_ctx *ctx, struct hlsl_ir_node *instr
+     {
+         const struct hlsl_struct_field *field = &type->e.record.fields[i];
+ 
+-        if (!split_copy(ctx, store, hlsl_ir_load(rhs), i, field->type))
+-            return false;
++        split_copy(ctx, store, hlsl_ir_load(rhs), i, field->type);
+     }
+ 
+     /* Remove the store instruction, so that we can split structs which contain
+@@ -3933,8 +3926,7 @@ static bool split_matrix_copies(struct hlsl_ctx *ctx, struct hlsl_ir_node *instr
+     {
+         for (i = 0; i < hlsl_type_major_size(type); ++i)
+         {
+-            if (!split_copy(ctx, store, hlsl_ir_load(rhs), i, element_type))
+-                return false;
++            split_copy(ctx, store, hlsl_ir_load(rhs), i, element_type);
+         }
+     }
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/ir.c b/libs/vkd3d/libs/vkd3d-shader/ir.c
+index 0261ba88989..1be88479cee 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/ir.c
++++ b/libs/vkd3d/libs/vkd3d-shader/ir.c
+@@ -1270,6 +1270,44 @@ static enum vkd3d_result vsir_program_normalize_addr(struct vsir_program *progra
+     return VKD3D_OK;
+ }
+ 
++static enum vkd3d_result vsir_program_lower_dp2add(struct vsir_program *program, struct vsir_program_iterator *dp2add)
++{
++    struct vkd3d_shader_instruction *ins = vsir_program_iterator_current(dp2add);
++    const struct vkd3d_shader_location location = ins->location;
++    const struct vsir_src_operand *src = ins->src;
++    const struct vsir_dst_operand *dst = ins->dst;
++    struct vsir_program_iterator it;
++    unsigned int dot_id;
++
++    /* dp2add DST, SRC0, SRC1, SRC2
++     *      ->
++     * dp2 srDOT, SRC0, SRC1
++     * add DST, srDOT, SRC2 */
++
++    if (!(ins = vsir_program_iterator_insert_before(dp2add, &it, 1)))
++        return VKD3D_ERROR_OUT_OF_MEMORY;
++    if (!vsir_instruction_init_with_params(program, ins, &location, VSIR_OP_DP2, 1, 2))
++        goto fail;
++    dot_id = program->ssa_count++;
++    vsir_dst_operand_init_ssa(&ins->dst[0], dot_id, src[0].reg.data_type, VSIR_DIMENSION_SCALAR);
++    ins->src[0] = src[0];
++    ins->src[1] = src[1];
++
++    ins = vsir_program_iterator_next(&it);
++    if (!vsir_instruction_init_with_params(program, ins, &location, VSIR_OP_ADD, 1, 2))
++        goto fail;
++    ins->dst[0] = dst[0];
++    vsir_src_operand_init_ssa(&ins->src[0], dot_id, src[0].reg.data_type, VSIR_DIMENSION_SCALAR);
++    ins->src[1] = src[2];
++
++    return VKD3D_OK;
++
++fail:
++    vsir_program_iterator_nop_range(&it, dp2add, &location);
++
++    return VKD3D_ERROR_OUT_OF_MEMORY;
++}
++
+ static enum vkd3d_result vsir_program_lower_ifc(struct vsir_program *program,
+         struct vsir_program_iterator *it, unsigned int *tmp_idx,
+         struct vkd3d_shader_message_context *message_context)
+@@ -2470,6 +2508,10 @@ static enum vkd3d_result vsir_program_lower_d3dbc_instructions(struct vsir_progr
+                 ret = vsir_program_lower_bem(program, &it);
+                 break;
+ 
++            case VSIR_OP_DP2ADD:
++                ret = vsir_program_lower_dp2add(program, &it);
++                break;
++
+             case VSIR_OP_IFC:
+                 ret = vsir_program_lower_ifc(program, &it, &tmp_idx, message_context);
+                 break;
+-- 
+2.51.0
+
