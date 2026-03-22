@@ -1,0 +1,541 @@
+From 0889a24af1fb6f4b9f7074c7dcaf6bdaada97515 Mon Sep 17 00:00:00 2001
+From: Zhiyi Zhang <zzhang@codeweavers.com>
+Date: Fri, 13 Mar 2026 10:13:36 +0800
+Subject: [PATCH 62/65] dcomp: Implement shared visual handle for the same
+ process.
+
+---
+ dlls/dcomp/dcomp_private.h |   5 ++
+ dlls/dcomp/device.c        |  54 ++++++++++++---
+ dlls/dcomp/target.c        |  54 +++++++++++++++
+ dlls/dcomp/tests/dcomp.c   |   6 ++
+ dlls/dcomp/visual.c        |  27 ++++++++
+ dlls/ntdll/tests/om.c      |   5 ++
+ server/d3dkmt.c            | 135 +++++++++++++++++++++++++++++++++++++
+ server/directory.c         |   1 +
+ server/object.h            |   1 +
+ server/protocol.def        |  22 ++++++
+ 10 files changed, 302 insertions(+), 8 deletions(-)
+
+diff --git a/dlls/dcomp/dcomp_private.h b/dlls/dcomp/dcomp_private.h
+index 0d70011f0c9..d17589da89c 100644
+--- a/dlls/dcomp/dcomp_private.h
++++ b/dlls/dcomp/dcomp_private.h
+@@ -68,6 +68,7 @@ struct composition_target
+     IDCompositionVisual *root;
+     BOOL topmost;
+     HWND hwnd;
++    HANDLE shared_visual_handle;
+     struct list entry;
+     LONG ref;
+ };
+@@ -88,6 +89,7 @@ struct composition_visual
+     struct composition_visual *parent;
+     BOOL is_root;
+     BOOL is_child;
++    HANDLE shared_visual_handle;
+     int version;
+     LONG ref;
+ };
+@@ -135,6 +137,9 @@ HRESULT create_surface(struct composition_surface_factory *factory, UINT width,
+         DXGI_FORMAT pixel_format, DXGI_ALPHA_MODE alpha_mode, IDCompositionSurface **dcomp_surface);
+ HRESULT create_surface_factory(struct composition_device *device, IUnknown *rendering_device, IDCompositionSurfaceFactory **factory);
+ HRESULT create_target(struct composition_device *device, HWND hwnd, BOOL topmost, IDCompositionTarget **target);
++HRESULT create_target_from_shared_visual_handle(struct composition_device *device, HANDLE shared_visual_handle, void **new_target);
+ HRESULT create_visual(int version, REFIID iid, void **visual);
++HRESULT create_visual_from_shared_visual_handle(HANDLE shared_visual_handle, void **new_visual);
++
+ 
+ #endif /* __WINE_DCOMP_PRIVATE_H */
+diff --git a/dlls/dcomp/device.c b/dlls/dcomp/device.c
+index 3ef8486a396..f1162c644ad 100644
+--- a/dlls/dcomp/device.c
++++ b/dlls/dcomp/device.c
+@@ -35,6 +35,7 @@
+ #include "dwmapi.h"
+ #include "d3d11_4.h"
+ #include "d3dcompiler.h"
++#include "wine/server.h"
+ #include "wine/debug.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(dcomp);
+@@ -586,12 +587,38 @@ done:
+         ID3D11Device1_Release(d3d11_device);
+ }
+ 
++static struct composition_visual * shared_visual_target_get_root(HANDLE shared_visual_handle)
++{
++    struct composition_visual *visual = NULL;
++    NTSTATUS status;
++
++    SERVER_START_REQ(dcomp_get_shared_visual_info)
++    {
++        req->handle = wine_server_obj_handle(shared_visual_handle);
++        if (!(status = wine_server_call(req)))
++            visual = impl_from_IDCompositionVisual(wine_server_get_ptr(reply->target_root));
++    }
++    SERVER_END_REQ;
++
++    if (status)
++        ERR("dcomp_get_shared_visual_info failed, not in the same process? status %#lx.\n", status);
++
++    return visual;
++}
++
+ static HRESULT do_composite(const struct composition_target *target, struct composition_visual *visual)
+ {
+     struct composition_visual *child_visual;
+     IDXGISurface *dxgi_surface;
+     HRESULT hr;
+ 
++    if (visual->shared_visual_handle)
++    {
++        struct composition_visual *root = shared_visual_target_get_root(visual->shared_visual_handle);
++        if (root)
++            do_composite(target, root);
++    }
++
+     /* Render content */
+     if (visual->content)
+     {
+@@ -699,6 +726,11 @@ static DWORD WINAPI composite_thread_proc(void *iface)
+                 continue;
+             }
+ 
++            /* Skip targets created from a shared visual handle. Composition for such targets will
++             * be done for the visual tree where the visual created from the shared visual handle is at */
++            if (target->shared_visual_handle)
++                continue;
++
+             visual = impl_from_IDCompositionVisual(target->root);
+             if (SUCCEEDED(do_composite(target, visual)))
+                 count++;
+@@ -1190,21 +1222,20 @@ static HRESULT STDMETHODCALLTYPE desktop_device_CreateFromSharedVisualHandle(IDC
+ 
+     /* visual_handle is from DCompositionCreateSharedVisualHandle(). iid is IID_IDCompositionVisual
+     * or IDCompositionTarget */
+-    assert(visual_handle == (HANDLE)0xdeadbee1);
+     assert(IsEqualGUID(iid, &IID_IDCompositionVisual) || IsEqualGUID(iid, &IID_IDCompositionTarget));
+     assert(out);
+ 
+     if (IsEqualGUID(iid, &IID_IDCompositionVisual))
+     {
+-        hr = create_visual(2, iid, (void **)out);
++        hr = create_visual_from_shared_visual_handle(visual_handle, out);
+         FIXME("Created a IDCompositionVisual %p from a shared visual handle %p, hr %#lx.\n", *out,
+               visual_handle, hr);
+         return hr;
+     }
+     else if (IsEqualGUID(iid, &IID_IDCompositionTarget))
+     {
+-        HWND hwnd = CreateWindowA("static", "dummy_window", WS_VISIBLE, 0, 0, 800, 800, NULL, NULL, NULL, NULL);
+-        hr = desktop_device_CreateTargetForHwnd(iface, hwnd, TRUE, (IDCompositionTarget **)out);
++        hr = create_target_from_shared_visual_handle(impl_from_IDCompositionDeviceUnknown(iface),
++                                                     visual_handle, (void **)out);
+         FIXME("Created a IDCompositionTarget %p from a shared visual handle %p, hr %#lx.\n", *out,
+               visual_handle, hr);
+         return hr;
+@@ -2012,14 +2043,21 @@ HRESULT WINAPI DCompositionCreateDevice3(IUnknown *rendering_device, REFIID iid,
+     return create_device(3, iid, device);
+ }
+ 
+-HRESULT WINAPI DCompositionCreateSharedVisualHandle(void **handle)
++HRESULT WINAPI DCompositionCreateSharedVisualHandle(HANDLE *handle)
+ {
++    NTSTATUS status;
++
+     FIXME("handle %p stub!\n", handle);
+ 
+     if (!handle)
+         return STATUS_INVALID_PARAMETER;
+ 
+-    *handle = (void*)0xdeadbee1;
+-    FIXME("--- returning a fake handle %p.\n", *handle);
+-    return S_OK;
++    SERVER_START_REQ( dcomp_create_shared_visual )
++    {
++        if (!(status = wine_server_call( req )))
++            *handle = wine_server_ptr_handle( reply->handle );
++    }
++    SERVER_END_REQ;
++
++    return (HRESULT)status;
+ }
+diff --git a/dlls/dcomp/target.c b/dlls/dcomp/target.c
+index d5d715c7209..a8b6fab4872 100644
+--- a/dlls/dcomp/target.c
++++ b/dlls/dcomp/target.c
+@@ -22,6 +22,7 @@
+ #include "windef.h"
+ #include "winbase.h"
+ #include "dcomp_private.h"
++#include "wine/server.h"
+ #include "wine/debug.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(dcomp);
+@@ -79,12 +80,30 @@ static ULONG STDMETHODCALLTYPE target_Release(IDCompositionTarget *iface)
+             root_visual->is_root = FALSE;
+             IDCompositionVisual_Release(target->root);
+         }
++        if (target->shared_visual_handle)
++            CloseHandle(target->shared_visual_handle);
+         free(target);
+     }
+ 
+     return ref;
+ }
+ 
++static void shared_visual_target_set_root(HANDLE shared_visual_handle, IDCompositionVisual *root)
++{
++    NTSTATUS status;
++
++    SERVER_START_REQ(dcomp_set_shared_visual_info)
++    {
++        req->handle = wine_server_obj_handle(shared_visual_handle);
++        req->target_root = wine_server_client_ptr(root);
++        status = wine_server_call(req);
++    }
++    SERVER_END_REQ;
++
++    if (status)
++        ERR("dcomp_set_shared_visual_info failed, not in the same process? status %#lx.\n", status);
++}
++
+ static HRESULT STDMETHODCALLTYPE target_SetRoot(IDCompositionTarget *iface,
+         IDCompositionVisual *visual)
+ {
+@@ -116,6 +135,9 @@ static HRESULT STDMETHODCALLTYPE target_SetRoot(IDCompositionTarget *iface,
+     }
+     target->root = visual;
+ 
++    if (target->shared_visual_handle)
++        shared_visual_target_set_root(target->shared_visual_handle, target->root);
++
+     dcomp_unlock();
+     return S_OK;
+ }
+@@ -167,3 +189,35 @@ HRESULT create_target(struct composition_device *device, HWND hwnd, BOOL topmost
+     SetPropW(target->hwnd, prop, (HANDLE)1);
+     return S_OK;
+ }
++
++
++HRESULT create_target_from_shared_visual_handle(struct composition_device *device, HANDLE shared_visual_handle, void **new_target)
++{
++    struct composition_target *target;
++    HANDLE handle;
++
++    if (!DuplicateHandle(GetCurrentProcess(), shared_visual_handle, GetCurrentProcess(), &handle, 0,
++                         FALSE, DUPLICATE_SAME_ACCESS))
++    {
++        ERR("Cannot duplicate handle, last error %lu.\n", GetLastError());
++        return E_FAIL;
++    }
++
++    target = calloc(1, sizeof(*target));
++    if (!target)
++    {
++        CloseHandle(handle);
++        return E_OUTOFMEMORY;
++    }
++
++    IDCompositionDevice_AddRef(&device->IDCompositionDevice_iface);
++    dcomp_lock();
++    list_add_tail(&device->targets, &target->entry);
++    dcomp_unlock();
++    target->IDCompositionTarget_iface.lpVtbl = &target_vtbl;
++    target->ref = 1;
++    target->device = &device->IDCompositionDevice_iface;
++    target->shared_visual_handle = handle;
++    *new_target = &target->IDCompositionTarget_iface;
++    return S_OK;
++}
+diff --git a/dlls/dcomp/tests/dcomp.c b/dlls/dcomp/tests/dcomp.c
+index f8dd9cb3ce7..07fd1746457 100644
+--- a/dlls/dcomp/tests/dcomp.c
++++ b/dlls/dcomp/tests/dcomp.c
+@@ -358,6 +358,7 @@ static void test_DCompositionCreateSharedVisualHandle(void)
+     char buffer[1024] = {0};
+     OBJECT_TYPE_INFORMATION *type = (OBJECT_TYPE_INFORMATION *)buffer;
+     void *stack_pointer, *old_stack_pointer;
++    OBJECT_BASIC_INFORMATION info;
+     NTSTATUS status;
+     HMODULE module;
+     HANDLE handle;
+@@ -390,6 +391,11 @@ static void test_DCompositionCreateSharedVisualHandle(void)
+     {
+         ok(!wcscmp(type->TypeName.Buffer, L"Composition"), "Got %s.\n", debugstr_w(type->TypeName.Buffer));
+ 
++        status = NtQueryObject(handle, ObjectBasicInformation, &info, sizeof(info), NULL);
++        ok(status == STATUS_SUCCESS, "Got unexpected status %#lx.\n", status);
++        ok(info.Attributes == 0, "Got attributes %#lx\n", info.Attributes);
++        ok(info.GrantedAccess == 0x1, "Got access %#lx\n", info.GrantedAccess);
++
+         ret = CloseHandle(handle);
+         ok(ret, "CloseHandle failed.\n");
+     }
+diff --git a/dlls/dcomp/visual.c b/dlls/dcomp/visual.c
+index 8d227b9928b..c4ff363d186 100644
+--- a/dlls/dcomp/visual.c
++++ b/dlls/dcomp/visual.c
+@@ -74,6 +74,8 @@ static ULONG STDMETHODCALLTYPE visual_Release(IDCompositionVisualUnknown *iface)
+             ID2D1DeviceContext_Release(visual->device_context);
+         if (visual->content)
+             IUnknown_Release(visual->content);
++        if (visual->shared_visual_handle)
++            CloseHandle(visual->shared_visual_handle);
+         dcomp_lock();
+         if (visual->is_child)
+             list_remove(&visual->entry);
+@@ -1182,3 +1184,28 @@ HRESULT create_visual(int version, REFIID iid, void **new_visual)
+     IUnknown_Release(&visual->IDCompositionVisualUnknown_iface);
+     return hr;
+ }
++
++HRESULT create_visual_from_shared_visual_handle(HANDLE shared_visual_handle, void **new_visual)
++{
++    struct composition_visual *visual_impl;
++    HANDLE handle;
++    HRESULT hr;
++
++    if (!DuplicateHandle(GetCurrentProcess(), shared_visual_handle, GetCurrentProcess(), &handle, 0,
++                         FALSE, DUPLICATE_SAME_ACCESS))
++    {
++        ERR("Cannot duplicate handle, last error %lu.\n", GetLastError());
++        return E_FAIL;
++    }
++
++    hr = create_visual(2, &IID_IDCompositionVisual, (void **)new_visual);
++    if (FAILED(hr))
++    {
++        CloseHandle(handle);
++        return hr;
++    }
++
++    visual_impl = impl_from_IDCompositionVisualUnknown(*new_visual);
++    visual_impl->shared_visual_handle = handle;
++    return S_OK;
++}
+diff --git a/dlls/ntdll/tests/om.c b/dlls/ntdll/tests/om.c
+index 7f16584d911..5ef6e29a421 100644
+--- a/dlls/ntdll/tests/om.c
++++ b/dlls/ntdll/tests/om.c
+@@ -2199,6 +2199,10 @@ static void test_token(void)
+     pNtClose( handle );
+ }
+ 
++#define COMPOSITION_GENERIC_EXECUTE   STANDARD_RIGHTS_READ
++#define COMPOSITION_GENERIC_READ      (STANDARD_RIGHTS_READ|0x1)
++#define COMPOSITION_GENERIC_WRITE     (STANDARD_RIGHTS_READ|0x2)
++#define COMPOSITION_ALL_ACCESS        (STANDARD_RIGHTS_REQUIRED|0x3)
+ #define DEBUG_GENERIC_EXECUTE         (STANDARD_RIGHTS_EXECUTE|SYNCHRONIZE)
+ #define DEBUG_GENERIC_READ            (STANDARD_RIGHTS_READ|DEBUG_READ_EVENT)
+ #define DEBUG_GENERIC_WRITE           (STANDARD_RIGHTS_WRITE|DEBUG_PROCESS_ASSIGN)
+@@ -2330,6 +2334,7 @@ static void test_object_types(void)
+     {
+ #define TYPE(name,gen,extra,broken) { name, { gen ## _GENERIC_READ, gen ## _GENERIC_WRITE, \
+                 gen ## _GENERIC_EXECUTE, gen ## _ALL_ACCESS }, gen ## _ALL_ACCESS | extra, broken }
++        TYPE( L"Composition",   COMPOSITION, 0, 0 ),
+         TYPE( L"DebugObject",   DEBUG, 0, 0 ),
+         TYPE( L"Desktop",       DESKTOP, 0, 0 ),
+         TYPE( L"Device",        FILE, 0, 0 ),
+diff --git a/server/d3dkmt.c b/server/d3dkmt.c
+index e913e112911..88334dbcef5 100644
+--- a/server/d3dkmt.c
++++ b/server/d3dkmt.c
+@@ -791,3 +791,138 @@ DECL_HANDLER(d3dkmt_mutex_release)
+ 
+     release_object( mutex );
+ }
++
++#define COMPOSITION_QUERY_STATE  0x1
++#define COMPOSITION_MODIFY_STATE 0x2
++
++static const WCHAR composition_name[] = {'C','o','m','p','o','s','i','t','i','o','n',0};
++
++struct type_descr composition_type =
++{
++    { composition_name, sizeof(composition_name) },                     /* name */
++    COMPOSITION_QUERY_STATE,                                            /* valid_access */
++    {                                                                   /* mapping */
++        STANDARD_RIGHTS_READ | COMPOSITION_QUERY_STATE,
++        STANDARD_RIGHTS_READ | COMPOSITION_MODIFY_STATE,
++        STANDARD_RIGHTS_READ,
++        STANDARD_RIGHTS_REQUIRED | COMPOSITION_QUERY_STATE | COMPOSITION_MODIFY_STATE,
++    },
++};
++
++struct composition
++{
++    struct object obj;                      /* object header */
++    struct process *process;                /* owner process */
++    client_ptr_t target_root;               /* root IDCompositionVisual pointer for the target created from this shared visual */
++};
++
++static void composition_dump( struct object *obj, int verbose );
++static void composition_destroy( struct object *obj );
++
++static const struct object_ops composition_ops =
++{
++    sizeof(struct composition),             /* size */
++    &composition_type,                      /* type */
++    composition_dump,                       /* dump */
++    no_add_queue,                           /* add_queue */
++    NULL,                                   /* remove_queue */
++    NULL,                                   /* signaled */
++    NULL,                                   /* satisfied */
++    no_signal,                              /* signal */
++    no_get_fd,                              /* get_fd */
++    default_get_sync,                       /* get_sync */
++    default_map_access,                     /* map_access */
++    default_get_sd,                         /* get_sd */
++    default_set_sd,                         /* set_sd */
++    default_get_full_name,                  /* get_full_name */
++    no_lookup_name,                         /* lookup_name */
++    directory_link_name,                    /* link_name */
++    default_unlink_name,                    /* unlink_name */
++    no_open_file,                           /* open_file */
++    no_kernel_obj_list,                     /* get_kernel_obj_list */
++    no_close_handle,                        /* close_handle */
++    composition_destroy,                    /* destroy */
++};
++
++static void composition_dump( struct object *obj, int verbose )
++{
++    assert( obj->ops == &composition_ops );
++    fprintf( stderr, "Compositon\n" );
++}
++
++static void composition_destroy( struct object *obj )
++{
++    struct composition *composition = (struct composition *)obj;
++
++    release_object( composition->process );
++}
++
++static struct composition *get_composition_obj( struct process *process, obj_handle_t handle, unsigned int access )
++{
++    return (struct composition *)get_handle_obj( process, handle, access, &composition_ops );
++}
++
++static struct composition *create_composition(void)
++{
++    struct composition *composition;
++
++    if ((composition = alloc_object( &composition_ops )))
++    {
++        composition->target_root = 0;
++        composition->process = (struct process *)grab_object( current->process );
++    }
++
++    return composition;
++}
++
++/* Create a DirectComposition shared visual handle */
++DECL_HANDLER(dcomp_create_shared_visual)
++{
++    struct composition *composition;
++
++    if ((composition = create_composition()))
++    {
++        reply->handle = alloc_handle_no_access_check( current->process, composition, 0, 0 );
++        release_object( composition );
++    }
++}
++
++
++/* Set info for a DirectComposition shared visual object */
++DECL_HANDLER(dcomp_set_shared_visual_info)
++{
++    struct composition *composition;
++
++    composition = get_composition_obj( current->process, req->handle, 0);
++    if (!composition) return;
++
++    if (composition->process != current->process)
++    {
++        release_object( composition );
++        set_error(STATUS_NOT_IMPLEMENTED);
++        return;
++    }
++
++    composition->target_root = req->target_root;
++    release_object( composition );
++}
++
++
++/* Get info for a DirectComposition shared visual */
++DECL_HANDLER(dcomp_get_shared_visual_info)
++{
++    struct composition *composition;
++
++    composition = get_composition_obj( current->process, req->handle, 0);
++    if (!composition) return;
++
++    if (composition->process != current->process)
++    {
++        release_object( composition );
++        set_error(STATUS_NOT_IMPLEMENTED);
++        return;
++    }
++
++    reply->target_root = composition->target_root;
++    release_object( composition );
++}
+diff --git a/server/directory.c b/server/directory.c
+index 091ceb84c71..e52e03e0d71 100644
+--- a/server/directory.c
++++ b/server/directory.c
+@@ -164,6 +164,7 @@ static struct type_descr *types[] =
+     &key_type,
+     &apc_reserve_type,
+     &completion_reserve_type,
++    &composition_type,
+ };
+ 
+ static void object_type_dump( struct object *obj, int verbose )
+diff --git a/server/object.h b/server/object.h
+index cab8ad25a59..1be4d04464b 100644
+--- a/server/object.h
++++ b/server/object.h
+@@ -371,6 +371,7 @@ extern struct type_descr mapping_type;
+ extern struct type_descr key_type;
+ extern struct type_descr apc_reserve_type;
+ extern struct type_descr completion_reserve_type;
++extern struct type_descr composition_type;
+ 
+ #define KEYEDEVENT_WAIT       0x0001
+ #define KEYEDEVENT_WAKE       0x0002
+diff --git a/server/protocol.def b/server/protocol.def
+index 0ac64297026..7b02b45a8b1 100644
+--- a/server/protocol.def
++++ b/server/protocol.def
+@@ -4271,3 +4271,25 @@ enum inproc_sync_type
+     data_size_t         runtime_size;   /* size of client runtime data */
+     VARARG(runtime,bytes);              /* client runtime data */
+ @END
++
++
++/* Create a DirectComposition shared visual handle */
++@REQ(dcomp_create_shared_visual)
++@REPLY
++    obj_handle_t  handle;                     /* created shared visual handle */
++@END
++
++
++/* Set info for a DirectComposition shared visual object */
++@REQ(dcomp_set_shared_visual_info)
++    obj_handle_t  handle;                    /* shared visual handle */
++    client_ptr_t  target_root;               /* root IDCompositionVisual pointer for the target created from this shared visual */
++@END
++
++
++/* Get info for a DirectComposition shared visual */
++@REQ(dcomp_get_shared_visual_info)
++    obj_handle_t  handle;                     /* shared visual handle */
++@REPLY
++    client_ptr_t  target_root;                /* root IDCompositionVisual pointer for the target created from this shared visual */
++@END
+-- 
+2.51.0
+

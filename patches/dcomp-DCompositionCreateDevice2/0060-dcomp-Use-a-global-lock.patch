@@ -1,0 +1,224 @@
+From 25ae3560e14d39e2eef6c6df21d34253b67ce80e Mon Sep 17 00:00:00 2001
+From: Zhiyi Zhang <zzhang@codeweavers.com>
+Date: Fri, 13 Mar 2026 10:13:36 +0800
+Subject: [PATCH 60/65] dcomp: Use a global lock.
+
+For example, visual_SetContent() can be called when the composition thread is running.
+This is needed because Commit() is executed immediately unlike Windows, which uses a command list.
+---
+ dlls/dcomp/dcomp_private.h |  1 -
+ dlls/dcomp/device.c        | 12 +++++-------
+ dlls/dcomp/target.c        | 17 +++++++++++------
+ dlls/dcomp/visual.c        |  9 +++++++++
+ 4 files changed, 25 insertions(+), 14 deletions(-)
+
+diff --git a/dlls/dcomp/dcomp_private.h b/dlls/dcomp/dcomp_private.h
+index 0e8a66fd686..0d70011f0c9 100644
+--- a/dlls/dcomp/dcomp_private.h
++++ b/dlls/dcomp/dcomp_private.h
+@@ -29,7 +29,6 @@ struct composition_device
+     IDCompositionDevice IDCompositionDevice_iface;
+     IDCompositionDeviceUnknown IDCompositionDeviceUnknown_iface;
+     IDCompositionSurface *drawing_surface;
+-    CRITICAL_SECTION cs;
+     struct list targets;
+     HANDLE thread;
+     BOOL exit_thread;
+diff --git a/dlls/dcomp/device.c b/dlls/dcomp/device.c
+index 8d9099db5b6..c4ea896ccfc 100644
+--- a/dlls/dcomp/device.c
++++ b/dlls/dcomp/device.c
+@@ -115,7 +115,6 @@ static ULONG STDMETHODCALLTYPE device_Release(IDCompositionDevice *iface)
+             WaitForSingleObject(device->thread, INFINITE);
+             CloseHandle(device->thread);
+         }
+-        DeleteCriticalSection(&device->cs);
+         free(device);
+     }
+ 
+@@ -621,7 +620,7 @@ static DWORD WINAPI composite_thread_proc(void *iface)
+ 
+     while (TRUE)
+     {
+-        EnterCriticalSection(&device->cs);
++        dcomp_lock();
+ 
+         count = 0;
+         LIST_FOR_EACH_ENTRY(target, &device->targets, struct composition_target, entry)
+@@ -641,11 +640,11 @@ static DWORD WINAPI composite_thread_proc(void *iface)
+         {
+             TRACE("Composition thread exited.\n");
+             device->thread_exited = TRUE;
+-            LeaveCriticalSection(&device->cs);
++            dcomp_unlock();
+             break;
+         }
+ 
+-        LeaveCriticalSection(&device->cs);
++        dcomp_unlock();
+ 
+         if (device->exit_thread)
+             break;
+@@ -663,7 +662,7 @@ static HRESULT STDMETHODCALLTYPE device_Commit(IDCompositionDevice *iface)
+ 
+     FIXME("iface %p semi-stub!\n", iface);
+ 
+-    EnterCriticalSection(&device->cs);
++    dcomp_lock();
+ 
+     if (!device->thread || device->thread_exited)
+     {
+@@ -678,7 +677,7 @@ static HRESULT STDMETHODCALLTYPE device_Commit(IDCompositionDevice *iface)
+         device->thread = CreateThread(NULL, 0, composite_thread_proc, iface, 0, NULL);
+     }
+ 
+-    LeaveCriticalSection(&device->cs);
++    dcomp_unlock();
+ 
+     return hr;
+ }
+@@ -1903,7 +1902,6 @@ static HRESULT create_device(int version, REFIID iid, void **out)
+     if (!device)
+         return E_OUTOFMEMORY;
+ 
+-    InitializeCriticalSection(&device->cs);
+     list_init(&device->targets);
+     device->IDCompositionDevice_iface.lpVtbl = &device_vtbl;
+     device->IDCompositionDeviceUnknown_iface.lpVtbl = &desktop_device_vtbl;
+diff --git a/dlls/dcomp/target.c b/dlls/dcomp/target.c
+index f0e906ca34e..d5d715c7209 100644
+--- a/dlls/dcomp/target.c
++++ b/dlls/dcomp/target.c
+@@ -66,14 +66,12 @@ static ULONG STDMETHODCALLTYPE target_Release(IDCompositionTarget *iface)
+ 
+     if (!ref)
+     {
+-        struct composition_device *device = impl_from_IDCompositionDevice(target->device);
+-
+         prop = target->topmost ? wine_window_topmost_composed : wine_window_non_topmost_composed;
+         RemovePropW(target->hwnd, prop);
+ 
+-        EnterCriticalSection(&device->cs);
++        dcomp_lock();
+         list_remove(&target->entry);
+-        LeaveCriticalSection(&device->cs);
++        dcomp_unlock();
+         IDCompositionDevice_Release(target->device);
+         if (target->root)
+         {
+@@ -95,11 +93,16 @@ static HRESULT STDMETHODCALLTYPE target_SetRoot(IDCompositionTarget *iface,
+ 
+     TRACE("iface %p, visual %p\n", iface, visual);
+ 
++    dcomp_lock();
++
+     if (visual)
+     {
+         composition_visual = impl_from_IDCompositionVisual(visual);
+         if (composition_visual->is_root)
++        {
++            dcomp_unlock();
+             return E_INVALIDARG;
++        }
+ 
+         composition_visual->is_root = TRUE;
+         IDCompositionVisual_AddRef(visual);
+@@ -112,6 +115,8 @@ static HRESULT STDMETHODCALLTYPE target_SetRoot(IDCompositionTarget *iface,
+         IDCompositionVisual_Release(target->root);
+     }
+     target->root = visual;
++
++    dcomp_unlock();
+     return S_OK;
+ }
+ 
+@@ -148,9 +153,9 @@ HRESULT create_target(struct composition_device *device, HWND hwnd, BOOL topmost
+         return E_OUTOFMEMORY;
+ 
+     IDCompositionDevice_AddRef(&device->IDCompositionDevice_iface);
+-    EnterCriticalSection(&device->cs);
++    dcomp_lock();
+     list_add_tail(&device->targets, &target->entry);
+-    LeaveCriticalSection(&device->cs);
++    dcomp_unlock();
+     target->IDCompositionTarget_iface.lpVtbl = &target_vtbl;
+     target->ref = 1;
+     target->hwnd = hwnd;
+diff --git a/dlls/dcomp/visual.c b/dlls/dcomp/visual.c
+index 5d3d961662d..8d227b9928b 100644
+--- a/dlls/dcomp/visual.c
++++ b/dlls/dcomp/visual.c
+@@ -208,6 +208,7 @@ static HRESULT STDMETHODCALLTYPE visual_SetContent(IDCompositionVisualUnknown *i
+ 
+     FIXME("iface %p, content %p semi-stub!\n", iface, content);
+ 
++    dcomp_lock();
+ 
+     if (content)
+     {
+@@ -221,6 +222,7 @@ static HRESULT STDMETHODCALLTYPE visual_SetContent(IDCompositionVisualUnknown *i
+             if (FAILED(hr))
+             {
+                 ERR("Failed to get the swapchain device, hr %#lx.\n", hr);
++                dcomp_unlock();
+                 return hr;
+             }
+         }
+@@ -238,6 +240,7 @@ static HRESULT STDMETHODCALLTYPE visual_SetContent(IDCompositionVisualUnknown *i
+                 if (FAILED(hr))
+                 {
+                     ERR("Failed to get the dxgi surface device, hr %#lx.\n", hr);
++                    dcomp_unlock();
+                     return hr;
+                 }
+             }
+@@ -245,12 +248,14 @@ static HRESULT STDMETHODCALLTYPE visual_SetContent(IDCompositionVisualUnknown *i
+             {
+                 FIXME("Only IDCompositionSurface from IDXGISurface is currently supported.\n");
+                 IDCompositionSurface_Release(suface);
++                dcomp_unlock();
+                 return E_INVALIDARG;
+             }
+         }
+         else
+         {
+             FIXME("Only IDXGISwapChain1 or IDCompositionSurface are currently supported.\n");
++            dcomp_unlock();
+             return E_INVALIDARG;
+         }
+ 
+@@ -259,6 +264,7 @@ static HRESULT STDMETHODCALLTYPE visual_SetContent(IDCompositionVisualUnknown *i
+         if (FAILED(hr))
+         {
+             ERR("Failed to create a D2D device, hr %#lx.\n", hr);
++            dcomp_unlock();
+             return hr;
+         }
+ 
+@@ -268,6 +274,7 @@ static HRESULT STDMETHODCALLTYPE visual_SetContent(IDCompositionVisualUnknown *i
+         if (FAILED(hr))
+         {
+             ERR("Failed to create a D2D device context, hr %#lx.\n", hr);
++            dcomp_unlock();
+             return hr;
+         }
+ 
+@@ -276,6 +283,7 @@ static HRESULT STDMETHODCALLTYPE visual_SetContent(IDCompositionVisualUnknown *i
+         {
+             ERR("Failed to get a ID2D1GdiInteropRenderTarget, hr %#lx.\n", hr);
+             ID2D1DeviceContext_Release(device_context);
++            dcomp_unlock();
+             return hr;
+         }
+     }
+@@ -305,6 +313,7 @@ static HRESULT STDMETHODCALLTYPE visual_SetContent(IDCompositionVisualUnknown *i
+         visual->interop = interop;
+     }
+ 
++    dcomp_unlock();
+     return S_OK;
+ }
+ 
+-- 
+2.51.0
+

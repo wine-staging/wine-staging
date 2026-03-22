@@ -1,0 +1,431 @@
+From cb2d8c31487dfe96b3f5c534e1d9fc63a1df6977 Mon Sep 17 00:00:00 2001
+From: Zhiyi Zhang <zzhang@codeweavers.com>
+Date: Fri, 13 Mar 2026 10:13:36 +0800
+Subject: [PATCH 59/65] dcomp: Implement DXGI_FORMAT_R8G8B8A8_UNORM surface
+ conversion.
+
+---
+ dlls/dcomp/Makefile.in   |   2 +-
+ dlls/dcomp/device.c      | 304 +++++++++++++++++++++++++++++++++++++++
+ dlls/dcomp/surface.c     |   2 +-
+ dlls/dcomp/tests/dcomp.c |  13 +-
+ 4 files changed, 312 insertions(+), 9 deletions(-)
+
+diff --git a/dlls/dcomp/Makefile.in b/dlls/dcomp/Makefile.in
+index 590d07d5890..5848ad807ac 100644
+--- a/dlls/dcomp/Makefile.in
++++ b/dlls/dcomp/Makefile.in
+@@ -1,5 +1,5 @@
+ MODULE   = dcomp.dll
+-IMPORTS  = d2d1 dwmapi user32 gdi32
++IMPORTS  = d2d1 dwmapi user32 gdi32 d3dcompiler
+ 
+ EXTRADLLFLAGS = -Wb,--prefer-native
+ 
+diff --git a/dlls/dcomp/device.c b/dlls/dcomp/device.c
+index eac9722af29..8d9099db5b6 100644
+--- a/dlls/dcomp/device.c
++++ b/dlls/dcomp/device.c
+@@ -33,6 +33,8 @@
+ #include "dcomp_private.h"
+ #include "dxgi.h"
+ #include "dwmapi.h"
++#include "d3d11_1.h"
++#include "d3dcompiler.h"
+ #include "wine/debug.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(dcomp);
+@@ -120,12 +122,295 @@ static ULONG STDMETHODCALLTYPE device_Release(IDCompositionDevice *iface)
+     return ref;
+ }
+ 
++/* TODO: Optimize this. There is plenty of room */
++static HRESULT create_bgra_surface_from_rgba(IDXGISurface *rgba_surface, IDXGISurface **bgra_surface)
++{
++    static const D3D11_INPUT_ELEMENT_DESC layout_desc[] =
++    {
++        {"POSITION", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 0, D3D11_INPUT_PER_VERTEX_DATA, 0},
++        {"TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 8, D3D11_INPUT_PER_VERTEX_DATA, 0},
++    };
++
++    static const char vs_code[] =
++        "void main(in float4 in_position : POSITION,\n"
++        "          in float2 in_texcoord : TEXCOORD,\n"
++        "          out float4 position : SV_Position,\n"
++        "          out float2 texcoord : TEXCOORD)\n"
++        "{\n"
++        "     position = in_position;\n"
++        "     texcoord = in_texcoord;\n"
++        "}";
++
++    static const char ps_code[] =
++        "Texture2D src_texture : register(t0);\n"
++        "SamplerState sam_linear : register(s0);\n"
++        "float4 main(float4 pos : SV_POSITION, float2 uv : TEXCOORD) : SV_TARGET"
++        "{\n"
++        "    return src_texture.Sample(sam_linear, uv);\n"
++        "}";
++
++    struct vec2
++    {
++        float x, y;
++    };
++
++    static const struct
++    {
++        struct vec2 position;
++        struct vec2 texcoord;
++    } quad[] =
++    {
++        {{-1.0f, 1.0f}, {0.0f, 0.0f}},   /* Top-Left */
++        {{1.0f, 1.0f}, {1.0f, 0.0f}},    /* Top-Right */
++        {{-1.0f, -1.0f}, {0.0f, 1.0f}},  /* Bottom-Left */
++        {{1.0f, -1.0f}, {1.0f, 1.0f}},   /* Bottom-Right */
++    };
++
++    ID3D11Texture2D *src_texture = NULL, *dst_texture = NULL;
++    ID3DDeviceContextState *state = NULL, *old_state = NULL;
++    ID3D11DeviceContext1 *d3d11_device_context1 = NULL;
++    ID3D11DeviceContext *d3d11_device_context = NULL;
++    static ID3D10Blob *vs_blob = NULL, *ps_blob = NULL;
++    ID3D11InputLayout *input_layout = NULL;
++    D3D11_SAMPLER_DESC sampler_desc = {0};
++    D3D11_SUBRESOURCE_DATA resource_data;
++    ID3D11ShaderResourceView *srv = NULL;
++    ID3D11RenderTargetView *rtv = NULL;
++    ID3D11SamplerState *sampler = NULL;
++    D3D11_TEXTURE2D_DESC texture_desc;
++    DXGI_SURFACE_DESC surface_desc;
++    D3D11_BUFFER_DESC buffer_desc;
++    ID3D11VertexShader *vs = NULL;
++    ID3D11PixelShader *ps = NULL;
++    ID3D11Device1 *d3d11_device;
++    unsigned int stride, offset;
++    ID3D11Buffer *vb = NULL;
++    D3D11_VIEWPORT vp;
++    HRESULT hr;
++
++    static const D3D_FEATURE_LEVEL feature_levels[] =
++    {
++        D3D_FEATURE_LEVEL_11_1,
++        D3D_FEATURE_LEVEL_11_0,
++        D3D_FEATURE_LEVEL_10_1,
++        D3D_FEATURE_LEVEL_10_0,
++    };
++
++    hr = IDXGISurface_QueryInterface(rgba_surface, &IID_ID3D11Texture2D, (void **)&src_texture);
++    if (FAILED(hr))
++    {
++        ERR("Failed to get a ID3D11Texture2D, hr %#lx.\n", hr);
++        goto done;
++    }
++
++    hr = IDXGISurface_GetDevice(rgba_surface, &IID_ID3D11Device1, (void **)&d3d11_device);
++    if (FAILED(hr))
++    {
++        ERR("Failed to get device, hr %#lx.\n", hr);
++        goto done;
++    }
++
++    hr = IDXGISurface_GetDesc(rgba_surface, &surface_desc);
++    if (FAILED(hr))
++    {
++        ERR("Failed to get the dxgi surface description, hr %#lx.\n", hr);
++        goto done;
++    }
++
++    texture_desc.Width = surface_desc.Width;
++    texture_desc.Height = surface_desc.Height;
++    texture_desc.MipLevels = 1;
++    texture_desc.ArraySize = 1;
++    texture_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
++    texture_desc.SampleDesc.Count = 1;
++    texture_desc.SampleDesc.Quality = 0;
++    texture_desc.Usage = D3D11_USAGE_DEFAULT;
++    texture_desc.BindFlags = D3D11_BIND_RENDER_TARGET;
++    texture_desc.CPUAccessFlags = 0;
++    texture_desc.MiscFlags = D3D11_RESOURCE_MISC_GUARDED | D3D11_RESOURCE_MISC_GDI_COMPATIBLE;
++    hr = ID3D11Device1_CreateTexture2D(d3d11_device, &texture_desc, NULL, &dst_texture);
++    if (FAILED(hr))
++    {
++        ERR("Failed to create a ID3D11Texture2D, hr %#lx.\n", hr);
++        goto done;
++    }
++
++    hr = ID3D11Device1_CreateShaderResourceView(d3d11_device, (ID3D11Resource *)src_texture, NULL, &srv);
++    if (FAILED(hr))
++    {
++        ERR("Failed to create a SRV, hr %#lx.\n", hr);
++        goto done;
++    }
++
++    hr = ID3D11Device1_CreateRenderTargetView(d3d11_device, (ID3D11Resource *)dst_texture, NULL, &rtv);
++    if (FAILED(hr))
++    {
++        ERR("Failed to create a RTV, hr %#lx.\n", hr);
++        goto done;
++    }
++
++    ID3D11Device1_GetImmediateContext(d3d11_device, &d3d11_device_context);
++    if (FAILED(hr = ID3D11DeviceContext_QueryInterface(d3d11_device_context, &IID_ID3D11DeviceContext1,
++                                                       (void **)&d3d11_device_context1)))
++    {
++        ERR("Failed to query ID3D11DeviceContext1, hr %#lx.\n", hr);
++        goto done;
++    }
++
++    if (FAILED(hr = ID3D11Device1_CreateDeviceContextState(d3d11_device, 0, feature_levels,
++                                                           ARRAY_SIZE(feature_levels), D3D11_SDK_VERSION,
++                                                           &IID_ID3D11Device1, NULL, &state)))
++    {
++        ERR("Failed to create device context state, hr %#lx.\n", hr);
++        goto done;
++    }
++    ID3D11DeviceContext1_SwapDeviceContextState(d3d11_device_context1, state, &old_state);
++
++    ID3D11DeviceContext1_OMSetRenderTargets(d3d11_device_context1, 1, &rtv, NULL);
++    ID3D11DeviceContext1_PSSetShaderResources(d3d11_device_context1, 0, 1, &srv);
++
++    /* Move this to dcomp device instance ? */
++    if (vs_blob == NULL)
++    {
++        hr = D3DCompile(vs_code, sizeof(vs_code) - 1, "vs", NULL, NULL, "main", "vs_4_0", 0, 0, &vs_blob, NULL);
++        if (FAILED(hr))
++        {
++            ERR("Failed to compile vertex shader, hr %#lx.\n", hr);
++            goto done;
++        }
++
++        hr = D3DCompile(ps_code, sizeof(ps_code) - 1, "ps", NULL, NULL, "main", "ps_4_0", 0, 0, &ps_blob, NULL);
++        if (FAILED(hr))
++        {
++            ERR("Failed to compile pixel shader, hr %#lx.\n", hr);
++            goto done;
++        }
++    }
++
++    hr = ID3D11Device1_CreateVertexShader(d3d11_device, ID3D10Blob_GetBufferPointer(vs_blob),
++                                          ID3D10Blob_GetBufferSize(vs_blob), NULL, &vs);
++    if (FAILED(hr))
++    {
++        ERR("Failed to create vertex shader, hr %#lx.\n", hr);
++        goto done;
++    }
++
++    hr = ID3D11Device1_CreatePixelShader(d3d11_device, ID3D10Blob_GetBufferPointer(ps_blob),
++                                         ID3D10Blob_GetBufferSize(ps_blob), NULL, &ps);
++    if (FAILED(hr))
++    {
++        ERR("Failed to create pixel shader, hr %#lx.\n", hr);
++        goto done;
++    }
++
++    hr = ID3D11Device1_CreateInputLayout(d3d11_device, layout_desc, ARRAY_SIZE(layout_desc),
++                                         ID3D10Blob_GetBufferPointer(vs_blob),
++                                         ID3D10Blob_GetBufferSize(vs_blob), &input_layout);
++    if (FAILED(hr))
++    {
++        ERR("Failed to create input layout, hr %#lx.\n", hr);
++        goto done;
++    }
++
++    buffer_desc.ByteWidth = sizeof(quad);
++    buffer_desc.Usage = D3D11_USAGE_DEFAULT;
++    buffer_desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
++    buffer_desc.CPUAccessFlags = 0;
++    buffer_desc.MiscFlags = 0;
++    buffer_desc.StructureByteStride = 0;
++    resource_data.pSysMem = quad;
++    resource_data.SysMemPitch = 0;
++    resource_data.SysMemSlicePitch = 0;
++    hr = ID3D11Device1_CreateBuffer(d3d11_device, &buffer_desc, &resource_data, &vb);
++    if (FAILED(hr))
++    {
++        ERR("Failed to create vertex buffer, hr %#lx.\n", hr);
++        goto done;
++    }
++
++    sampler_desc.Filter = D3D11_FILTER_MIN_MAG_MIP_LINEAR;
++    sampler_desc.AddressU = D3D11_TEXTURE_ADDRESS_CLAMP;
++    sampler_desc.AddressV = D3D11_TEXTURE_ADDRESS_CLAMP;
++    sampler_desc.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
++    sampler_desc.ComparisonFunc = D3D11_COMPARISON_NEVER;
++    sampler_desc.MinLOD = 0;
++    sampler_desc.MaxLOD = D3D11_FLOAT32_MAX;
++
++    hr = ID3D11Device1_CreateSamplerState(d3d11_device, &sampler_desc, &sampler);
++    if (FAILED(hr))
++    {
++        ERR("Failed to create sampler state, hr %#lx.\n", hr);
++        goto done;
++    }
++    ID3D11DeviceContext1_PSSetSamplers(d3d11_device_context1, 0, 1, &sampler);
++
++    ID3D11DeviceContext1_IASetInputLayout(d3d11_device_context1, input_layout);
++    ID3D11DeviceContext1_IASetPrimitiveTopology(d3d11_device_context1, D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
++
++    stride = sizeof(quad[0]);
++    offset = 0;
++    ID3D11DeviceContext1_IASetVertexBuffers(d3d11_device_context1, 0, 1, &vb, &stride, &offset);
++    ID3D11DeviceContext1_VSSetShader(d3d11_device_context1, vs, NULL, 0);
++    ID3D11DeviceContext1_PSSetShader(d3d11_device_context1, ps, NULL, 0);
++
++    vp.TopLeftX = 0;
++    vp.TopLeftY = 0;
++    vp.Width = surface_desc.Width;
++    vp.Height = surface_desc.Height;
++    vp.MinDepth = 0;
++    vp.MaxDepth = 1;
++    ID3D11DeviceContext1_RSSetViewports(d3d11_device_context1, 1, &vp);
++    ID3D11DeviceContext1_Draw(d3d11_device_context1, 4, 0);
++
++    hr = ID3D11Texture2D_QueryInterface(dst_texture, &IID_IDXGISurface, (void **)bgra_surface);
++    if (FAILED(hr))
++    {
++        ERR("Failed to get bgra surface, hr %#lx.\n", hr);
++        goto done;
++    }
++
++done:
++    if (old_state)
++    {
++        ID3D11DeviceContext1_SwapDeviceContextState(d3d11_device_context1, old_state, NULL);
++        ID3DDeviceContextState_Release(old_state);
++    }
++    if (state)
++        ID3DDeviceContextState_Release(state);
++    if (vb)
++        ID3D11Buffer_Release(vb);
++    if (sampler)
++        ID3D11SamplerState_Release(sampler);
++    if (input_layout)
++        ID3D11InputLayout_Release(input_layout);
++    if (ps)
++        ID3D11PixelShader_Release(ps);
++    if (vs)
++        ID3D11VertexShader_Release(vs);
++    if (d3d11_device_context1)
++        ID3D11DeviceContext1_Release(d3d11_device_context1);
++    if (d3d11_device_context)
++        ID3D11DeviceContext_Release(d3d11_device_context);
++    if (rtv)
++        ID3D11RenderTargetView_Release(rtv);
++    if (srv)
++        ID3D11ShaderResourceView_Release(srv);
++    if (dst_texture)
++        ID3D11Texture2D_Release(dst_texture);
++    if (d3d11_device)
++        ID3D11Device1_Release(d3d11_device);
++    if (src_texture)
++        ID3D11Texture2D_Release(src_texture);
++    return hr;
++}
++
+ static void do_composite_dxgi_surface(const struct composition_target *target,
+                                       const struct composition_visual *visual,
+                                       IDXGISurface *dxgi_surface)
+ {
+     D2D1_BITMAP_PROPERTIES1 bitmap_desc;
+     ID2D1Bitmap1 *target_bitmap = NULL;
++    IDXGISurface *bgra_surface = NULL;
+     DXGI_SURFACE_DESC surface_desc;
+     ID2D1Bitmap *src_bitmap = NULL;
+     ID2D1Image *old_target = NULL;
+@@ -154,6 +439,23 @@ static void do_composite_dxgi_surface(const struct composition_target *target,
+         goto done;
+     }
+ 
++    /* Convert DXGI_FORMAT_R8G8B8A8_UNORM to DXGI_FORMAT_B8G8R8A8_UNORM */
++    if (surface_desc.Format == DXGI_FORMAT_R8G8B8A8_UNORM)
++    {
++        hr = create_bgra_surface_from_rgba(dxgi_surface, &bgra_surface);
++        if (FAILED(hr))
++        {
++            ERR("Failed to convert DXGI_FORMAT_R8G8B8A8_UNORM surface to DXGI_FORMAT_B8G8R8A8_UNORM, hr %#lx.\n", hr);
++            goto done;
++        }
++        dxgi_surface = bgra_surface;
++    }
++    else if (surface_desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT)
++    {
++        ERR("DXGI_FORMAT_R16G16B16A16_FLOAT surface is currently unsupported.\n");
++        return;
++    }
++
+     size.width = surface_desc.Width;
+     size.height = surface_desc.Height;
+     bitmap_desc.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+@@ -209,6 +511,8 @@ static void do_composite_dxgi_surface(const struct composition_target *target,
+         ID2D1Image_Release(old_target);
+ 
+ done:
++    if (bgra_surface)
++        IDXGISurface_Release(bgra_surface);
+     if (src_bitmap)
+         ID2D1Bitmap_Release(src_bitmap);
+     if (target_bitmap)
+diff --git a/dlls/dcomp/surface.c b/dlls/dcomp/surface.c
+index 7b35b89966c..9c6301bb933 100644
+--- a/dlls/dcomp/surface.c
++++ b/dlls/dcomp/surface.c
+@@ -324,7 +324,7 @@ HRESULT create_surface(struct composition_surface_factory *factory, UINT width,
+         /* TODO: What about alpha_mode ? */
+ 
+         hr = IDXGIDevice_CreateSurface((IDXGIDevice *)factory->rendering_device, &desc, 1,
+-                DXGI_USAGE_BACK_BUFFER, NULL, &dxgi_surface);
++                DXGI_USAGE_BACK_BUFFER | DXGI_USAGE_SHADER_INPUT, NULL, &dxgi_surface);
+         if (FAILED(hr))
+         {
+             ERR("Failed to create a IDXGISurface.\n");
+diff --git a/dlls/dcomp/tests/dcomp.c b/dlls/dcomp/tests/dcomp.c
+index bedd77b7937..f8dd9cb3ce7 100644
+--- a/dlls/dcomp/tests/dcomp.c
++++ b/dlls/dcomp/tests/dcomp.c
+@@ -776,9 +776,9 @@ static void test_device_Commit(void)
+ {
+     static const DXGI_FORMAT surface_formats[] =
+     {
+-        DXGI_FORMAT_B8G8R8A8_UNORM,
+-        DXGI_FORMAT_R8G8B8A8_UNORM,
+-        DXGI_FORMAT_R16G16B16A16_FLOAT
++       DXGI_FORMAT_B8G8R8A8_UNORM,
++       DXGI_FORMAT_R8G8B8A8_UNORM,
++       DXGI_FORMAT_R16G16B16A16_FLOAT
+     };
+     IDCompositionSurfaceFactory *surface_factory;
+     IDCompositionVisual *visual, *root_visual;
+@@ -924,7 +924,7 @@ static void test_device_Commit(void)
+ 
+         hr = IDCompositionDevice_Commit(dcomp_device);
+         ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+-        todo_wine_if(surface_formats[i] != DXGI_FORMAT_B8G8R8A8_UNORM)
++        todo_wine_if(surface_formats[i] == DXGI_FORMAT_R16G16B16A16_FLOAT)
+         expect_rendered_color(hwnd, RGB(0, 0xff, 0x00));
+ 
+         /* Render surface yellow */
+@@ -940,12 +940,12 @@ static void test_device_Commit(void)
+         }
+ 
+         /* Remains green before calling Commit() */
+-        todo_wine_if(surface_formats[i] != DXGI_FORMAT_B8G8R8A8_UNORM)
++        todo_wine_if(surface_formats[i] == DXGI_FORMAT_R16G16B16A16_FLOAT)
+         expect_rendered_color(hwnd, RGB(0, 0xff, 0x00));
+ 
+         hr = IDCompositionDevice_Commit(dcomp_device);
+         ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+-        todo_wine_if(surface_formats[i] != DXGI_FORMAT_B8G8R8A8_UNORM)
++        todo_wine_if(surface_formats[i] == DXGI_FORMAT_R16G16B16A16_FLOAT)
+         expect_rendered_color(hwnd, RGB(0xff, 0xff, 0x00));
+ 
+         /* Test Commit() after two draws. Render surface white and then magenta. */
+@@ -970,7 +970,6 @@ static void test_device_Commit(void)
+ 
+         hr = IDCompositionDevice_Commit(dcomp_device);
+         ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+-        todo_wine_if(surface_formats[i] != DXGI_FORMAT_B8G8R8A8_UNORM)
+         expect_rendered_color(hwnd, RGB(0xff, 0x00, 0xff));
+ 
+         hr = IDCompositionVisual_SetContent(visual, NULL);
+-- 
+2.51.0
+

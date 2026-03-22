@@ -1,0 +1,272 @@
+From a6c07a7a4b49a33644305baa05db803e5b778a37 Mon Sep 17 00:00:00 2001
+From: Zhiyi Zhang <zzhang@codeweavers.com>
+Date: Fri, 13 Mar 2026 10:13:35 +0800
+Subject: [PATCH 16/65] dcomp/tests: Add IDCompositionDevice::Commit() tests.
+
+---
+ dlls/dcomp/tests/Makefile.in |   2 +-
+ dlls/dcomp/tests/dcomp.c     | 216 +++++++++++++++++++++++++++++++++++
+ 2 files changed, 217 insertions(+), 1 deletion(-)
+
+diff --git a/dlls/dcomp/tests/Makefile.in b/dlls/dcomp/tests/Makefile.in
+index 19acf1dd03e..f32795c8ac1 100644
+--- a/dlls/dcomp/tests/Makefile.in
++++ b/dlls/dcomp/tests/Makefile.in
+@@ -1,5 +1,5 @@
+ TESTDLL = dcomp.dll
+-IMPORTS = d3d10_1 user32
++IMPORTS = d2d1 d3d10_1 user32 gdi32
+ 
+ SOURCES = \
+ 	dcomp.c
+diff --git a/dlls/dcomp/tests/dcomp.c b/dlls/dcomp/tests/dcomp.c
+index 197dadc5a94..a877e4f0dc4 100644
+--- a/dlls/dcomp/tests/dcomp.c
++++ b/dlls/dcomp/tests/dcomp.c
+@@ -20,6 +20,7 @@
+ 
+ #define COBJMACROS
+ #include "initguid.h"
++#include <d2d1_1.h>
+ #include <d3d10_1.h>
+ #include "dcomp.h"
+ #include "wine/test.h"
+@@ -41,6 +42,32 @@ static void check_interface_(unsigned int line, void *iface_ptr, REFIID iid, BOO
+         IUnknown_Release(unk);
+ }
+ 
++static void set_color(D2D1_COLOR_F *color, float r, float g, float b, float a)
++{
++    color->r = r;
++    color->g = g;
++    color->b = b;
++    color->a = a;
++}
++
++/* try to make sure pending X events have been processed before continuing */
++static void flush_events(void)
++{
++    int diff = 200;
++    DWORD time;
++    MSG msg;
++
++    time = GetTickCount() + diff;
++    while (diff > 0)
++    {
++        if (MsgWaitForMultipleObjects(0, NULL, FALSE, 100, QS_ALLINPUT) == WAIT_TIMEOUT)
++            break;
++        while (PeekMessageA(&msg, 0, 0, 0, PM_REMOVE))
++            DispatchMessageA(&msg);
++        diff = time - GetTickCount();
++    }
++}
++
+ static HWND create_window(void)
+ {
+     RECT r = {0, 0, 640, 480};
+@@ -510,6 +537,194 @@ static void test_target_SetRoot(void)
+     ok(!refcount, "Device has %lu references left.\n", refcount);
+ }
+ 
++static void render_color_surface(IDXGISurface *surface, D2D1_COLOR_F *color)
++{
++    ID2D1RenderTarget *render_target;
++    ID2D1Factory *d2d_factory;
++    HRESULT hr;
++
++    static const D2D1_RENDER_TARGET_PROPERTIES rt_desc =
++    {
++        .type = D2D1_RENDER_TARGET_TYPE_DEFAULT,
++        .pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM,
++        .pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED,
++        .dpiX = 0.0f,
++        .dpiY = 0.0f,
++        .usage = D2D1_RENDER_TARGET_USAGE_NONE,
++        .minLevel = D2D1_FEATURE_LEVEL_DEFAULT,
++    };
++
++    hr = D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &IID_ID2D1Factory, NULL, (void **)&d2d_factory);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++
++    hr = ID2D1Factory_CreateDxgiSurfaceRenderTarget(d2d_factory, (IDXGISurface *)surface,
++            &rt_desc, &render_target);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++
++    ID2D1RenderTarget_BeginDraw(render_target);
++    ID2D1RenderTarget_Clear(render_target, color);
++    hr = ID2D1RenderTarget_EndDraw(render_target, NULL, NULL);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++
++    ID2D1RenderTarget_Release(render_target);
++    ID2D1Factory_Release(d2d_factory);
++}
++
++static void render_color_swapchain(IDXGISwapChain1 *swapchain, D2D1_COLOR_F *color)
++{
++    IDXGISurface *surface;
++    HRESULT hr;
++
++    hr = IDXGISwapChain1_GetBuffer(swapchain, 0, &IID_IDXGISurface, (void **)&surface);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++    render_color_surface(surface, color);
++    IDXGISwapChain1_Present(swapchain, 0, 0);
++    IDXGISurface_Release(surface);
++}
++
++#define expect_rendered_color(a, b) _expect_rendered_color(__LINE__, a, b)
++static void _expect_rendered_color(int line, HWND hwnd, COLORREF expected_color)
++{
++    COLORREF color = CLR_INVALID;
++    int time = 0;
++    POINT pt;
++    HDC hdc;
++
++    pt.x = 100;
++    pt.y = 100;
++    ClientToScreen(hwnd, &pt);
++
++    hdc = GetDC(0);
++    while (time < 500)
++    {
++        color = GetPixel(hdc, pt.x, pt.y);
++        if (color == expected_color)
++            break;
++
++        /* Wait for DWM to finish composition */
++        Sleep(100);
++        time += 100;
++        continue;
++    }
++    ReleaseDC(0, hdc);
++    ok_(__FILE__, line)(color == expected_color, "Expected color %#06lx, got %#06lx.\n",
++            expected_color, color);
++}
++
++static void test_device_Commit(void)
++{
++    DXGI_SWAP_CHAIN_DESC1 swapchain_desc;
++    IDCompositionDevice *dcomp_device;
++    ID3D10Device1 *d3d10_device;
++    IDCompositionTarget *target;
++    IDCompositionVisual *visual;
++    IDXGISwapChain1 *swapchain;
++    IDXGIDevice *dxgi_device;
++    IDXGIFactory2 *factory2;
++    IDXGIFactory *factory;
++    D2D1_COLOR_F color;
++    ULONG refcount;
++    HBRUSH brush;
++    HRESULT hr;
++    HWND hwnd;
++    RECT rect;
++    HDC hdc;
++
++    swapchain_desc.Width = 640;
++    swapchain_desc.Height = 480;
++    swapchain_desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
++    swapchain_desc.Stereo = FALSE;
++    swapchain_desc.SampleDesc.Count = 1;
++    swapchain_desc.SampleDesc.Quality = 0;
++    swapchain_desc.BufferUsage = DXGI_USAGE_RENDER_TARGET_OUTPUT;
++    swapchain_desc.BufferCount = 2;
++    swapchain_desc.Scaling = DXGI_SCALING_STRETCH;
++    swapchain_desc.SwapEffect = DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL;
++    swapchain_desc.AlphaMode = DXGI_ALPHA_MODE_PREMULTIPLIED;
++    swapchain_desc.Flags = 0;
++
++    hr = D3D10CreateDevice1(NULL, D3D10_DRIVER_TYPE_HARDWARE, NULL,
++            D3D10_CREATE_DEVICE_BGRA_SUPPORT, D3D10_FEATURE_LEVEL_10_0, D3D10_1_SDK_VERSION, &d3d10_device);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++
++    hr = ID3D10Device1_QueryInterface(d3d10_device, &IID_IDXGIDevice, (void **)&dxgi_device);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++
++    get_factory(dxgi_device, &factory);
++    IDXGIDevice_Release(dxgi_device);
++    hr = IDXGIFactory_QueryInterface(factory, &IID_IDXGIFactory2, (void **)&factory2);
++    IDXGIFactory_Release(factory);
++    if (FAILED(hr))
++    {
++        win_skip("IDXGIFactory2 not available.\n");
++        refcount = ID3D10Device1_Release(d3d10_device);
++        ok(!refcount, "Device has %lu references left.\n", refcount);
++        return;
++    }
++
++    hr = IDXGIFactory2_CreateSwapChainForComposition(factory2, (IUnknown *)d3d10_device,
++            &swapchain_desc, NULL, &swapchain);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++
++    hr = pDCompositionCreateDevice(NULL, &IID_IDCompositionDevice, (void **)&dcomp_device);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++
++    hr = IDCompositionDevice_CreateVisual(dcomp_device, &visual);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++
++    hr = IDCompositionVisual_SetContent(visual, (IUnknown *)swapchain);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++
++    hwnd = create_window();
++    flush_events();
++
++    hr = IDCompositionDevice_CreateTargetForHwnd(dcomp_device, hwnd, TRUE, &target);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++    hr = IDCompositionTarget_SetRoot(target, visual);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++
++    /* Commit() is not called, swapchain presentation shouldn't affect window content */
++    /* Render window green */
++    hdc = GetDC(hwnd);
++    brush = CreateSolidBrush(RGB(0, 0xff, 0));
++    GetClientRect(hwnd, &rect);
++    FillRect(hdc, &rect, brush);
++    DeleteObject(brush);
++    ReleaseDC(hwnd, hdc);
++    flush_events();
++
++    set_color(&color, 1.0f, 0.0f, 1.0f, 1.0f);
++    render_color_swapchain(swapchain, &color);
++    expect_rendered_color(hwnd, RGB(0, 0xff, 0));
++
++    /* Call Commit() */
++    hr = IDCompositionDevice_Commit(dcomp_device);
++    todo_wine
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++
++    /* Render swapchain red */
++    set_color(&color, 1.0f, 0.0f, 0.0f, 1.0f);
++    todo_wine
++    render_color_swapchain(swapchain, &color);
++    expect_rendered_color(hwnd, RGB(0xff, 0, 0));
++
++    /* Render swapchain blue */
++    set_color(&color, 0.0f, 0.0f, 1.0f, 1.0f);
++    todo_wine
++    render_color_swapchain(swapchain, &color);
++    expect_rendered_color(hwnd, RGB(0, 0, 0xff));
++
++    DestroyWindow(hwnd);
++    IDCompositionTarget_Release(target);
++    IDCompositionVisual_Release(visual);
++    refcount = IDCompositionDevice_Release(dcomp_device);
++    ok(!refcount, "Device has %lu references left.\n", refcount);
++    IDXGISwapChain1_Release(swapchain);
++    IDXGIFactory2_Release(factory2);
++    refcount = ID3D10Device1_Release(d3d10_device);
++    ok(!refcount, "Device has %lu references left.\n", refcount);
++}
++
+ START_TEST(dcomp)
+ {
+     HMODULE module;
+@@ -533,6 +748,7 @@ START_TEST(dcomp)
+ 
+     test_DCompositionCreateDevice();
+     test_DCompositionCreateDevice2();
++    test_device_Commit();
+     test_device_CreateTargetForHwnd();
+     test_device_CreateVisual();
+     test_target_SetRoot();
+-- 
+2.51.0
+

@@ -1,0 +1,204 @@
+From f4437bdae7818c2f6d256cf34229962e3c12803c Mon Sep 17 00:00:00 2001
+From: Zhiyi Zhang <zzhang@codeweavers.com>
+Date: Fri, 13 Mar 2026 10:13:36 +0800
+Subject: [PATCH 55/65] dcomp: Implement composition for IDCompositionSurface.
+
+---
+ dlls/dcomp/device.c      | 95 ++++++++++++++++++++++++++++++----------
+ dlls/dcomp/tests/dcomp.c |  4 --
+ 2 files changed, 71 insertions(+), 28 deletions(-)
+
+diff --git a/dlls/dcomp/device.c b/dlls/dcomp/device.c
+index 67fb319b9b3..2cc8f527328 100644
+--- a/dlls/dcomp/device.c
++++ b/dlls/dcomp/device.c
+@@ -119,14 +119,13 @@ static ULONG STDMETHODCALLTYPE device_Release(IDCompositionDevice *iface)
+     return ref;
+ }
+ 
+-static void do_composite(const struct composition_target *target, IDXGISwapChain1 *swapchain)
++static void do_composite(const struct composition_target *target, IDXGISurface *dxgi_surface)
+ {
+     D2D1_BITMAP_PROPERTIES1 bitmap_desc;
+-    DXGI_SWAP_CHAIN_DESC swapchain_desc;
+     ID2D1Bitmap1 *target_bitmap = NULL;
+     struct composition_visual *visual;
++    DXGI_SURFACE_DESC surface_desc;
+     ID2D1Bitmap *src_bitmap = NULL;
+-    IDXGISurface1 *surface = NULL;
+     ID2D1Image *old_target = NULL;
+     HDC dst_dc, src_dc;
+     D2D1_SIZE_U size;
+@@ -141,16 +140,14 @@ static void do_composite(const struct composition_target *target, IDXGISwapChain
+       AC_SRC_ALPHA /* AlphaFormat */
+     };
+ 
+-    /* The front buffer is the last back buffer because the composition swapchain must be created
+-     * with DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL */
+-    if (FAILED(hr = IDXGISwapChain1_GetDesc(swapchain, &swapchain_desc)))
++    if (FAILED(hr = IDXGISurface_GetDesc(dxgi_surface, &surface_desc)))
+     {
+-        ERR("Failed to get the swapchain description, hr %#lx.\n", hr);
++        ERR("Failed to get the dxgi surface description, hr %#lx.\n", hr);
+         goto done;
+     }
+ 
+-    size.width = swapchain_desc.BufferDesc.Width;
+-    size.height = swapchain_desc.BufferDesc.Height;
++    size.width = surface_desc.Width;
++    size.height = surface_desc.Height;
+     bitmap_desc.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
+     bitmap_desc.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
+     bitmap_desc.dpiX = 0;
+@@ -165,15 +162,8 @@ static void do_composite(const struct composition_target *target, IDXGISwapChain
+         goto done;
+     }
+ 
+-    if (FAILED(hr = IDXGISwapChain1_GetBuffer(swapchain, swapchain_desc.BufferCount - 1,
+-            &IID_IDXGISurface1, (void **)&surface)))
+-    {
+-        ERR("Failed to get the swapchain front buffer, hr %#lx.\n", hr);
+-        goto done;
+-    }
+-
+     if (FAILED(hr = ID2D1DeviceContext_CreateSharedBitmap(visual->device_context, &IID_IDXGISurface,
+-            surface, NULL, &src_bitmap)))
++            dxgi_surface, NULL, &src_bitmap)))
+     {
+         ERR("Failed to create a bitmap from dxgi surface, hr %#lx.\n", hr);
+         goto done;
+@@ -212,8 +202,6 @@ static void do_composite(const struct composition_target *target, IDXGISwapChain
+ done:
+     if (src_bitmap)
+         ID2D1Bitmap_Release(src_bitmap);
+-    if (surface)
+-        IDXGISurface1_Release(surface);
+     if (target_bitmap)
+         ID2D1Bitmap1_Release(target_bitmap);
+ }
+@@ -222,9 +210,10 @@ static DWORD WINAPI composite_thread_proc(void *iface)
+ {
+     struct composition_device *device = impl_from_IDCompositionDevice(iface);
+     unsigned int count, frequency, refresh_period;
+-    IDXGISwapChain1 *swapchain = NULL;
+     struct composition_target *target;
+     struct composition_visual *visual;
++    IDXGISurface *dxgi_surface;
++    HRESULT hr;
+     HDC hdc;
+ 
+     /* TODO: Implement and use D3DKMTWaitForVerticalBlankEvent() */
+@@ -247,15 +236,73 @@ static DWORD WINAPI composite_thread_proc(void *iface)
+             if (!visual->content)
+                 continue;
+ 
+-            if (FAILED(IUnknown_QueryInterface(visual->content, &IID_IDXGISwapChain1, (void **)&swapchain)))
++            if (IsEqualGUID(&visual->content_iid, &IID_IDXGISwapChain1))
+             {
+-                FIXME("Only IDXGISwapChain1 is currently supported.\n");
++                DXGI_SWAP_CHAIN_DESC swapchain_desc;
++                IDXGISwapChain1 *swapchain;
++
++                hr = IUnknown_QueryInterface(visual->content, &IID_IDXGISwapChain1, (void **)&swapchain);
++                if (FAILED(hr))
++                {
++                    FIXME("Failed to query IDXGISwapChain1.\n");
++                    continue;
++                }
++
++                hr = IDXGISwapChain1_GetDesc(swapchain, &swapchain_desc);
++                if (FAILED(hr))
++                {
++                    ERR("Failed to get the swapchain description, hr %#lx.\n", hr);
++                    IDXGISwapChain1_Release(swapchain);
++                    continue;
++                }
++
++                /* The front buffer is the last back buffer because the composition swapchain must
++                 * be created with DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL */
++                hr = IDXGISwapChain1_GetBuffer(swapchain, swapchain_desc.BufferCount - 1,
++                        &IID_IDXGISurface, (void **)&dxgi_surface);
++                IDXGISwapChain1_Release(swapchain);
++                if (FAILED(hr))
++                {
++                    ERR("Failed to get the swapchain front buffer, hr %#lx.\n", hr);
++                    continue;
++                }
++            }
++            else if (IsEqualGUID(&visual->content_iid, &IID_IDCompositionSurface))
++            {
++                struct composition_surface *surface_impl;
++                IDCompositionSurface *surface;
++
++                hr = IUnknown_QueryInterface(visual->content, &IID_IDCompositionSurface, (void **)&surface);
++                if (FAILED(hr))
++                {
++                    FIXME("Failed to query IDCompositionSurface.\n");
++                    continue;
++                }
++
++                surface_impl = impl_from_IDCompositionSurface(surface);
++                if (IsEqualGUID(&surface_impl->physical_surface_iid, &IID_IDXGISurface))
++                {
++                    dxgi_surface = (IDXGISurface *)surface_impl->physical_surface;
++                    IDXGISurface_AddRef(dxgi_surface);
++                    IDCompositionSurface_Release(surface);
++                }
++                else
++                {
++                    FIXME("IDCompositionSurface physical_surface_iid %s is unsupported.\n",
++                            wine_dbgstr_guid(&surface_impl->physical_surface_iid));
++                    IDCompositionSurface_Release(surface);
++                    continue;
++                }
++            }
++            else
++            {
++                FIXME("content_iid %s is unsupported.\n", wine_dbgstr_guid(&visual->content_iid));
+                 continue;
+             }
+ 
+-            do_composite(target, swapchain);
++            do_composite(target, dxgi_surface);
++            IDXGISurface_Release(dxgi_surface);
+             count++;
+-            IDXGISwapChain1_Release(swapchain);
+         }
+ 
+         if (!count)
+diff --git a/dlls/dcomp/tests/dcomp.c b/dlls/dcomp/tests/dcomp.c
+index 12589e8dd20..2109e1dfa94 100644
+--- a/dlls/dcomp/tests/dcomp.c
++++ b/dlls/dcomp/tests/dcomp.c
+@@ -906,7 +906,6 @@ static void test_device_Commit(void)
+ 
+     hr = IDCompositionDevice_Commit(dcomp_device);
+     ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+-    todo_wine
+     expect_rendered_color(hwnd, RGB(0, 0xff, 0x00));
+ 
+     /* Render surface yellow */
+@@ -922,12 +921,10 @@ static void test_device_Commit(void)
+     }
+ 
+     /* Remains green before calling Commit() */
+-    todo_wine
+     expect_rendered_color(hwnd, RGB(0, 0xff, 0x00));
+ 
+     hr = IDCompositionDevice_Commit(dcomp_device);
+     ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+-    todo_wine
+     expect_rendered_color(hwnd, RGB(0xff, 0xff, 0x00));
+ 
+     /* Test Commit() after two draws. Render surface white and then magenta. */
+@@ -952,7 +949,6 @@ static void test_device_Commit(void)
+ 
+     hr = IDCompositionDevice_Commit(dcomp_device);
+     ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+-    todo_wine
+     expect_rendered_color(hwnd, RGB(0xff, 0x00, 0xff));
+ 
+     hr = IDCompositionVisual_SetContent(visual, NULL);
+-- 
+2.51.0
+

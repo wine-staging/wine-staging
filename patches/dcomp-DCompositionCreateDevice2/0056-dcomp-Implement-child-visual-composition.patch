@@ -1,0 +1,289 @@
+From 1b221cf779c93d2e49045c3219a5ca79a284e584 Mon Sep 17 00:00:00 2001
+From: Zhiyi Zhang <zzhang@codeweavers.com>
+Date: Fri, 13 Mar 2026 10:13:36 +0800
+Subject: [PATCH 56/65] dcomp: Implement child visual composition.
+
+---
+ dlls/dcomp/dcomp_private.h |   1 +
+ dlls/dcomp/device.c        | 185 ++++++++++++++++++++++---------------
+ 2 files changed, 111 insertions(+), 75 deletions(-)
+
+diff --git a/dlls/dcomp/dcomp_private.h b/dlls/dcomp/dcomp_private.h
+index e09acc7cb93..0e8a66fd686 100644
+--- a/dlls/dcomp/dcomp_private.h
++++ b/dlls/dcomp/dcomp_private.h
+@@ -32,6 +32,7 @@ struct composition_device
+     CRITICAL_SECTION cs;
+     struct list targets;
+     HANDLE thread;
++    BOOL exit_thread;
+     BOOL thread_exited;
+     int version;
+     LONG ref;
+diff --git a/dlls/dcomp/device.c b/dlls/dcomp/device.c
+index 2cc8f527328..eac9722af29 100644
+--- a/dlls/dcomp/device.c
++++ b/dlls/dcomp/device.c
+@@ -19,6 +19,7 @@
+ #include <assert.h>
+ #include <stdarg.h>
+ #include <stdlib.h>
++#include <assert.h>
+ 
+ #include "ntstatus.h"
+ #define WIN32_NO_STATUS
+@@ -119,11 +120,12 @@ static ULONG STDMETHODCALLTYPE device_Release(IDCompositionDevice *iface)
+     return ref;
+ }
+ 
+-static void do_composite(const struct composition_target *target, IDXGISurface *dxgi_surface)
++static void do_composite_dxgi_surface(const struct composition_target *target,
++                                      const struct composition_visual *visual,
++                                      IDXGISurface *dxgi_surface)
+ {
+     D2D1_BITMAP_PROPERTIES1 bitmap_desc;
+     ID2D1Bitmap1 *target_bitmap = NULL;
+-    struct composition_visual *visual;
+     DXGI_SURFACE_DESC surface_desc;
+     ID2D1Bitmap *src_bitmap = NULL;
+     ID2D1Image *old_target = NULL;
+@@ -140,6 +142,12 @@ static void do_composite(const struct composition_target *target, IDXGISurface *
+       AC_SRC_ALPHA /* AlphaFormat */
+     };
+ 
++    if (!target->root)
++    {
++        ERR("Target has no root.\n");
++        goto done;
++    }
++
+     if (FAILED(hr = IDXGISurface_GetDesc(dxgi_surface, &surface_desc)))
+     {
+         ERR("Failed to get the dxgi surface description, hr %#lx.\n", hr);
+@@ -154,7 +162,8 @@ static void do_composite(const struct composition_target *target, IDXGISurface *
+     bitmap_desc.dpiY = 0;
+     bitmap_desc.bitmapOptions = D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_GDI_COMPATIBLE;
+     bitmap_desc.colorContext = NULL;
+-    visual = impl_from_IDCompositionVisual(target->root);
++
++    assert(visual->device_context);
+     if (FAILED(hr = ID2D1DeviceContext_CreateBitmap(visual->device_context, size, NULL, 0,
+             &bitmap_desc, &target_bitmap)))
+     {
+@@ -206,14 +215,98 @@ done:
+         ID2D1Bitmap1_Release(target_bitmap);
+ }
+ 
++static HRESULT do_composite(const struct composition_target *target, struct composition_visual *visual)
++{
++    struct composition_visual *child_visual;
++    IDXGISurface *dxgi_surface;
++    HRESULT hr;
++
++    /* Render content */
++    if (visual->content)
++    {
++        if (IsEqualGUID(&visual->content_iid, &IID_IDXGISwapChain1))
++        {
++            DXGI_SWAP_CHAIN_DESC swapchain_desc;
++            IDXGISwapChain1 *swapchain;
++
++            hr = IUnknown_QueryInterface(visual->content, &IID_IDXGISwapChain1, (void **)&swapchain);
++            if (FAILED(hr))
++            {
++                FIXME("Failed to query IDXGISwapChain1.\n");
++                return hr;
++            }
++
++            hr = IDXGISwapChain1_GetDesc(swapchain, &swapchain_desc);
++            if (FAILED(hr))
++            {
++                ERR("Failed to get the swapchain description, hr %#lx.\n", hr);
++                IDXGISwapChain1_Release(swapchain);
++                return hr;
++            }
++
++            /* The front buffer is the last back buffer because the composition swapchain must
++                     * be created with DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL */
++            hr = IDXGISwapChain1_GetBuffer(swapchain, swapchain_desc.BufferCount - 1, &IID_IDXGISurface,
++                                           (void **)&dxgi_surface);
++            IDXGISwapChain1_Release(swapchain);
++            if (FAILED(hr))
++            {
++                ERR("Failed to get the swapchain front buffer, hr %#lx.\n", hr);
++                return hr;
++            }
++        }
++        else if (IsEqualGUID(&visual->content_iid, &IID_IDCompositionSurface))
++        {
++            struct composition_surface *surface_impl;
++            IDCompositionSurface *surface;
++
++            hr = IUnknown_QueryInterface(visual->content, &IID_IDCompositionSurface, (void **)&surface);
++            if (FAILED(hr))
++            {
++                FIXME("Failed to query IDCompositionSurface.\n");
++                return hr;
++            }
++
++            surface_impl = impl_from_IDCompositionSurface(surface);
++            if (IsEqualGUID(&surface_impl->physical_surface_iid, &IID_IDXGISurface))
++            {
++                dxgi_surface = (IDXGISurface *)surface_impl->physical_surface;
++                IDXGISurface_AddRef(dxgi_surface);
++                IDCompositionSurface_Release(surface);
++            }
++            else
++            {
++                FIXME("IDCompositionSurface physical_surface_iid %s is unsupported.\n",
++                      wine_dbgstr_guid(&surface_impl->physical_surface_iid));
++                IDCompositionSurface_Release(surface);
++                return E_FAIL;
++            }
++        }
++        else
++        {
++            FIXME("content_iid %s is unsupported.\n", wine_dbgstr_guid(&visual->content_iid));
++            return E_FAIL;
++        }
++
++        do_composite_dxgi_surface(target, visual, dxgi_surface);
++        IDXGISurface_Release(dxgi_surface);
++    }
++
++    LIST_FOR_EACH_ENTRY(child_visual, &visual->child_visuals, struct composition_visual, entry)
++    {
++        do_composite(target, child_visual);
++    }
++
++    return S_OK;
++}
++
++
+ static DWORD WINAPI composite_thread_proc(void *iface)
+ {
+     struct composition_device *device = impl_from_IDCompositionDevice(iface);
+     unsigned int count, frequency, refresh_period;
+     struct composition_target *target;
+     struct composition_visual *visual;
+-    IDXGISurface *dxgi_surface;
+-    HRESULT hr;
+     HDC hdc;
+ 
+     /* TODO: Implement and use D3DKMTWaitForVerticalBlankEvent() */
+@@ -230,89 +323,29 @@ static DWORD WINAPI composite_thread_proc(void *iface)
+         LIST_FOR_EACH_ENTRY(target, &device->targets, struct composition_target, entry)
+         {
+             if (!target->root)
++            {
++                FIXME("Target %p has no root.\n", &target->IDCompositionTarget_iface);
+                 continue;
++            }
+ 
+             visual = impl_from_IDCompositionVisual(target->root);
+-            if (!visual->content)
+-                continue;
+-
+-            if (IsEqualGUID(&visual->content_iid, &IID_IDXGISwapChain1))
+-            {
+-                DXGI_SWAP_CHAIN_DESC swapchain_desc;
+-                IDXGISwapChain1 *swapchain;
+-
+-                hr = IUnknown_QueryInterface(visual->content, &IID_IDXGISwapChain1, (void **)&swapchain);
+-                if (FAILED(hr))
+-                {
+-                    FIXME("Failed to query IDXGISwapChain1.\n");
+-                    continue;
+-                }
+-
+-                hr = IDXGISwapChain1_GetDesc(swapchain, &swapchain_desc);
+-                if (FAILED(hr))
+-                {
+-                    ERR("Failed to get the swapchain description, hr %#lx.\n", hr);
+-                    IDXGISwapChain1_Release(swapchain);
+-                    continue;
+-                }
+-
+-                /* The front buffer is the last back buffer because the composition swapchain must
+-                 * be created with DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL */
+-                hr = IDXGISwapChain1_GetBuffer(swapchain, swapchain_desc.BufferCount - 1,
+-                        &IID_IDXGISurface, (void **)&dxgi_surface);
+-                IDXGISwapChain1_Release(swapchain);
+-                if (FAILED(hr))
+-                {
+-                    ERR("Failed to get the swapchain front buffer, hr %#lx.\n", hr);
+-                    continue;
+-                }
+-            }
+-            else if (IsEqualGUID(&visual->content_iid, &IID_IDCompositionSurface))
+-            {
+-                struct composition_surface *surface_impl;
+-                IDCompositionSurface *surface;
+-
+-                hr = IUnknown_QueryInterface(visual->content, &IID_IDCompositionSurface, (void **)&surface);
+-                if (FAILED(hr))
+-                {
+-                    FIXME("Failed to query IDCompositionSurface.\n");
+-                    continue;
+-                }
+-
+-                surface_impl = impl_from_IDCompositionSurface(surface);
+-                if (IsEqualGUID(&surface_impl->physical_surface_iid, &IID_IDXGISurface))
+-                {
+-                    dxgi_surface = (IDXGISurface *)surface_impl->physical_surface;
+-                    IDXGISurface_AddRef(dxgi_surface);
+-                    IDCompositionSurface_Release(surface);
+-                }
+-                else
+-                {
+-                    FIXME("IDCompositionSurface physical_surface_iid %s is unsupported.\n",
+-                            wine_dbgstr_guid(&surface_impl->physical_surface_iid));
+-                    IDCompositionSurface_Release(surface);
+-                    continue;
+-                }
+-            }
+-            else
+-            {
+-                FIXME("content_iid %s is unsupported.\n", wine_dbgstr_guid(&visual->content_iid));
+-                continue;
+-            }
+-
+-            do_composite(target, dxgi_surface);
+-            IDXGISurface_Release(dxgi_surface);
+-            count++;
++            if (SUCCEEDED(do_composite(target, visual)))
++                count++;
+         }
+ 
+         if (!count)
+         {
++            TRACE("Composition thread exited.\n");
+             device->thread_exited = TRUE;
+             LeaveCriticalSection(&device->cs);
+             break;
+         }
+ 
+         LeaveCriticalSection(&device->cs);
++
++        if (device->exit_thread)
++            break;
++
+         Sleep(refresh_period);
+     }
+ 
+@@ -332,10 +365,12 @@ static HRESULT STDMETHODCALLTYPE device_Commit(IDCompositionDevice *iface)
+     {
+         if (device->thread)
+         {
++            device->exit_thread = TRUE;
+             WaitForSingleObject(device->thread, INFINITE);
+             CloseHandle(device->thread);
+         }
+         device->thread_exited = FALSE;
++        device->exit_thread = FALSE;
+         device->thread = CreateThread(NULL, 0, composite_thread_proc, iface, 0, NULL);
+     }
+ 
+-- 
+2.51.0
+

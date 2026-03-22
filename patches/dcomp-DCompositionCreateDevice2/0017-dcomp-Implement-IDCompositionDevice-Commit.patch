@@ -1,0 +1,505 @@
+From 5de2282373a279cf729b28ff4603245990bf5540 Mon Sep 17 00:00:00 2001
+From: Zhiyi Zhang <zzhang@codeweavers.com>
+Date: Fri, 13 Mar 2026 10:13:35 +0800
+Subject: [PATCH 17/65] dcomp: Implement IDCompositionDevice::Commit().
+
+TODO: Use ID2D1CommandList? Because many directcomposition calls don't take effect before calling
+IDCompositionDevice::Commit() so there is a command list.
+---
+ dlls/dcomp/Makefile.in     |   2 +-
+ dlls/dcomp/dcomp_private.h |  12 ++-
+ dlls/dcomp/device.c        | 200 ++++++++++++++++++++++++++++++++++++-
+ dlls/dcomp/target.c        |  15 ++-
+ dlls/dcomp/tests/dcomp.c   |   3 -
+ dlls/dcomp/visual.c        |  76 +++++++++++++-
+ 6 files changed, 292 insertions(+), 16 deletions(-)
+
+diff --git a/dlls/dcomp/Makefile.in b/dlls/dcomp/Makefile.in
+index 9e760eeabfa..150ab8d70b5 100644
+--- a/dlls/dcomp/Makefile.in
++++ b/dlls/dcomp/Makefile.in
+@@ -1,5 +1,5 @@
+ MODULE   = dcomp.dll
+-IMPORTS  = user32
++IMPORTS  = d2d1 dwmapi user32 gdi32
+ 
+ EXTRADLLFLAGS = -Wb,--prefer-native
+ 
+diff --git a/dlls/dcomp/dcomp_private.h b/dlls/dcomp/dcomp_private.h
+index 505dc634007..626b20282ef 100644
+--- a/dlls/dcomp/dcomp_private.h
++++ b/dlls/dcomp/dcomp_private.h
+@@ -19,11 +19,17 @@
+ #define __WINE_DCOMP_PRIVATE_H
+ 
+ #include "dcomp.h"
++#include "d2d1_1.h"
++#include "wine/list.h"
+ 
+ struct composition_device
+ {
+     IDCompositionDevice IDCompositionDevice_iface;
+     IDCompositionDesktopDevice IDCompositionDesktopDevice_iface;
++    CRITICAL_SECTION cs;
++    struct list targets;
++    HANDLE thread;
++    BOOL thread_exited;
+     int version;
+     LONG ref;
+ };
+@@ -31,15 +37,19 @@ struct composition_device
+ struct composition_target
+ {
+     IDCompositionTarget IDCompositionTarget_iface;
++    IDCompositionDevice *device;
+     IDCompositionVisual *root;
+     BOOL topmost;
+     HWND hwnd;
++    struct list entry;
+     LONG ref;
+ };
+ 
+ struct composition_visual
+ {
+     IDCompositionVisual2 IDCompositionVisual2_iface;
++    ID2D1GdiInteropRenderTarget *interop;
++    ID2D1DeviceContext *device_context;
+     IUnknown *content;
+     BOOL is_root;
+     int version;
+@@ -71,7 +81,7 @@ static inline struct composition_visual *impl_from_IDCompositionVisual2(IDCompos
+     return CONTAINING_RECORD(iface, struct composition_visual, IDCompositionVisual2_iface);
+ }
+ 
+-HRESULT create_target(HWND hwnd, BOOL topmost, IDCompositionTarget **target);
++HRESULT create_target(struct composition_device *device, HWND hwnd, BOOL topmost, IDCompositionTarget **target);
+ HRESULT create_visual(int version, REFIID iid, void **visual);
+ 
+ #endif /* __WINE_DCOMP_PRIVATE_H */
+diff --git a/dlls/dcomp/device.c b/dlls/dcomp/device.c
+index 06bed8ff601..342ac1ad5e9 100644
+--- a/dlls/dcomp/device.c
++++ b/dlls/dcomp/device.c
+@@ -22,10 +22,13 @@
+ #define COBJMACROS
+ #include "windef.h"
+ #include "winbase.h"
++#include "wingdi.h"
++#include "winternl.h"
+ #include "initguid.h"
+ #include "objidl.h"
+ #include "dcomp_private.h"
+ #include "dxgi.h"
++#include "dwmapi.h"
+ #include "wine/debug.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(dcomp);
+@@ -75,15 +78,195 @@ static ULONG STDMETHODCALLTYPE device_Release(IDCompositionDevice *iface)
+     TRACE("iface %p, ref %lu.\n", iface, ref);
+ 
+     if (!ref)
++    {
++        if (device->thread)
++        {
++            WaitForSingleObject(device->thread, INFINITE);
++            CloseHandle(device->thread);
++        }
++        DeleteCriticalSection(&device->cs);
+         free(device);
++    }
+ 
+     return ref;
+ }
+ 
++static void do_composite(const struct composition_target *target, IDXGISwapChain1 *swapchain)
++{
++    D2D1_BITMAP_PROPERTIES1 bitmap_desc;
++    DXGI_SWAP_CHAIN_DESC swapchain_desc;
++    ID2D1Bitmap1 *target_bitmap = NULL;
++    struct composition_visual *visual;
++    ID2D1Bitmap *src_bitmap = NULL;
++    IDXGISurface1 *surface = NULL;
++    ID2D1Image *old_target = NULL;
++    HDC dst_dc, src_dc;
++    D2D1_SIZE_U size;
++    DWORD style;
++    HRESULT hr;
++
++    static const BLENDFUNCTION blend_func =
++    {
++      AC_SRC_OVER, /* BlendOp */
++      0,           /* BlendFlag */
++      255,         /* SourceConstantAlpha */
++      AC_SRC_ALPHA /* AlphaFormat */
++    };
++
++    /* The front buffer is the last back buffer because the composition swapchain must be created
++     * with DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL */
++    if (FAILED(hr = IDXGISwapChain1_GetDesc(swapchain, &swapchain_desc)))
++    {
++        ERR("Failed to get the swapchain description, hr %#lx.\n", hr);
++        goto done;
++    }
++
++    size.width = swapchain_desc.BufferDesc.Width;
++    size.height = swapchain_desc.BufferDesc.Height;
++    bitmap_desc.pixelFormat.format = DXGI_FORMAT_B8G8R8A8_UNORM;
++    bitmap_desc.pixelFormat.alphaMode = D2D1_ALPHA_MODE_PREMULTIPLIED;
++    bitmap_desc.dpiX = 0;
++    bitmap_desc.dpiY = 0;
++    bitmap_desc.bitmapOptions = D2D1_BITMAP_OPTIONS_TARGET | D2D1_BITMAP_OPTIONS_GDI_COMPATIBLE;
++    bitmap_desc.colorContext = NULL;
++    visual = impl_from_IDCompositionVisual(target->root);
++    if (FAILED(hr = ID2D1DeviceContext_CreateBitmap(visual->device_context, size, NULL, 0,
++            &bitmap_desc, &target_bitmap)))
++    {
++        ERR("Failed to create a bitmap, hr %#lx.\n", hr);
++        goto done;
++    }
++
++    if (FAILED(hr = IDXGISwapChain1_GetBuffer(swapchain, swapchain_desc.BufferCount - 1,
++            &IID_IDXGISurface1, (void **)&surface)))
++    {
++        ERR("Failed to get the swapchain front buffer, hr %#lx.\n", hr);
++        goto done;
++    }
++
++    if (FAILED(hr = ID2D1DeviceContext_CreateSharedBitmap(visual->device_context, &IID_IDXGISurface,
++            surface, NULL, &src_bitmap)))
++    {
++        ERR("Failed to create a bitmap from dxgi surface, hr %#lx.\n", hr);
++        goto done;
++    }
++
++    if (FAILED(hr = ID2D1Bitmap1_CopyFromBitmap(target_bitmap, NULL, src_bitmap, NULL)))
++    {
++        ERR("Failed to copy bitmap, hr %#lx.\n", hr);
++        goto done;
++    }
++
++    ID2D1DeviceContext_GetTarget(visual->device_context, &old_target);
++    ID2D1DeviceContext_SetTarget(visual->device_context, (ID2D1Image *)target_bitmap);
++    if (FAILED(hr = ID2D1GdiInteropRenderTarget_GetDC(visual->interop, D2D1_DC_INITIALIZE_MODE_COPY,
++            &src_dc)))
++    {
++        ERR("GetDC failed, hr %#lx.\n", hr);
++        ID2D1DeviceContext_SetTarget(visual->device_context, old_target);
++        if (old_target)
++            ID2D1Image_Release(old_target);
++        goto done;
++    }
++
++    style = DCX_USESTYLE | DCX_CACHE;
++    if (!target->topmost)
++        style |= DCX_CLIPCHILDREN;
++    dst_dc = GetDCEx(target->hwnd, 0, style);
++    GdiAlphaBlend(dst_dc, 0, 0, size.width, size.height, src_dc, 0, 0, size.width, size.height, blend_func);
++    ReleaseDC(target->hwnd, dst_dc);
++
++    ID2D1GdiInteropRenderTarget_ReleaseDC(visual->interop, NULL);
++    ID2D1DeviceContext_SetTarget(visual->device_context, old_target);
++    if (old_target)
++        ID2D1Image_Release(old_target);
++
++done:
++    if (src_bitmap)
++        ID2D1Bitmap_Release(src_bitmap);
++    if (surface)
++        IDXGISurface1_Release(surface);
++    if (target_bitmap)
++        ID2D1Bitmap1_Release(target_bitmap);
++}
++
++static DWORD WINAPI composite_thread_proc(void *iface)
++{
++    struct composition_device *device = impl_from_IDCompositionDevice(iface);
++    unsigned int count, frequency, refresh_period;
++    IDXGISwapChain1 *swapchain = NULL;
++    struct composition_target *target;
++    struct composition_visual *visual;
++    HDC hdc;
++
++    /* TODO: Implement and use D3DKMTWaitForVerticalBlankEvent() */
++    hdc = GetDC(0);
++    frequency = GetDeviceCaps(hdc, VREFRESH);
++    refresh_period = 1000 / frequency;
++    ReleaseDC(0, hdc);
++
++    while (TRUE)
++    {
++        EnterCriticalSection(&device->cs);
++
++        count = 0;
++        LIST_FOR_EACH_ENTRY(target, &device->targets, struct composition_target, entry)
++        {
++            if (!target->root)
++                continue;
++
++            visual = impl_from_IDCompositionVisual(target->root);
++            if (!visual->content)
++                continue;
++
++            if (FAILED(IUnknown_QueryInterface(visual->content, &IID_IDXGISwapChain1, (void **)&swapchain)))
++            {
++                FIXME("Only IDXGISwapChain1 is currently supported.\n");
++                continue;
++            }
++
++            do_composite(target, swapchain);
++            count++;
++            IDXGISwapChain1_Release(swapchain);
++        }
++
++        if (!count)
++        {
++            device->thread_exited = TRUE;
++            LeaveCriticalSection(&device->cs);
++            break;
++        }
++
++        LeaveCriticalSection(&device->cs);
++        Sleep(refresh_period);
++    }
++
++    return 0;
++}
++
+ static HRESULT STDMETHODCALLTYPE device_Commit(IDCompositionDevice *iface)
+ {
+-    FIXME("iface %p stub!\n", iface);
+-    return E_NOTIMPL;
++    struct composition_device *device = impl_from_IDCompositionDevice(iface);
++    HRESULT hr = S_OK;
++
++    FIXME("iface %p semi-stub!\n", iface);
++
++    EnterCriticalSection(&device->cs);
++
++    if (!device->thread || device->thread_exited)
++    {
++        if (device->thread)
++        {
++            WaitForSingleObject(device->thread, INFINITE);
++            CloseHandle(device->thread);
++        }
++        device->thread_exited = FALSE;
++        device->thread = CreateThread(NULL, 0, composite_thread_proc, iface, 0, NULL);
++    }
++
++    LeaveCriticalSection(&device->cs);
++
++    return hr;
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE device_WaitForCommitCompletion(IDCompositionDevice *iface)
+@@ -102,9 +285,11 @@ static HRESULT STDMETHODCALLTYPE device_GetFrameStatistics(IDCompositionDevice *
+ static HRESULT STDMETHODCALLTYPE device_CreateTargetForHwnd(IDCompositionDevice *iface,
+         HWND hwnd, BOOL topmost, IDCompositionTarget **target)
+ {
++    struct composition_device *device = impl_from_IDCompositionDevice(iface);
++
+     TRACE("iface %p, hwnd %p, topmost %d, target %p\n", iface, hwnd, topmost, target);
+ 
+-    return create_target(hwnd, topmost, target);
++    return create_target(device, hwnd, topmost, target);
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE device_CreateVisual(IDCompositionDevice *iface,
+@@ -319,8 +504,11 @@ static ULONG STDMETHODCALLTYPE desktop_device_Release(IDCompositionDesktopDevice
+ 
+ static HRESULT STDMETHODCALLTYPE desktop_device_Commit(IDCompositionDesktopDevice *iface)
+ {
+-    FIXME("iface %p stub!\n", iface);
+-    return E_NOTIMPL;
++    struct composition_device *device = impl_from_IDCompositionDesktopDevice(iface);
++
++    TRACE("iface %p.\n", iface);
++
++    return IDCompositionDevice_Commit(&device->IDCompositionDevice_iface);
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE desktop_device_WaitForCommitCompletion(IDCompositionDesktopDevice *iface)
+@@ -542,6 +730,8 @@ static HRESULT create_device(int version, REFIID iid, void **out)
+     if (!device)
+         return E_OUTOFMEMORY;
+ 
++    InitializeCriticalSection(&device->cs);
++    list_init(&device->targets);
+     device->IDCompositionDevice_iface.lpVtbl = &device_vtbl;
+     device->IDCompositionDesktopDevice_iface.lpVtbl = &desktop_device_vtbl;
+     device->version = version;
+diff --git a/dlls/dcomp/target.c b/dlls/dcomp/target.c
+index fd3ad3e0b03..f0e906ca34e 100644
+--- a/dlls/dcomp/target.c
++++ b/dlls/dcomp/target.c
+@@ -66,8 +66,15 @@ static ULONG STDMETHODCALLTYPE target_Release(IDCompositionTarget *iface)
+ 
+     if (!ref)
+     {
++        struct composition_device *device = impl_from_IDCompositionDevice(target->device);
++
+         prop = target->topmost ? wine_window_topmost_composed : wine_window_non_topmost_composed;
+         RemovePropW(target->hwnd, prop);
++
++        EnterCriticalSection(&device->cs);
++        list_remove(&target->entry);
++        LeaveCriticalSection(&device->cs);
++        IDCompositionDevice_Release(target->device);
+         if (target->root)
+         {
+             root_visual = impl_from_IDCompositionVisual(target->root);
+@@ -118,7 +125,8 @@ static const struct IDCompositionTargetVtbl target_vtbl =
+     target_SetRoot,
+ };
+ 
+-HRESULT create_target(HWND hwnd, BOOL topmost, IDCompositionTarget **new_target)
++HRESULT create_target(struct composition_device *device, HWND hwnd, BOOL topmost,
++        IDCompositionTarget **new_target)
+ {
+     struct composition_target *target;
+     const WCHAR *prop;
+@@ -139,10 +147,15 @@ HRESULT create_target(HWND hwnd, BOOL topmost, IDCompositionTarget **new_target)
+     if (!target)
+         return E_OUTOFMEMORY;
+ 
++    IDCompositionDevice_AddRef(&device->IDCompositionDevice_iface);
++    EnterCriticalSection(&device->cs);
++    list_add_tail(&device->targets, &target->entry);
++    LeaveCriticalSection(&device->cs);
+     target->IDCompositionTarget_iface.lpVtbl = &target_vtbl;
+     target->ref = 1;
+     target->hwnd = hwnd;
+     target->topmost = topmost;
++    target->device = &device->IDCompositionDevice_iface;
+     *new_target = &target->IDCompositionTarget_iface;
+ 
+     prop = target->topmost ? wine_window_topmost_composed : wine_window_non_topmost_composed;
+diff --git a/dlls/dcomp/tests/dcomp.c b/dlls/dcomp/tests/dcomp.c
+index a877e4f0dc4..fe1aefb9e19 100644
+--- a/dlls/dcomp/tests/dcomp.c
++++ b/dlls/dcomp/tests/dcomp.c
+@@ -699,18 +699,15 @@ static void test_device_Commit(void)
+ 
+     /* Call Commit() */
+     hr = IDCompositionDevice_Commit(dcomp_device);
+-    todo_wine
+     ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+ 
+     /* Render swapchain red */
+     set_color(&color, 1.0f, 0.0f, 0.0f, 1.0f);
+-    todo_wine
+     render_color_swapchain(swapchain, &color);
+     expect_rendered_color(hwnd, RGB(0xff, 0, 0));
+ 
+     /* Render swapchain blue */
+     set_color(&color, 0.0f, 0.0f, 1.0f, 1.0f);
+-    todo_wine
+     render_color_swapchain(swapchain, &color);
+     expect_rendered_color(hwnd, RGB(0, 0, 0xff));
+ 
+diff --git a/dlls/dcomp/visual.c b/dlls/dcomp/visual.c
+index 60ffecdadee..f037ba15d26 100644
+--- a/dlls/dcomp/visual.c
++++ b/dlls/dcomp/visual.c
+@@ -65,6 +65,10 @@ static ULONG STDMETHODCALLTYPE visual_Release(IDCompositionVisual2 *iface)
+ 
+     if (!ref)
+     {
++        if (visual->interop)
++            ID2D1GdiInteropRenderTarget_Release(visual->interop);
++        if (visual->device_context)
++            ID2D1DeviceContext_Release(visual->device_context);
+         if (visual->content)
+             IUnknown_Release(visual->content);
+         free(visual);
+@@ -158,20 +162,82 @@ static HRESULT STDMETHODCALLTYPE visual_SetClip(IDCompositionVisual2 *iface, con
+ static HRESULT STDMETHODCALLTYPE visual_SetContent(IDCompositionVisual2 *iface, IUnknown *content)
+ {
+     struct composition_visual *visual = impl_from_IDCompositionVisual2(iface);
++    ID2D1GdiInteropRenderTarget *interop;
++    ID2D1DeviceContext *device_context;
+     IDXGISwapChain1 *dxgi_swapchain;
++    IDXGIDevice *dxgi_device;
++    ID2D1Device *d2d_device;
++    HRESULT hr;
+ 
+     FIXME("iface %p, content %p semi-stub!\n", iface, content);
+ 
+-    if (content && FAILED(IUnknown_QueryInterface(content, &IID_IDXGISwapChain1,
+-            (void **)&dxgi_swapchain)))
++    if (content)
+     {
+-        FIXME("Only IDXGISwapChain1 is supported currently.\n");
+-        return E_INVALIDARG;
++        if (FAILED(IUnknown_QueryInterface(content, &IID_IDXGISwapChain1,
++                (void **)&dxgi_swapchain)))
++        {
++            FIXME("Only IDXGISwapChain1 is currently supported.\n");
++            return E_INVALIDARG;
++        }
++
++        hr = IDXGISwapChain1_GetDevice(dxgi_swapchain, &IID_IDXGIDevice, (void **)&dxgi_device);
++        IDXGISwapChain1_Release(dxgi_swapchain);
++        if (FAILED(hr))
++        {
++            ERR("Failed to get the swapchain device, hr %#lx.\n", hr);
++            return hr;
++        }
++
++        hr = D2D1CreateDevice(dxgi_device, NULL, &d2d_device);
++        IDXGIDevice_Release(dxgi_device);
++        if (FAILED(hr))
++        {
++            ERR("Failed to create a D2D device, hr %#lx.\n", hr);
++            return hr;
++        }
++
++        hr = ID2D1Device_CreateDeviceContext(d2d_device, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
++                &device_context);
++        ID2D1Device_Release(d2d_device);
++        if (FAILED(hr))
++        {
++            ERR("Failed to create a D2D device context, hr %#lx.\n", hr);
++            return hr;
++        }
++
++        if (FAILED(hr = ID2D1DeviceContext_QueryInterface(device_context,
++                &IID_ID2D1GdiInteropRenderTarget, (void **)&interop)))
++        {
++            ERR("Failed to get a ID2D1GdiInteropRenderTarget, hr %#lx.\n", hr);
++            ID2D1DeviceContext_Release(device_context);
++            return hr;
++        }
+     }
+ 
++    if (visual->interop)
++    {
++        ID2D1GdiInteropRenderTarget_Release(visual->interop);
++        visual->interop = NULL;
++    }
++    if (visual->device_context)
++    {
++        ID2D1DeviceContext_Release(visual->device_context);
++        visual->device_context = NULL;
++    }
+     if (visual->content)
++    {
+         IUnknown_Release(visual->content);
+-    visual->content = content;
++        visual->content = NULL;
++    }
++
++    if (content)
++    {
++        IUnknown_AddRef(content);
++        visual->content = content;
++        visual->device_context = device_context;
++        visual->interop = interop;
++    }
++
+     return S_OK;
+ }
+ 
+-- 
+2.51.0
+

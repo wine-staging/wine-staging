@@ -1,0 +1,291 @@
+From cbbd8e593f2af9177df4341906822da264cc30c8 Mon Sep 17 00:00:00 2001
+From: Zhiyi Zhang <zzhang@codeweavers.com>
+Date: Fri, 13 Mar 2026 10:13:35 +0800
+Subject: [PATCH 08/65] dcomp: Add IDCompositionTarget stub.
+
+---
+ dlls/dcomp/Makefile.in     |   6 +-
+ dlls/dcomp/dcomp_private.h |  15 +++++
+ dlls/dcomp/device.c        |  13 ++--
+ dlls/dcomp/target.c        | 123 +++++++++++++++++++++++++++++++++++++
+ dlls/dcomp/tests/dcomp.c   |  17 +----
+ 5 files changed, 153 insertions(+), 21 deletions(-)
+ create mode 100644 dlls/dcomp/target.c
+
+diff --git a/dlls/dcomp/Makefile.in b/dlls/dcomp/Makefile.in
+index 11187b52189..cfed521f3c4 100644
+--- a/dlls/dcomp/Makefile.in
++++ b/dlls/dcomp/Makefile.in
+@@ -1,8 +1,10 @@
+-MODULE    = dcomp.dll
++MODULE   = dcomp.dll
++IMPORTS  = user32
+ 
+ EXTRADLLFLAGS = -Wb,--prefer-native
+ 
+ VER_PRODUCTVERSION = 10,0,14393,0
+ 
+ SOURCES = \
+-	device.c
++	device.c \
++	target.c
+diff --git a/dlls/dcomp/dcomp_private.h b/dlls/dcomp/dcomp_private.h
+index 98e79ad3827..47fa043fc57 100644
+--- a/dlls/dcomp/dcomp_private.h
++++ b/dlls/dcomp/dcomp_private.h
+@@ -28,6 +28,14 @@ struct composition_device
+     LONG ref;
+ };
+ 
++struct composition_target
++{
++    IDCompositionTarget IDCompositionTarget_iface;
++    BOOL topmost;
++    HWND hwnd;
++    LONG ref;
++};
++
+ static inline struct composition_device *impl_from_IDCompositionDevice(IDCompositionDevice *iface)
+ {
+     return CONTAINING_RECORD(iface, struct composition_device, IDCompositionDevice_iface);
+@@ -38,4 +46,11 @@ static inline struct composition_device *impl_from_IDCompositionDesktopDevice(ID
+     return CONTAINING_RECORD(iface, struct composition_device, IDCompositionDesktopDevice_iface);
+ }
+ 
++static inline struct composition_target *impl_from_IDCompositionTarget(IDCompositionTarget *iface)
++{
++    return CONTAINING_RECORD(iface, struct composition_target, IDCompositionTarget_iface);
++}
++
++HRESULT create_target(HWND hwnd, BOOL topmost, IDCompositionTarget **target);
++
+ #endif /* __WINE_DCOMP_PRIVATE_H */
+diff --git a/dlls/dcomp/device.c b/dlls/dcomp/device.c
+index 6cddc8db4df..ec4a75bff9b 100644
+--- a/dlls/dcomp/device.c
++++ b/dlls/dcomp/device.c
+@@ -102,8 +102,9 @@ static HRESULT STDMETHODCALLTYPE device_GetFrameStatistics(IDCompositionDevice *
+ static HRESULT STDMETHODCALLTYPE device_CreateTargetForHwnd(IDCompositionDevice *iface,
+         HWND hwnd, BOOL topmost, IDCompositionTarget **target)
+ {
+-    FIXME("iface %p, hwnd %p, topmost %d, target %p stub!\n", iface, hwnd, topmost, target);
+-    return E_NOTIMPL;
++    TRACE("iface %p, hwnd %p, topmost %d, target %p\n", iface, hwnd, topmost, target);
++
++    return create_target(hwnd, topmost, target);
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE device_CreateVisual(IDCompositionDevice *iface,
+@@ -471,8 +472,12 @@ static HRESULT STDMETHODCALLTYPE desktop_device_CreateAnimation(IDCompositionDes
+ static HRESULT STDMETHODCALLTYPE desktop_device_CreateTargetForHwnd(IDCompositionDesktopDevice *iface,
+         HWND hwnd, BOOL topmost, IDCompositionTarget **target)
+ {
+-    FIXME("iface %p, hwnd %p, topmost %d, target %p stub!\n", iface, hwnd, topmost, target);
+-    return E_NOTIMPL;
++    struct composition_device *device = impl_from_IDCompositionDesktopDevice(iface);
++
++    TRACE("iface %p, hwnd %p, topmost %d, target %p\n", iface, hwnd, topmost, target);
++
++    return IDCompositionDevice_CreateTargetForHwnd(&device->IDCompositionDevice_iface, hwnd,
++            topmost, target);
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE desktop_device_CreateSurfaceFromHandle(IDCompositionDesktopDevice *iface,
+diff --git a/dlls/dcomp/target.c b/dlls/dcomp/target.c
+new file mode 100644
+index 00000000000..4a95c8254a5
+--- /dev/null
++++ b/dlls/dcomp/target.c
+@@ -0,0 +1,123 @@
++/*
++ * Copyright 2023 Zhiyi Zhang for CodeWeavers
++ *
++ * This library is free software; you can redistribute it and/or
++ * modify it under the terms of the GNU Lesser General Public
++ * License as published by the Free Software Foundation; either
++ * version 2.1 of the License, or (at your option) any later version.
++ *
++ * This library is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
++ * Lesser General Public License for more details.
++ *
++ * You should have received a copy of the GNU Lesser General Public
++ * License along with this library; if not, write to the Free Software
++ * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1301, USA
++ */
++
++#include <stdarg.h>
++
++#define COBJMACROS
++#include "windef.h"
++#include "winbase.h"
++#include "dcomp_private.h"
++#include "wine/debug.h"
++
++WINE_DEFAULT_DEBUG_CHANNEL(dcomp);
++
++static const WCHAR *wine_window_topmost_composed = L"wine_window_topmost_composed";
++static const WCHAR *wine_window_non_topmost_composed = L"wine_window_non_topmost_composed";
++
++static HRESULT STDMETHODCALLTYPE target_QueryInterface(IDCompositionTarget *iface, REFIID iid, void **out)
++{
++    TRACE("iface %p, iid %s, out %p!\n", iface, debugstr_guid(iid), out);
++
++    if (IsEqualGUID(iid, &IID_IUnknown)
++            || IsEqualGUID(iid, &IID_IDCompositionTarget))
++    {
++        IUnknown_AddRef(iface);
++        *out = iface;
++        return S_OK;
++    }
++
++    FIXME("%s not implemented, returning E_NOINTERFACE.\n", debugstr_guid(iid));
++    *out = NULL;
++    return E_NOINTERFACE;
++}
++
++static ULONG STDMETHODCALLTYPE target_AddRef(IDCompositionTarget *iface)
++{
++    struct composition_target *target = impl_from_IDCompositionTarget(iface);
++    ULONG ref = InterlockedIncrement(&target->ref);
++
++    TRACE("iface %p, ref %lu.\n", iface, ref);
++    return ref;
++}
++
++static ULONG STDMETHODCALLTYPE target_Release(IDCompositionTarget *iface)
++{
++    struct composition_target *target = impl_from_IDCompositionTarget(iface);
++    ULONG ref = InterlockedDecrement(&target->ref);
++    const WCHAR *prop;
++
++    TRACE("iface %p, ref %lu.\n", iface, ref);
++
++    if (!ref)
++    {
++        prop = target->topmost ? wine_window_topmost_composed : wine_window_non_topmost_composed;
++        RemovePropW(target->hwnd, prop);
++        free(target);
++    }
++
++    return ref;
++}
++
++static HRESULT STDMETHODCALLTYPE target_SetRoot(IDCompositionTarget *iface,
++        IDCompositionVisual *visual)
++{
++    FIXME("iface %p, visual %p stub!\n", iface, visual);
++    return E_NOTIMPL;
++}
++
++static const struct IDCompositionTargetVtbl target_vtbl =
++{
++    /* IUnknown methods */
++    target_QueryInterface,
++    target_AddRef,
++    target_Release,
++    /* IDCompositionTarget methods */
++    target_SetRoot,
++};
++
++HRESULT create_target(HWND hwnd, BOOL topmost, IDCompositionTarget **new_target)
++{
++    struct composition_target *target;
++    const WCHAR *prop;
++    DWORD pid = 0;
++
++    if (!hwnd || hwnd == GetDesktopWindow() || !new_target)
++        return E_INVALIDARG;
++
++    GetWindowThreadProcessId(hwnd, &pid);
++    if (pid != GetCurrentProcessId())
++        return E_ACCESSDENIED;
++
++    if ((topmost && GetPropW(hwnd, wine_window_topmost_composed))
++            || (!topmost && GetPropW(hwnd, wine_window_non_topmost_composed)))
++        return DCOMPOSITION_ERROR_WINDOW_ALREADY_COMPOSED;
++
++    target = calloc(1, sizeof(*target));
++    if (!target)
++        return E_OUTOFMEMORY;
++
++    target->IDCompositionTarget_iface.lpVtbl = &target_vtbl;
++    target->ref = 1;
++    target->hwnd = hwnd;
++    target->topmost = topmost;
++    *new_target = &target->IDCompositionTarget_iface;
++
++    prop = target->topmost ? wine_window_topmost_composed : wine_window_non_topmost_composed;
++    SetPropW(target->hwnd, prop, (HANDLE)1);
++    return S_OK;
++}
+diff --git a/dlls/dcomp/tests/dcomp.c b/dlls/dcomp/tests/dcomp.c
+index d17d11a33e8..c9e1c25fe81 100644
+--- a/dlls/dcomp/tests/dcomp.c
++++ b/dlls/dcomp/tests/dcomp.c
+@@ -229,27 +229,21 @@ static void test_device_CreateTargetForHwnd(void)
+ 
+     /* Parameter checks */
+     hr = IDCompositionDevice_CreateTargetForHwnd(dcomp_device, NULL, FALSE, &target);
+-    todo_wine
+     ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
+ 
+     hr = IDCompositionDevice_CreateTargetForHwnd(dcomp_device, GetDesktopWindow(), FALSE, &target);
+-    todo_wine
+     ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
+ 
+     hr = IDCompositionDevice_CreateTargetForHwnd(dcomp_device, hwnd, FALSE, &target);
+-    todo_wine
+     ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+ 
+     hr2 = IDCompositionDevice_CreateTargetForHwnd(dcomp_device, hwnd, TRUE, &target2);
+-    todo_wine
+     ok(hr2 == S_OK, "Got unexpected hr %#lx.\n", hr);
+ 
+     hr3 = IDCompositionDevice_CreateTargetForHwnd(dcomp_device, hwnd, FALSE, &target3);
+-    todo_wine
+     ok(hr3 == DCOMPOSITION_ERROR_WINDOW_ALREADY_COMPOSED, "Got unexpected hr %#lx.\n", hr);
+ 
+     hr3 = IDCompositionDevice_CreateTargetForHwnd(dcomp_device, hwnd, TRUE, &target3);
+-    todo_wine
+     ok(hr3 == DCOMPOSITION_ERROR_WINDOW_ALREADY_COMPOSED, "Got unexpected hr %#lx.\n", hr);
+ 
+     if (SUCCEEDED(hr))
+@@ -258,7 +252,6 @@ static void test_device_CreateTargetForHwnd(void)
+         IDCompositionTarget_Release(target2);
+ 
+     hr = IDCompositionDevice_CreateTargetForHwnd(dcomp_device, hwnd, FALSE, NULL);
+-    todo_wine
+     ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
+ 
+     refcount = IDCompositionDevice_Release(dcomp_device);
+@@ -277,23 +270,17 @@ static void test_device_CreateTargetForHwnd(void)
+ 
+     /* Parameter checks */
+     hr = IDCompositionDesktopDevice_CreateTargetForHwnd(desktop_device, NULL, FALSE, &target);
+-    todo_wine
+     ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
+ 
+     hr = IDCompositionDesktopDevice_CreateTargetForHwnd(desktop_device, hwnd, FALSE, &target);
+-    todo_wine
+     ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+-    if (SUCCEEDED(hr))
+-        IDCompositionTarget_Release(target);
++    IDCompositionTarget_Release(target);
+ 
+     hr = IDCompositionDesktopDevice_CreateTargetForHwnd(desktop_device, hwnd, TRUE, &target);
+-    todo_wine
+     ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
+-    if (SUCCEEDED(hr))
+-        IDCompositionTarget_Release(target);
++    IDCompositionTarget_Release(target);
+ 
+     hr = IDCompositionDesktopDevice_CreateTargetForHwnd(desktop_device, hwnd, FALSE, NULL);
+-    todo_wine
+     ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
+ 
+     refcount = IDCompositionDesktopDevice_Release(desktop_device);
+-- 
+2.51.0
+

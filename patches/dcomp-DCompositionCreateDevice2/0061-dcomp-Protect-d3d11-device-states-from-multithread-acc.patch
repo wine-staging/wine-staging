@@ -1,0 +1,153 @@
+From 347347677657bd32a5dec8b35c8b31546b1f82bd Mon Sep 17 00:00:00 2001
+From: Zhiyi Zhang <zzhang@codeweavers.com>
+Date: Fri, 13 Mar 2026 10:13:36 +0800
+Subject: [PATCH 61/65] dcomp: Protect d3d11 device states from multithread
+ access.
+
+Another thread might be rendering as well, so we need to make sure their resources and states
+don't affect each other. The proper way for dcomp would probably be using shared resources. For
+example, create a d2d/d3d device for dcomp. Then create textures with sharing flags from the device.
+Then copy the content of dcomp visuals to the shared textures. Finally, the d2d/d3d device composites
+the shared textures. We will also need synchronization primitives like keyed mutexes.
+---
+ dlls/dcomp/device.c | 74 +++++++++++++++++++++++++++++++++++++++++++--
+ 1 file changed, 71 insertions(+), 3 deletions(-)
+
+diff --git a/dlls/dcomp/device.c b/dlls/dcomp/device.c
+index c4ea896ccfc..3ef8486a396 100644
+--- a/dlls/dcomp/device.c
++++ b/dlls/dcomp/device.c
+@@ -33,7 +33,7 @@
+ #include "dcomp_private.h"
+ #include "dxgi.h"
+ #include "dwmapi.h"
+-#include "d3d11_1.h"
++#include "d3d11_4.h"
+ #include "d3dcompiler.h"
+ #include "wine/debug.h"
+ 
+@@ -174,6 +174,7 @@ static HRESULT create_bgra_surface_from_rgba(IDXGISurface *rgba_surface, IDXGISu
+     D3D11_SAMPLER_DESC sampler_desc = {0};
+     D3D11_SUBRESOURCE_DATA resource_data;
+     ID3D11ShaderResourceView *srv = NULL;
++    ID3D11Device1 *d3d11_device = NULL;
+     ID3D11RenderTargetView *rtv = NULL;
+     ID3D11SamplerState *sampler = NULL;
+     D3D11_TEXTURE2D_DESC texture_desc;
+@@ -181,7 +182,6 @@ static HRESULT create_bgra_surface_from_rgba(IDXGISurface *rgba_surface, IDXGISu
+     D3D11_BUFFER_DESC buffer_desc;
+     ID3D11VertexShader *vs = NULL;
+     ID3D11PixelShader *ps = NULL;
+-    ID3D11Device1 *d3d11_device;
+     unsigned int stride, offset;
+     ID3D11Buffer *vb = NULL;
+     D3D11_VIEWPORT vp;
+@@ -407,8 +407,13 @@ static void do_composite_dxgi_surface(const struct composition_target *target,
+                                       const struct composition_visual *visual,
+                                       IDXGISurface *dxgi_surface)
+ {
++    ID3DDeviceContextState *state = NULL, *old_state = NULL;
++    ID3D11DeviceContext1 *d3d11_device_context1 = NULL;
++    ID3D11DeviceContext *d3d11_device_context = NULL;
++    ID3D11Multithread *multithread = NULL;
+     D2D1_BITMAP_PROPERTIES1 bitmap_desc;
+     ID2D1Bitmap1 *target_bitmap = NULL;
++    ID3D11Device1 *d3d11_device = NULL;
+     IDXGISurface *bgra_surface = NULL;
+     DXGI_SURFACE_DESC surface_desc;
+     ID2D1Bitmap *src_bitmap = NULL;
+@@ -426,12 +431,57 @@ static void do_composite_dxgi_surface(const struct composition_target *target,
+       AC_SRC_ALPHA /* AlphaFormat */
+     };
+ 
++    static const D3D_FEATURE_LEVEL feature_levels[] =
++    {
++        D3D_FEATURE_LEVEL_11_1,
++        D3D_FEATURE_LEVEL_11_0,
++        D3D_FEATURE_LEVEL_10_1,
++        D3D_FEATURE_LEVEL_10_0,
++    };
++
+     if (!target->root)
+     {
+         ERR("Target has no root.\n");
+         goto done;
+     }
+ 
++    hr = IDXGISurface_GetDevice(dxgi_surface, &IID_ID3D11Device1, (void **)&d3d11_device);
++    if (FAILED(hr))
++    {
++        ERR("Failed to get device, hr %#lx.\n", hr);
++        goto done;
++    }
++
++    ID3D11Device1_GetImmediateContext(d3d11_device, &d3d11_device_context);
++    if (FAILED(hr = ID3D11DeviceContext_QueryInterface(d3d11_device_context, &IID_ID3D11DeviceContext1,
++                                                       (void **)&d3d11_device_context1)))
++    {
++        ERR("Failed to query ID3D11DeviceContext1, hr %#lx.\n", hr);
++        goto done;
++    }
++
++    /* Use ID3D11Multithread to avoid conflicts with rendering in an another thread with the same
++     * immediate ID3D11DeviceContext */
++    hr = ID3D11DeviceContext_QueryInterface(d3d11_device_context, &IID_ID3D11Multithread, (void **)&multithread);
++    if (FAILED(hr))
++    {
++        ERR("Failed to query ID3D11Multithread, hr %#lx.\n", hr);
++        goto done;
++    }
++
++    ID3D11Multithread_SetMultithreadProtected(multithread, TRUE);
++    ID3D11Multithread_Enter(multithread);
++
++    /* Is this really necessary? anyway, just to be safe */
++    if (FAILED(hr = ID3D11Device1_CreateDeviceContextState(d3d11_device, 0, feature_levels,
++                                                           ARRAY_SIZE(feature_levels), D3D11_SDK_VERSION,
++                                                           &IID_ID3D11Device1, NULL, &state)))
++    {
++        ERR("Failed to create device context state, hr %#lx.\n", hr);
++        goto done;
++    }
++    ID3D11DeviceContext1_SwapDeviceContextState(d3d11_device_context1, state, &old_state);
++
+     if (FAILED(hr = IDXGISurface_GetDesc(dxgi_surface, &surface_desc)))
+     {
+         ERR("Failed to get the dxgi surface description, hr %#lx.\n", hr);
+@@ -452,7 +502,7 @@ static void do_composite_dxgi_surface(const struct composition_target *target,
+     else if (surface_desc.Format == DXGI_FORMAT_R16G16B16A16_FLOAT)
+     {
+         ERR("DXGI_FORMAT_R16G16B16A16_FLOAT surface is currently unsupported.\n");
+-        return;
++        goto done;
+     }
+ 
+     size.width = surface_desc.Width;
+@@ -516,6 +566,24 @@ done:
+         ID2D1Bitmap_Release(src_bitmap);
+     if (target_bitmap)
+         ID2D1Bitmap1_Release(target_bitmap);
++    if (d3d11_device_context1 && old_state)
++    {
++        ID3D11DeviceContext1_SwapDeviceContextState(d3d11_device_context1, old_state, NULL);
++        ID3DDeviceContextState_Release(old_state);
++    }
++    if (state)
++        ID3DDeviceContextState_Release(state);
++    if (multithread)
++    {
++        ID3D11Multithread_Leave(multithread);
++        ID3D11Multithread_Release(multithread);
++    }
++    if (d3d11_device_context1)
++        ID3D11DeviceContext1_Release(d3d11_device_context1);
++    if (d3d11_device_context)
++        ID3D11DeviceContext_Release(d3d11_device_context);
++    if (d3d11_device)
++        ID3D11Device1_Release(d3d11_device);
+ }
+ 
+ static HRESULT do_composite(const struct composition_target *target, struct composition_visual *visual)
+-- 
+2.51.0
+

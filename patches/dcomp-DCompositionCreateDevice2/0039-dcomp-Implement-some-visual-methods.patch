@@ -1,0 +1,575 @@
+From 2b82297a60e0a6d2c9ed7fddcd460f37c8febb96 Mon Sep 17 00:00:00 2001
+From: Zhiyi Zhang <zzhang@codeweavers.com>
+Date: Fri, 13 Mar 2026 10:13:35 +0800
+Subject: [PATCH 39/65] dcomp: Implement some visual methods.
+
+Implement visual2_SetBitmapInterpolationMode(), visual2_SetBorderMode(),
+visual2_SetBackFaceVisibility(), and visual_AddVisual().
+
+TODO: Split this.
+---
+ dlls/dcomp/dcomp_private.h |   9 ++
+ dlls/dcomp/device.c        |  19 +++
+ dlls/dcomp/tests/dcomp.c   | 280 +++++++++++++++++++++++++++++++++++++
+ dlls/dcomp/visual.c        | 133 ++++++++++++++++--
+ 4 files changed, 428 insertions(+), 13 deletions(-)
+
+diff --git a/dlls/dcomp/dcomp_private.h b/dlls/dcomp/dcomp_private.h
+index 492de35f97d..a0f831bbbbf 100644
+--- a/dlls/dcomp/dcomp_private.h
++++ b/dlls/dcomp/dcomp_private.h
+@@ -52,7 +52,14 @@ struct composition_visual
+     ID2D1GdiInteropRenderTarget *interop;
+     ID2D1DeviceContext *device_context;
+     IUnknown *content;
++    enum DCOMPOSITION_BITMAP_INTERPOLATION_MODE interpolation_mode;
++    enum DCOMPOSITION_BORDER_MODE border_mode;
++    enum DCOMPOSITION_BACKFACE_VISIBILITY visibility;
++    struct list child_visuals; /* visuals closer to head are lower in z-order */
++    struct list entry;
++    struct composition_visual *parent;
+     BOOL is_root;
++    BOOL is_child;
+     int version;
+     LONG ref;
+ };
+@@ -82,6 +89,8 @@ static inline struct composition_visual *impl_from_IDCompositionVisualUnknown(ID
+     return CONTAINING_RECORD(iface, struct composition_visual, IDCompositionVisualUnknown_iface);
+ }
+ 
++void dcomp_lock(void);
++void dcomp_unlock(void);
+ HRESULT create_target(struct composition_device *device, HWND hwnd, BOOL topmost, IDCompositionTarget **target);
+ HRESULT create_visual(int version, REFIID iid, void **visual);
+ 
+diff --git a/dlls/dcomp/device.c b/dlls/dcomp/device.c
+index 859383fa74b..9b58e38c18d 100644
+--- a/dlls/dcomp/device.c
++++ b/dlls/dcomp/device.c
+@@ -36,6 +36,25 @@
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(dcomp);
+ 
++static CRITICAL_SECTION dcomp_cs;
++static CRITICAL_SECTION_DEBUG dcomp_debug =
++{
++    0, 0, &dcomp_cs,
++    { &dcomp_debug.ProcessLocksList, &dcomp_debug.ProcessLocksList },
++      0, 0, { (DWORD_PTR)(__FILE__ ": dcomp_cs") }
++};
++static CRITICAL_SECTION dcomp_cs = { &dcomp_debug, -1, 0, 0, 0, 0 };
++
++void dcomp_lock(void)
++{
++    EnterCriticalSection(&dcomp_cs);
++}
++
++void dcomp_unlock(void)
++{
++    LeaveCriticalSection(&dcomp_cs);
++}
++
+ static HRESULT STDMETHODCALLTYPE device_QueryInterface(IDCompositionDevice *iface,
+         REFIID iid, void **out)
+ {
+diff --git a/dlls/dcomp/tests/dcomp.c b/dlls/dcomp/tests/dcomp.c
+index a1314e32e99..fedac470817 100644
+--- a/dlls/dcomp/tests/dcomp.c
++++ b/dlls/dcomp/tests/dcomp.c
+@@ -57,6 +57,15 @@ static void *get_stack_pointer(void)
+     return stack_pointer;
+ }
+ 
++#define expect_ref(obj,ref) _expect_ref((IUnknown *)obj, ref, __LINE__)
++static void _expect_ref(IUnknown* obj, ULONG ref, int line)
++{
++    ULONG rc;
++    IUnknown_AddRef(obj);
++    rc = IUnknown_Release(obj);
++    ok_(__FILE__, line)(rc == ref, "expected refcount %ld, got %ld\n", ref, rc);
++}
++
+ #define check_interface(a, b, c) check_interface_(__LINE__, a, b, c)
+ static void check_interface_(unsigned int line, void *iface_ptr, REFIID iid, BOOL supported)
+ {
+@@ -1113,6 +1122,273 @@ done:
+     ok(!refcount, "Device has %lu references left.\n", refcount);
+ }
+ 
++static void test_visual_SetBitmapInterpolationMode(void)
++{
++    static const struct
++    {
++        unsigned int mode;
++        HRESULT hr;
++    }
++    tests[] =
++    {
++        {DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR, S_OK},
++        {DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR, S_OK},
++        {DCOMPOSITION_BITMAP_INTERPOLATION_MODE_INHERIT, S_OK},
++        {DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR + 1, E_INVALIDARG},
++    };
++    IDCompositionDevice *dcomp_device;
++    IDCompositionVisual *visual;
++    IDXGISwapChain *swapchain;
++    IDXGIDevice *dxgi_device;
++    ULONG refcount;
++    unsigned int i;
++    HRESULT hr;
++    HWND hwnd;
++
++    if (!(dxgi_device = create_device(D3D10_CREATE_DEVICE_BGRA_SUPPORT)))
++    {
++        skip("Failed to create device.\n");
++        return;
++    }
++
++    hwnd = create_window();
++    swapchain = create_swapchain(dxgi_device, hwnd);
++    hr = pDCompositionCreateDevice(dxgi_device, &IID_IDCompositionDevice, (void **)&dcomp_device);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++    hr = IDCompositionDevice_CreateVisual(dcomp_device, &visual);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++
++    for (i = 0; i < ARRAY_SIZE(tests); i++)
++    {
++        hr = IDCompositionVisual_SetBitmapInterpolationMode(visual, tests[i].mode);
++        todo_wine
++        ok(hr == tests[i].hr, "Got unexpected hr %#lx.\n", hr);
++    }
++
++    IDCompositionVisual_Release(visual);
++    refcount = IDCompositionDevice_Release(dcomp_device);
++    ok(!refcount, "Device has %lu references left.\n", refcount);
++    IDXGISwapChain_Release(swapchain);
++    DestroyWindow(hwnd);
++    refcount = IDXGIDevice_Release(dxgi_device);
++    ok(!refcount, "Device has %lu references left.\n", refcount);
++}
++
++static void test_visual_SetBorderMode(void)
++{
++    static const struct
++    {
++        unsigned int mode;
++        HRESULT hr;
++    }
++    tests[] =
++    {
++        {DCOMPOSITION_BORDER_MODE_SOFT, S_OK},
++        {DCOMPOSITION_BORDER_MODE_HARD, S_OK},
++        {DCOMPOSITION_BORDER_MODE_INHERIT, S_OK},
++        {DCOMPOSITION_BORDER_MODE_HARD + 1, E_INVALIDARG},
++    };
++    IDCompositionDevice *dcomp_device;
++    IDCompositionVisual *visual;
++    IDXGISwapChain *swapchain;
++    IDXGIDevice *dxgi_device;
++    ULONG refcount;
++    unsigned int i;
++    HRESULT hr;
++    HWND hwnd;
++
++    if (!(dxgi_device = create_device(D3D10_CREATE_DEVICE_BGRA_SUPPORT)))
++    {
++        skip("Failed to create device.\n");
++        return;
++    }
++
++    hwnd = create_window();
++    swapchain = create_swapchain(dxgi_device, hwnd);
++    hr = pDCompositionCreateDevice(dxgi_device, &IID_IDCompositionDevice, (void **)&dcomp_device);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++    hr = IDCompositionDevice_CreateVisual(dcomp_device, &visual);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++
++    for (i = 0; i < ARRAY_SIZE(tests); i++)
++    {
++        hr = IDCompositionVisual_SetBorderMode(visual, tests[i].mode);
++        todo_wine
++        ok(hr == tests[i].hr, "Got unexpected hr %#lx.\n", hr);
++    }
++
++    IDCompositionVisual_Release(visual);
++    refcount = IDCompositionDevice_Release(dcomp_device);
++    ok(!refcount, "Device has %lu references left.\n", refcount);
++    IDXGISwapChain_Release(swapchain);
++    DestroyWindow(hwnd);
++    refcount = IDXGIDevice_Release(dxgi_device);
++    ok(!refcount, "Device has %lu references left.\n", refcount);
++}
++
++static void test_visual_SetBackFaceVisibility(void)
++{
++    static const struct
++    {
++        unsigned int visibility;
++        HRESULT hr;
++    }
++    tests[] =
++    {
++        {DCOMPOSITION_BACKFACE_VISIBILITY_VISIBLE, S_OK},
++        {DCOMPOSITION_BACKFACE_VISIBILITY_HIDDEN, S_OK},
++        {DCOMPOSITION_BACKFACE_VISIBILITY_INHERIT, S_OK},
++        {DCOMPOSITION_BACKFACE_VISIBILITY_HIDDEN + 1, E_INVALIDARG},
++    };
++    IDCompositionDesktopDevice *dcomp_device;
++    IDCompositionVisual2 *visual;
++    IDXGISwapChain *swapchain;
++    IDXGIDevice *dxgi_device;
++    ULONG refcount;
++    unsigned int i;
++    HRESULT hr;
++    HWND hwnd;
++
++    if (!(dxgi_device = create_device(D3D10_CREATE_DEVICE_BGRA_SUPPORT)))
++    {
++        skip("Failed to create device.\n");
++        return;
++    }
++
++    hwnd = create_window();
++    swapchain = create_swapchain(dxgi_device, hwnd);
++    hr = pDCompositionCreateDevice2((IUnknown *)dxgi_device, &IID_IDCompositionDesktopDevice, (void **)&dcomp_device);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++    hr = IDCompositionDesktopDevice_CreateVisual(dcomp_device, &visual);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++
++    for (i = 0; i < ARRAY_SIZE(tests); i++)
++    {
++        hr = IDCompositionVisual2_SetBackFaceVisibility(visual, tests[i].visibility);
++        todo_wine
++        ok(hr == tests[i].hr, "Got unexpected hr %#lx.\n", hr);
++    }
++
++    IDCompositionVisual2_Release(visual);
++    refcount = IDCompositionDesktopDevice_Release(dcomp_device);
++    ok(!refcount, "Device has %lu references left.\n", refcount);
++    IDXGISwapChain_Release(swapchain);
++    DestroyWindow(hwnd);
++    refcount = IDXGIDevice_Release(dxgi_device);
++    ok(!refcount, "Device has %lu references left.\n", refcount);
++}
++
++static void test_visual_AddVisual(void)
++{
++    IDCompositionVisual *parent_visual, *parent_visual2, *child_visual, *ref_visual;
++    IDCompositionDevice *dcomp_device;
++    IDXGISwapChain *swapchain;
++    IDXGIDevice *dxgi_device;
++    IDCompositionTarget *target;
++    ULONG refcount;
++    HRESULT hr;
++    HWND hwnd, hwnd2;
++
++    if (!(dxgi_device = create_device(D3D10_CREATE_DEVICE_BGRA_SUPPORT)))
++    {
++        skip("Failed to create device.\n");
++        return;
++    }
++
++    hwnd = create_window();
++    swapchain = create_swapchain(dxgi_device, hwnd);
++    hr = pDCompositionCreateDevice(dxgi_device, &IID_IDCompositionDevice, (void **)&dcomp_device);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++    hr = IDCompositionDevice_CreateVisual(dcomp_device, &parent_visual);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++    hr = IDCompositionDevice_CreateVisual(dcomp_device, &parent_visual2);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++    hr = IDCompositionDevice_CreateVisual(dcomp_device, &child_visual);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++    hr = IDCompositionDevice_CreateVisual(dcomp_device, &ref_visual);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++
++    /* Adding NULL visual */
++    hr = IDCompositionVisual_AddVisual(parent_visual, NULL, FALSE, NULL);
++    ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
++
++    /* Adding a visual with a reference visual not added to the any parent */
++    hr = IDCompositionVisual_AddVisual(parent_visual, child_visual, FALSE, ref_visual);
++    ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
++
++    /* Adding a visual with a reference visual added to a different parent */
++    hr = IDCompositionVisual_AddVisual(parent_visual2, ref_visual, FALSE, NULL);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++    hr = IDCompositionVisual_AddVisual(parent_visual, child_visual, FALSE, ref_visual);
++    ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
++    hr = IDCompositionVisual_RemoveAllVisuals(parent_visual2);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++
++    /* Adding a root visual */
++    hwnd2 = create_window();
++    hr = IDCompositionDevice_CreateTargetForHwnd(dcomp_device, hwnd2, TRUE, &target);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++    hr = IDCompositionTarget_SetRoot(target, child_visual);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++
++    hr = IDCompositionVisual_AddVisual(parent_visual, child_visual, FALSE, NULL);
++    ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
++
++    hr = IDCompositionTarget_SetRoot(target, NULL);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++    IDCompositionTarget_Release(target);
++    DestroyWindow(hwnd2);
++
++    /* Adding a visual below a reference visual */
++    hr = IDCompositionVisual_AddVisual(parent_visual, ref_visual, FALSE, NULL);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++    expect_ref(parent_visual, 1);
++    expect_ref(child_visual, 1);
++    hr = IDCompositionVisual_AddVisual(parent_visual, child_visual, FALSE, ref_visual);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++    expect_ref(parent_visual, 1);
++    expect_ref(child_visual, 1);
++
++    /* Adding a visual that's already an child */
++    hr = IDCompositionVisual_AddVisual(parent_visual, child_visual, FALSE, NULL);
++    ok(hr == E_INVALIDARG, "Got unexpected hr %#lx.\n", hr);
++
++    /* Adding a visual above a reference visual */
++    hr = IDCompositionVisual_RemoveVisual(parent_visual, child_visual);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++    hr = IDCompositionVisual_AddVisual(parent_visual, child_visual, TRUE, ref_visual);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++
++    /* Adding a visual above all child visuals */
++    hr = IDCompositionVisual_RemoveAllVisuals(parent_visual);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++    hr = IDCompositionVisual_AddVisual(parent_visual, child_visual, TRUE, NULL);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++
++    /* Adding a visual below all child visuals */
++    hr = IDCompositionVisual_RemoveAllVisuals(parent_visual);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++    hr = IDCompositionVisual_AddVisual(parent_visual, child_visual, FALSE, NULL);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++
++    /* Actual rendering tests. Confirm z-order */
++
++    hr = IDCompositionVisual_RemoveAllVisuals(parent_visual2);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++    hr = IDCompositionVisual_RemoveAllVisuals(parent_visual);
++    ok(hr == S_OK, "Got unexpected hr %#lx.\n", hr);
++    IDCompositionVisual_Release(ref_visual);
++    IDCompositionVisual_Release(child_visual);
++    IDCompositionVisual_Release(parent_visual2);
++    IDCompositionVisual_Release(parent_visual);
++    refcount = IDCompositionDevice_Release(dcomp_device);
++    ok(!refcount, "Device has %lu references left.\n", refcount);
++    IDXGISwapChain_Release(swapchain);
++    DestroyWindow(hwnd);
++    refcount = IDXGIDevice_Release(dxgi_device);
++    ok(!refcount, "Device has %lu references left.\n", refcount);
++}
++
+ START_TEST(dcomp)
+ {
+     HMODULE module;
+@@ -1148,6 +1424,10 @@ START_TEST(dcomp)
+     test_device_CreateVisual();
+     test_target_SetRoot();
+     test_visual_SetContent();
++    test_visual_SetBitmapInterpolationMode();
++    test_visual_SetBorderMode();
++    test_visual_SetBackFaceVisibility();
++    test_visual_AddVisual();
+ 
+     FreeLibrary(module);
+ }
+diff --git a/dlls/dcomp/visual.c b/dlls/dcomp/visual.c
+index d988670ee42..51238019577 100644
+--- a/dlls/dcomp/visual.c
++++ b/dlls/dcomp/visual.c
+@@ -62,6 +62,7 @@ static ULONG STDMETHODCALLTYPE visual_Release(IDCompositionVisualUnknown *iface)
+ {
+     struct composition_visual *visual = impl_from_IDCompositionVisualUnknown(iface);
+     ULONG ref = InterlockedDecrement(&visual->ref);
++    struct composition_visual *child;
+ 
+     TRACE("iface %p, ref %lu.\n", iface, ref);
+ 
+@@ -73,6 +74,16 @@ static ULONG STDMETHODCALLTYPE visual_Release(IDCompositionVisualUnknown *iface)
+             ID2D1DeviceContext_Release(visual->device_context);
+         if (visual->content)
+             IUnknown_Release(visual->content);
++        dcomp_lock();
++        if (visual->is_child)
++            list_remove(&visual->entry);
++        LIST_FOR_EACH_ENTRY(child, &visual->child_visuals, struct composition_visual, entry)
++        {
++            list_remove(&child->entry);
++            child->is_child = FALSE;
++            child->parent = NULL;
++        }
++        dcomp_unlock();
+         free(visual);
+     }
+ 
+@@ -136,15 +147,33 @@ static HRESULT STDMETHODCALLTYPE visual_SetEffect(IDCompositionVisualUnknown *if
+ static HRESULT STDMETHODCALLTYPE visual_SetBitmapInterpolationMode(IDCompositionVisualUnknown *iface,
+         enum DCOMPOSITION_BITMAP_INTERPOLATION_MODE interpolation_mode)
+ {
+-    FIXME("iface %p, interpolation_mode %d stub!\n", iface, interpolation_mode);
+-    return E_NOTIMPL;
++    struct composition_visual *visual = impl_from_IDCompositionVisualUnknown(iface);
++
++    TRACE("iface %p, interpolation_mode %d.\n", iface, interpolation_mode);
++
++    if (interpolation_mode != DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR
++        && interpolation_mode != DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR
++        && interpolation_mode != DCOMPOSITION_BITMAP_INTERPOLATION_MODE_INHERIT)
++        return E_INVALIDARG;
++
++    visual->interpolation_mode = interpolation_mode;
++    return S_OK;
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE visual_SetBorderMode(IDCompositionVisualUnknown *iface,
+         enum DCOMPOSITION_BORDER_MODE border_mode)
+ {
+-    FIXME("iface %p, border_mode %d stub!\n", iface, border_mode);
+-    return E_NOTIMPL;
++    struct composition_visual *visual = impl_from_IDCompositionVisualUnknown(iface);
++
++    TRACE("iface %p, border_mode %d.\n", iface, border_mode);
++
++    if (border_mode != DCOMPOSITION_BORDER_MODE_SOFT
++        && border_mode != DCOMPOSITION_BORDER_MODE_HARD
++        && border_mode != DCOMPOSITION_BORDER_MODE_INHERIT)
++        return E_INVALIDARG;
++
++    visual->border_mode = border_mode;
++    return S_OK;
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE visual_SetClipObject(IDCompositionVisualUnknown *iface,
+@@ -246,22 +275,90 @@ static HRESULT STDMETHODCALLTYPE visual_SetContent(IDCompositionVisualUnknown *i
+ static HRESULT STDMETHODCALLTYPE visual_AddVisual(IDCompositionVisualUnknown *iface,
+         IDCompositionVisual *visual, BOOL insert_above, IDCompositionVisual *reference_visual)
+ {
+-    FIXME("iface %p, visual %p, insert_above %d, reference_visual %p, stub!\n", iface, visual,
+-            insert_above, reference_visual);
+-    return E_NOTIMPL;
++    struct composition_visual *parent_visual_impl = impl_from_IDCompositionVisualUnknown(iface);
++    struct composition_visual *child_visual_impl, *ref_visual_impl = NULL;
++
++    FIXME("iface %p, visual %p, insert_above %d, reference_visual %p.\n", iface, visual,
++          insert_above, reference_visual);
++
++    if (!visual)
++        return E_INVALIDARG;
++
++    child_visual_impl = impl_from_IDCompositionVisual(visual);
++    if (child_visual_impl->is_root || child_visual_impl->is_child)
++        return E_INVALIDARG;
++
++    dcomp_lock();
++    if (reference_visual)
++    {
++        ref_visual_impl = impl_from_IDCompositionVisual(reference_visual);
++        if (!(ref_visual_impl->is_child && ref_visual_impl->parent == parent_visual_impl))
++        {
++            dcomp_unlock();
++            return E_INVALIDARG;
++        }
++
++        if (insert_above)
++            list_add_after(&ref_visual_impl->entry, &child_visual_impl->entry);
++        else
++            list_add_before(&ref_visual_impl->entry, &child_visual_impl->entry);
++    }
++    else
++    {
++        if (insert_above)
++            list_add_tail(&parent_visual_impl->child_visuals, &child_visual_impl->entry);
++        else
++            list_add_head(&parent_visual_impl->child_visuals, &child_visual_impl->entry);
++    }
++
++    child_visual_impl->is_child = TRUE;
++    child_visual_impl->parent = parent_visual_impl;
++    dcomp_unlock();
++    return S_OK;
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE visual_RemoveVisual(IDCompositionVisualUnknown *iface,
+         IDCompositionVisual *visual)
+ {
+-    FIXME("iface %p, visual %p stub!\n", iface, visual);
+-    return E_NOTIMPL;
++    struct composition_visual *parent_visual_impl = impl_from_IDCompositionVisualUnknown(iface);
++    struct composition_visual *child_visual_impl;
++
++    FIXME("iface %p, visual %p.\n", iface, visual);
++
++    if (!visual)
++        return E_INVALIDARG;
++
++    child_visual_impl = impl_from_IDCompositionVisual(visual);
++    dcomp_lock();
++    if (!(child_visual_impl->is_child && child_visual_impl->parent == parent_visual_impl))
++    {
++        dcomp_unlock();
++        return E_INVALIDARG;
++    }
++
++    list_remove(&child_visual_impl->entry);
++    child_visual_impl->is_child = FALSE;
++    child_visual_impl->parent = NULL;
++    dcomp_unlock();
++    return S_OK;
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE visual_RemoveAllVisuals(IDCompositionVisualUnknown *iface)
+ {
+-    FIXME("iface %p stub!\n", iface);
+-    return E_NOTIMPL;
++    struct composition_visual *parent_visual_impl = impl_from_IDCompositionVisualUnknown(iface);
++    struct composition_visual *child_visual_impl;
++
++    FIXME("iface %p.\n", iface);
++
++    dcomp_lock();
++    LIST_FOR_EACH_ENTRY(child_visual_impl, &parent_visual_impl->child_visuals, struct composition_visual, entry)
++    {
++        list_remove(&child_visual_impl->entry);
++        child_visual_impl->is_child = FALSE;
++        child_visual_impl->parent = NULL;
++    }
++    dcomp_unlock();
++    return S_OK;
+ }
+ 
+ static HRESULT STDMETHODCALLTYPE visual_SetCompositeMode(IDCompositionVisualUnknown *iface,
+@@ -281,8 +378,17 @@ static HRESULT STDMETHODCALLTYPE visual_SetOpacityMode(IDCompositionVisualUnknow
+ static HRESULT STDMETHODCALLTYPE visual_SetBackFaceVisibility(IDCompositionVisualUnknown *iface,
+         enum DCOMPOSITION_BACKFACE_VISIBILITY visibility)
+ {
+-    FIXME("iface %p, visibility %d stub!\n", iface, visibility);
+-    return E_NOTIMPL;
++    struct composition_visual *visual = impl_from_IDCompositionVisualUnknown(iface);
++
++    TRACE("iface %p, visibility %d.\n", iface, visibility);
++
++    if (visibility != DCOMPOSITION_BACKFACE_VISIBILITY_VISIBLE
++        && visibility != DCOMPOSITION_BACKFACE_VISIBILITY_HIDDEN
++        && visibility != DCOMPOSITION_BACKFACE_VISIBILITY_INHERIT)
++        return E_INVALIDARG;
++
++    visual->visibility = visibility;
++    return S_OK;
+ }
+ 
+ static HRESULT WINAPI visual_unknown_method1(IDCompositionVisualUnknown *iface)
+@@ -1025,6 +1131,7 @@ HRESULT create_visual(int version, REFIID iid, void **new_visual)
+     visual->IDCompositionVisualUnknown_iface.lpVtbl = &visual_unknown_vtbl;
+     visual->version = version;
+     visual->ref = 1;
++    list_init(&visual->child_visuals);
+     hr = IUnknown_QueryInterface(&visual->IDCompositionVisualUnknown_iface, iid, new_visual);
+     IUnknown_Release(&visual->IDCompositionVisualUnknown_iface);
+     return hr;
+-- 
+2.51.0
+
