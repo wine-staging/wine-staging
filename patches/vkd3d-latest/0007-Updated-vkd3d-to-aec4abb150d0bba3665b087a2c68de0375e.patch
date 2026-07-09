@@ -1,0 +1,460 @@
+From 0b148af5d6fbf717e66180cf70ce2ae0f5110ca7 Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Thu, 9 Jul 2026 06:28:03 +1000
+Subject: [PATCH] Updated vkd3d to aec4abb150d0bba3665b087a2c68de0375e76cb3.
+
+---
+ libs/vkd3d/libs/vkd3d-shader/fx.c             |  2 +-
+ libs/vkd3d/libs/vkd3d-shader/glsl.c           |  5 ++
+ libs/vkd3d/libs/vkd3d-shader/hlsl.c           | 21 ++-----
+ libs/vkd3d/libs/vkd3d-shader/hlsl.h           |  3 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl.y           |  5 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c   | 17 +++---
+ libs/vkd3d/libs/vkd3d-shader/ir.c             | 60 ++++++++++++++++++-
+ libs/vkd3d/libs/vkd3d-shader/spirv.c          | 60 +++----------------
+ libs/vkd3d/libs/vkd3d-shader/tpf.c            |  4 +-
+ .../libs/vkd3d-shader/vkd3d_shader_private.h  | 14 ++++-
+ 10 files changed, 103 insertions(+), 88 deletions(-)
+
+diff --git a/libs/vkd3d/libs/vkd3d-shader/fx.c b/libs/vkd3d/libs/vkd3d-shader/fx.c
+index 5140513b346..7339b8117f6 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d/libs/vkd3d-shader/fx.c
+@@ -522,7 +522,7 @@ static void fx_write_context_init(struct hlsl_ctx *ctx, const struct fx_write_co
+     rb_init(&fx->strings, string_storage_compare);
+     list_init(&fx->types);
+ 
+-    fx->child_effect = fx->ops->are_child_effects_supported && ctx->child_effect;
++    fx->child_effect = fx->ops->are_child_effects_supported && ctx->compile_info.child_effect;
+     fx->include_empty_buffers = version == 4 && ctx->include_empty_buffers;
+ 
+     LIST_FOR_EACH_ENTRY(var, &ctx->globals->vars, struct hlsl_ir_var, scope_entry)
+diff --git a/libs/vkd3d/libs/vkd3d-shader/glsl.c b/libs/vkd3d/libs/vkd3d-shader/glsl.c
+index 7c4d4eb9386..f2b64c3181b 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/glsl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/glsl.c
+@@ -280,6 +280,10 @@ static void shader_glsl_print_operand_name(struct vkd3d_string_buffer *buffer,
+             vkd3d_string_buffer_printf(buffer, "uvec4(gl_WorkGroupID, 0)");
+             break;
+ 
++        case VSIR_REGISTER_LOCALTHREADID:
++            vkd3d_string_buffer_printf(buffer, "uvec4(gl_LocalInvocationID, 0)");
++            break;
++
+         case VSIR_REGISTER_LOCALTHREADINDEX:
+             vkd3d_string_buffer_printf(buffer, "uvec4(gl_LocalInvocationIndex, 0, 0, 0)");
+             break;
+@@ -411,6 +415,7 @@ static void shader_glsl_print_src(struct vkd3d_string_buffer *buffer, struct vkd
+         case VSIR_REGISTER_IMMCONST:
+         case VSIR_REGISTER_THREADID:
+         case VSIR_REGISTER_THREADGROUPID:
++        case VSIR_REGISTER_LOCALTHREADID:
+         case VSIR_REGISTER_LOCALTHREADINDEX:
+             src_data_type = VSIR_DATA_U32;
+             break;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.c b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+index 89bb27de97e..f635e3a975a 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+@@ -5150,6 +5150,7 @@ static bool hlsl_ctx_init(struct hlsl_ctx *ctx, struct vkd3d_shader_source_list
+ 
+     memset(ctx, 0, sizeof(*ctx));
+ 
++    vsir_compile_info_init(&ctx->compile_info, compile_info);
+     ctx->profile = profile;
+ 
+     ctx->message_context = message_context;
+@@ -5208,21 +5209,6 @@ static bool hlsl_ctx_init(struct hlsl_ctx *ctx, struct vkd3d_shader_source_list
+ 
+         switch (option->name)
+         {
+-            case VKD3D_SHADER_COMPILE_OPTION_PACK_MATRIX_ORDER:
+-                if (option->value == VKD3D_SHADER_COMPILE_OPTION_PACK_MATRIX_ROW_MAJOR)
+-                    ctx->matrix_majority = HLSL_MODIFIER_ROW_MAJOR;
+-                else if (option->value == VKD3D_SHADER_COMPILE_OPTION_PACK_MATRIX_COLUMN_MAJOR)
+-                    ctx->matrix_majority = HLSL_MODIFIER_COLUMN_MAJOR;
+-                break;
+-
+-            case VKD3D_SHADER_COMPILE_OPTION_BACKWARD_COMPATIBILITY:
+-                ctx->compatibility_flags = option->value;
+-                break;
+-
+-            case VKD3D_SHADER_COMPILE_OPTION_CHILD_EFFECT:
+-                ctx->child_effect = option->value;
+-                break;
+-
+             case VKD3D_SHADER_COMPILE_OPTION_WARN_IMPLICIT_TRUNCATION:
+                 ctx->warn_implicit_truncation = option->value;
+                 break;
+@@ -5236,6 +5222,11 @@ static bool hlsl_ctx_init(struct hlsl_ctx *ctx, struct vkd3d_shader_source_list
+         }
+     }
+ 
++    if (ctx->compile_info.matrix_majority == VKD3D_SHADER_COMPILE_OPTION_PACK_MATRIX_ROW_MAJOR)
++        ctx->matrix_majority = HLSL_MODIFIER_ROW_MAJOR;
++    else if (ctx->compile_info.matrix_majority == VKD3D_SHADER_COMPILE_OPTION_PACK_MATRIX_COLUMN_MAJOR)
++        ctx->matrix_majority = HLSL_MODIFIER_COLUMN_MAJOR;
++
+     if (!(ctx->error_instr = hlsl_new_error_expr(ctx)))
+     {
+         hlsl_ctx_cleanup_locale(ctx);
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.h b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+index aba5cdf59aa..09aec646ddc 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.h
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+@@ -1119,6 +1119,7 @@ struct hlsl_buffer
+ 
+ struct hlsl_ctx
+ {
++    struct vsir_compile_info compile_info;
+     const struct hlsl_profile_info *profile;
+ 
+     struct vkd3d_shader_source_list *source_files;
+@@ -1276,8 +1277,6 @@ struct hlsl_ctx
+     /* Whether the numthreads() attribute has been provided in the entry-point function. */
+     uint32_t found_numthreads : 1;
+ 
+-    enum vkd3d_shader_compile_option_backward_compatibility compatibility_flags;
+-    bool child_effect;
+     bool include_empty_buffers;
+     bool warn_implicit_truncation;
+ };
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.y b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+index 6c38d260357..f33ae299afa 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.y
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+@@ -2499,8 +2499,7 @@ static void declare_var(struct hlsl_ctx *ctx, struct parse_variable_def *v)
+     type = basic_type;
+ 
+     if (basic_type->class <= HLSL_CLASS_LAST_NUMERIC && basic_type->e.numeric.type == HLSL_TYPE_HALF
+-            && !v->arrays.count && ctx->cur_scope == ctx->globals
+-            && !(ctx->compatibility_flags & VKD3D_SHADER_COMPILE_OPTION_BACKCOMPAT_ALLOW_HALF_GLOBALS)
++            && !v->arrays.count && ctx->cur_scope == ctx->globals && !ctx->compile_info.allow_half_globals
+             && ctx->profile->type != VKD3D_SHADER_TYPE_EFFECT)
+     {
+         hlsl_error(ctx, &v->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
+@@ -2606,7 +2605,7 @@ static void declare_var(struct hlsl_ctx *ctx, struct parse_variable_def *v)
+         modifiers |= HLSL_STORAGE_UNIFORM;
+ 
+     if (ctx->cur_scope == ctx->globals && (modifiers & HLSL_STORAGE_UNIFORM)
+-            && (ctx->compatibility_flags & VKD3D_SHADER_COMPILE_OPTION_CONST_GLOBAL_UNIFORMS))
++            && ctx->compile_info.const_global_uniforms)
+         type = hlsl_type_clone(ctx, type, 0, HLSL_MODIFIER_CONST);
+ 
+     if (!(var = hlsl_new_var(ctx, var_name, type, &v->loc, &new_semantic, modifiers, &v->reg_reservation)))
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+index b61657d1c95..b4939ceeceb 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+@@ -611,8 +611,7 @@ static void prepend_input_copy(struct hlsl_ctx *ctx, struct list *semantic_vars,
+             instr = &load->node;
+         }
+         else if (ctx->profile->type == VKD3D_SHADER_TYPE_PIXEL && hlsl_version_ge(ctx, 4, 0)
+-                && (ctx->compatibility_flags & VKD3D_SHADER_COMPILE_OPTION_BACKCOMPAT_MAP_SEMANTIC_NAMES)
+-                && !ascii_strcasecmp(semantic->name, "VFACE"))
++                && ctx->compile_info.map_semantic_names && !ascii_strcasecmp(semantic->name, "VFACE"))
+         {
+             /* VFACE on sm4 has sm3 semantics, returning 1.0 or -1.0.
+              * Also, the variable can be declared as float (which is not true
+@@ -7786,8 +7785,9 @@ static struct vsir_signature_element *generate_signature_entry(struct hlsl_ctx *
+     {
+         bool has_idx;
+ 
+-        if (!sm4_sysval_semantic_from_semantic_name(&sysval, &version, ctx->compatibility_flags, ctx->domain,
+-                var->semantic.name, var->semantic.index, output, ctx->is_patch_constant_func, is_primitive))
++        if (!sm4_sysval_semantic_from_semantic_name(&sysval, &version,
++                ctx->compile_info.map_semantic_names, ctx->domain, var->semantic.name,
++                var->semantic.index, output, ctx->is_patch_constant_func, is_primitive))
+         {
+             hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_SEMANTIC,
+                     "Invalid semantic '%s'.", var->semantic.name);
+@@ -10356,7 +10356,7 @@ static bool sm1_generate_vsir_instr_expr_cast(struct hlsl_ctx *ctx,
+                     return true;
+ 
+                 case HLSL_TYPE_DOUBLE:
+-                    if (ctx->compatibility_flags & VKD3D_SHADER_COMPILE_OPTION_DOUBLE_AS_FLOAT_ALIAS)
++                    if (ctx->compile_info.double_as_float_alias)
+                     {
+                         generate_vsir_instr_expr_single_instr_op(ctx, program, expr, VSIR_OP_MOV, 0, 0, true);
+                         return true;
+@@ -10426,8 +10426,7 @@ static bool sm1_generate_vsir_instr_expr(struct hlsl_ctx *ctx, struct vsir_progr
+     if (!hlsl_is_numeric_type(type))
+         goto err;
+ 
+-    if (type->e.numeric.type == HLSL_TYPE_DOUBLE
+-            && !(ctx->compatibility_flags & VKD3D_SHADER_COMPILE_OPTION_DOUBLE_AS_FLOAT_ALIAS))
++    if (type->e.numeric.type == HLSL_TYPE_DOUBLE && !ctx->compile_info.double_as_float_alias)
+     {
+         hlsl_error(ctx, &instr->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
+                 "The 'double' type is not supported for the %s profile.", ctx->profile->name);
+@@ -11589,7 +11588,7 @@ static void ctab_write_uniforms(struct ctab_ctx *ctab)
+                         switch (comp_type->e.numeric.type)
+                         {
+                             case HLSL_TYPE_DOUBLE:
+-                                if (ctx->compatibility_flags & VKD3D_SHADER_COMPILE_OPTION_DOUBLE_AS_FLOAT_ALIAS)
++                                if (ctx->compile_info.double_as_float_alias)
+                                     uni.u = var->default_values[k].number.u;
+                                 else
+                                     uni.u = 0;
+@@ -11728,7 +11727,7 @@ static void sm4_generate_vsir_instr_dcl_semantic(struct hlsl_ctx *ctx, struct vs
+     uint32_t write_mask;
+     bool has_idx;
+ 
+-    sm4_sysval_semantic_from_semantic_name(&semantic, version, ctx->compatibility_flags, ctx->domain,
++    sm4_sysval_semantic_from_semantic_name(&semantic, version, ctx->compile_info.map_semantic_names, ctx->domain,
+             var->semantic.name, var->semantic.index, output, ctx->is_patch_constant_func, is_primitive);
+     if (semantic == ~0u)
+         semantic = VKD3D_SHADER_SV_NONE;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/ir.c b/libs/vkd3d/libs/vkd3d-shader/ir.c
+index 30df033f03a..50c5c5e3e44 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/ir.c
++++ b/libs/vkd3d/libs/vkd3d-shader/ir.c
+@@ -756,6 +756,8 @@ static int convert_parameter_info(const struct vkd3d_shader_compile_info *compil
+ 
+ void vsir_compile_info_init(struct vsir_compile_info *vsir, const struct vkd3d_shader_compile_info *vkd3d)
+ {
++    enum vkd3d_shader_compile_option_backward_compatibility compatibility_flags = 0;
++    enum vkd3d_shader_compile_option_feature_flags features = 0;
+     const struct vkd3d_shader_compile_option *option;
+     unsigned int i;
+ 
+@@ -768,7 +770,7 @@ void vsir_compile_info_init(struct vsir_compile_info *vsir, const struct vkd3d_s
+     };
+ 
+     if (!vkd3d)
+-        return;
++        goto done;
+ 
+     for (i = 0; i < vkd3d->option_count; ++i)
+     {
+@@ -810,10 +812,66 @@ void vsir_compile_info_init(struct vsir_compile_info *vsir, const struct vkd3d_s
+                 vsir->write_tess_geom_point_size = !!option->value;
+                 break;
+ 
++            case VKD3D_SHADER_COMPILE_OPTION_PACK_MATRIX_ORDER:
++                if (option->value == VKD3D_SHADER_COMPILE_OPTION_PACK_MATRIX_ROW_MAJOR
++                        || option->value == VKD3D_SHADER_COMPILE_OPTION_PACK_MATRIX_COLUMN_MAJOR)
++                    vsir->matrix_majority = option->value;
++                else
++                    WARN("Ignoring unrecognised value %#x for option %#x.\n", option->value, option->name);
++                break;
++
++            case VKD3D_SHADER_COMPILE_OPTION_BACKWARD_COMPATIBILITY:
++                compatibility_flags = option->value;
++                break;
++
++            case VKD3D_SHADER_COMPILE_OPTION_FRAGMENT_COORDINATE_ORIGIN:
++                if (option->value == VKD3D_SHADER_COMPILE_OPTION_FRAGMENT_COORDINATE_ORIGIN_UPPER_LEFT)
++                    vsir->fragment_origin_lower_left = false;
++                else if (option->value == VKD3D_SHADER_COMPILE_OPTION_FRAGMENT_COORDINATE_ORIGIN_LOWER_LEFT)
++                    vsir->fragment_origin_lower_left = true;
++                else
++                    WARN("Ignoring unrecognised value %#x for option %#x.\n", option->value, option->name);
++                break;
++
++            case VKD3D_SHADER_COMPILE_OPTION_FEATURE:
++                features = option->value;
++                break;
++
++            case VKD3D_SHADER_COMPILE_OPTION_CHILD_EFFECT:
++                vsir->child_effect = !!option->value;
++                break;
++
++            case VKD3D_SHADER_COMPILE_OPTION_WARN_IMPLICIT_TRUNCATION:
++            case VKD3D_SHADER_COMPILE_OPTION_INCLUDE_EMPTY_BUFFERS_IN_EFFECTS:
++            case VKD3D_SHADER_COMPILE_OPTION_DENORMAL_MODE_F16:
++            case VKD3D_SHADER_COMPILE_OPTION_DENORMAL_MODE_F32:
++            case VKD3D_SHADER_COMPILE_OPTION_DENORMAL_MODE_F64:
++                break;
++
+             default:
++                WARN("Ignoring unrecognised option %#x with value %#x.\n", option->name, option->value);
+                 break;
+         }
+     }
++
++done:
++    if (compatibility_flags & VKD3D_SHADER_COMPILE_OPTION_BACKCOMPAT_MAP_SEMANTIC_NAMES)
++        vsir->map_semantic_names = true;
++    if (compatibility_flags & VKD3D_SHADER_COMPILE_OPTION_DOUBLE_AS_FLOAT_ALIAS)
++        vsir->double_as_float_alias = true;
++    if (compatibility_flags & VKD3D_SHADER_COMPILE_OPTION_CONST_GLOBAL_UNIFORMS)
++        vsir->const_global_uniforms = true;
++    if (compatibility_flags & VKD3D_SHADER_COMPILE_OPTION_BACKCOMPAT_ALLOW_HALF_GLOBALS)
++        vsir->allow_half_globals = true;
++
++    if (features & VKD3D_SHADER_COMPILE_OPTION_FEATURE_INT64)
++        vsir->feature_int64 = true;
++    if (features & VKD3D_SHADER_COMPILE_OPTION_FEATURE_FLOAT64 || vsir->api_version <= VKD3D_SHADER_API_VERSION_1_10)
++        vsir->feature_float64 = true;
++    if (features & VKD3D_SHADER_COMPILE_OPTION_FEATURE_WAVE_OPS)
++        vsir->feature_wave_ops = true;
++    if (features & VKD3D_SHADER_COMPILE_OPTION_FEATURE_ZERO_INITIALIZE_WORKGROUP_MEMORY)
++        vsir->feature_zero_init_tgsm = true;
+ }
+ 
+ bool vsir_program_init(struct vsir_program *program, const struct vkd3d_shader_compile_info *compile_info,
+diff --git a/libs/vkd3d/libs/vkd3d-shader/spirv.c b/libs/vkd3d/libs/vkd3d-shader/spirv.c
+index e887a15d724..036b6660c21 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/spirv.c
++++ b/libs/vkd3d/libs/vkd3d-shader/spirv.c
+@@ -2996,7 +2996,6 @@ struct spirv_compiler
+     unsigned int spec_constant_count;
+     struct vkd3d_shader_spec_constant *spec_constants;
+     size_t spec_constants_size;
+-    enum vkd3d_shader_compile_option_feature_flags features;
+ 
+     struct vkd3d_string_buffer_cache string_buffers;
+ 
+@@ -3141,53 +3140,10 @@ static struct spirv_compiler *spirv_compiler_create(struct vsir_program *program
+     vkd3d_spirv_builder_init(&compiler->spirv_builder,
+             spirv_compiler_get_entry_point_name(compiler), compile_info->source_name);
+ 
+-    compiler->fragment_coordinate_origin = SpvExecutionModeOriginUpperLeft;
+-
+-    for (i = 0; i < compile_info->option_count; ++i)
+-    {
+-        const struct vkd3d_shader_compile_option *option = &compile_info->options[i];
+-
+-        switch (option->name)
+-        {
+-            case VKD3D_SHADER_COMPILE_OPTION_FRAGMENT_COORDINATE_ORIGIN:
+-                if (option->value == VKD3D_SHADER_COMPILE_OPTION_FRAGMENT_COORDINATE_ORIGIN_UPPER_LEFT)
+-                    compiler->fragment_coordinate_origin = SpvExecutionModeOriginUpperLeft;
+-                else if (option->value == VKD3D_SHADER_COMPILE_OPTION_FRAGMENT_COORDINATE_ORIGIN_LOWER_LEFT)
+-                    compiler->fragment_coordinate_origin = SpvExecutionModeOriginLowerLeft;
+-                else
+-                    WARN("Ignoring unrecognised value %#x for option %#x.\n", option->value, option->name);
+-                break;
+-
+-            case VKD3D_SHADER_COMPILE_OPTION_FEATURE:
+-                compiler->features = option->value;
+-                break;
+-
+-            case VKD3D_SHADER_COMPILE_OPTION_STRIP_DEBUG:
+-            case VKD3D_SHADER_COMPILE_OPTION_BUFFER_UAV:
+-            case VKD3D_SHADER_COMPILE_OPTION_FORMATTING:
+-            case VKD3D_SHADER_COMPILE_OPTION_API_VERSION:
+-            case VKD3D_SHADER_COMPILE_OPTION_TYPED_UAV:
+-            case VKD3D_SHADER_COMPILE_OPTION_WRITE_TESS_GEOM_POINT_SIZE:
+-            case VKD3D_SHADER_COMPILE_OPTION_PACK_MATRIX_ORDER:
+-            case VKD3D_SHADER_COMPILE_OPTION_BACKWARD_COMPATIBILITY:
+-            case VKD3D_SHADER_COMPILE_OPTION_CHILD_EFFECT:
+-            case VKD3D_SHADER_COMPILE_OPTION_WARN_IMPLICIT_TRUNCATION:
+-            case VKD3D_SHADER_COMPILE_OPTION_INCLUDE_EMPTY_BUFFERS_IN_EFFECTS:
+-            case VKD3D_SHADER_COMPILE_OPTION_DENORMAL_MODE_F16:
+-            case VKD3D_SHADER_COMPILE_OPTION_DENORMAL_MODE_F32:
+-            case VKD3D_SHADER_COMPILE_OPTION_DENORMAL_MODE_F64:
+-                /* Explicitly ignored for this target. */
+-                break;
+-
+-            default:
+-                WARN("Ignoring unrecognised option %#x with value %#x.\n", option->name, option->value);
+-                break;
+-        }
+-    }
+-
+-    /* Explicit enabling of float64 was not required for API versions <= 1.10. */
+-    if (compiler->compile_info.api_version <= VKD3D_SHADER_API_VERSION_1_10)
+-        compiler->features |= VKD3D_SHADER_COMPILE_OPTION_FEATURE_FLOAT64;
++    if (compiler->compile_info.fragment_origin_lower_left)
++        compiler->fragment_coordinate_origin = SpvExecutionModeOriginLowerLeft;
++    else
++        compiler->fragment_coordinate_origin = SpvExecutionModeOriginUpperLeft;
+ 
+     rb_init(&compiler->symbol_table, vkd3d_symbol_compare);
+ 
+@@ -6203,7 +6159,7 @@ static void spirv_compiler_emit_global_flags(struct spirv_compiler *compiler, en
+ 
+     if (flags & (VKD3DSGF_ENABLE_DOUBLE_PRECISION_FLOAT_OPS | VKD3DSGF_ENABLE_11_1_DOUBLE_EXTENSIONS))
+     {
+-        if (compiler->features & VKD3D_SHADER_COMPILE_OPTION_FEATURE_FLOAT64)
++        if (compiler->compile_info.feature_float64)
+         {
+             vkd3d_spirv_enable_capability(&compiler->spirv_builder, SpvCapabilityFloat64);
+             spirv_compiler_emit_denormal_mode(compiler, 64, compiler->program->f64_denormal_mode);
+@@ -6218,7 +6174,7 @@ static void spirv_compiler_emit_global_flags(struct spirv_compiler *compiler, en
+ 
+     if (flags & VKD3DSGF_ENABLE_INT64)
+     {
+-        if (compiler->features & VKD3D_SHADER_COMPILE_OPTION_FEATURE_INT64)
++        if (compiler->compile_info.feature_int64)
+             vkd3d_spirv_enable_capability(&compiler->spirv_builder, SpvCapabilityInt64);
+         else
+             spirv_compiler_error(compiler, VKD3D_SHADER_ERROR_SPV_UNSUPPORTED_FEATURE,
+@@ -6236,7 +6192,7 @@ static void spirv_compiler_emit_global_flags(struct spirv_compiler *compiler, en
+ 
+     if (flags & VKD3DSGF_ENABLE_WAVE_INTRINSICS)
+     {
+-        if (!(compiler->features & VKD3D_SHADER_COMPILE_OPTION_FEATURE_WAVE_OPS))
++        if (!compiler->compile_info.feature_wave_ops)
+             spirv_compiler_error(compiler, VKD3D_SHADER_ERROR_SPV_UNSUPPORTED_FEATURE,
+                     "The target environment does not support wave ops.");
+         else if (!spirv_compiler_is_spirv_min_1_3_target(compiler))
+@@ -6903,7 +6859,7 @@ static void spirv_compiler_emit_workgroup_memory(struct spirv_compiler *compiler
+     const SpvStorageClass storage_class = SpvStorageClassWorkgroup;
+     struct vkd3d_symbol reg_symbol;
+ 
+-    if (zero_init && !(compiler->features & VKD3D_SHADER_COMPILE_OPTION_FEATURE_ZERO_INITIALIZE_WORKGROUP_MEMORY))
++    if (zero_init && !compiler->compile_info.feature_zero_init_tgsm)
+         spirv_compiler_error(compiler, VKD3D_SHADER_ERROR_SPV_UNSUPPORTED_FEATURE,
+                 "The target environment does not support zero-initialized workgroup memory.");
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/tpf.c b/libs/vkd3d/libs/vkd3d-shader/tpf.c
+index 7ad7c93aea9..4fe32f947c3 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/tpf.c
++++ b/libs/vkd3d/libs/vkd3d-shader/tpf.c
+@@ -3061,12 +3061,10 @@ static bool get_insidetessfactor_sysval_semantic(enum vkd3d_shader_sysval_semant
+ }
+ 
+ bool sm4_sysval_semantic_from_semantic_name(enum vkd3d_shader_sysval_semantic *sysval_semantic,
+-        const struct vkd3d_shader_version *version,
+-        enum vkd3d_shader_compile_option_backward_compatibility compatibility_flags,
++        const struct vkd3d_shader_version *version, bool semantic_compat_mapping,
+         enum vkd3d_tessellator_domain domain, const char *semantic_name,
+         unsigned int semantic_idx, bool output, bool is_patch_constant_func, bool is_primitive)
+ {
+-    bool semantic_compat_mapping = (compatibility_flags & VKD3D_SHADER_COMPILE_OPTION_BACKCOMPAT_MAP_SEMANTIC_NAMES);
+     unsigned int i;
+ 
+     static const struct
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+index 207448fd14b..c418e975a13 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+@@ -1691,11 +1691,22 @@ struct vsir_compile_info
+ {
+     enum vkd3d_shader_compile_option_formatting_flags formatting;
+     enum vkd3d_shader_api_version api_version;
++    enum vkd3d_shader_compile_option_pack_matrix_order matrix_majority;
+ 
+     uint32_t strip_debug : 1;
+     uint32_t ssbo_uavs : 1;
+     uint32_t uav_read_without_format : 1;
+     uint32_t write_tess_geom_point_size : 1;
++    uint32_t map_semantic_names : 1;
++    uint32_t double_as_float_alias : 1;
++    uint32_t const_global_uniforms : 1;
++    uint32_t allow_half_globals : 1;
++    uint32_t fragment_origin_lower_left : 1;
++    uint32_t feature_int64 : 1;
++    uint32_t feature_float64 : 1;
++    uint32_t feature_wave_ops : 1;
++    uint32_t feature_zero_init_tgsm : 1;
++    uint32_t child_effect : 1;
+ };
+ 
+ void vsir_compile_info_init(struct vsir_compile_info *vsir, const struct vkd3d_shader_compile_info *vkd3d);
+@@ -1964,8 +1975,7 @@ bool sm4_register_from_semantic_name(const struct vkd3d_shader_version *version,
+         const char *semantic_name, bool output, enum vsir_register_type *type, bool *has_idx);
+ bool shader_sm4_is_scalar_register(const struct vsir_operand *reg);
+ bool sm4_sysval_semantic_from_semantic_name(enum vkd3d_shader_sysval_semantic *sysval_semantic,
+-        const struct vkd3d_shader_version *version,
+-        enum vkd3d_shader_compile_option_backward_compatibility compatibility_flags,
++        const struct vkd3d_shader_version *version, bool semantic_compat_mapping,
+         enum vkd3d_tessellator_domain domain, const char *semantic_name,
+         unsigned int semantic_idx, bool output, bool is_patch_constant_func, bool is_primitive);
+ 
+-- 
+2.53.0
+
