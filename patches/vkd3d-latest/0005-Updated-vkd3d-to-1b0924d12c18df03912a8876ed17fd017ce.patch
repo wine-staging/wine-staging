@@ -1,0 +1,931 @@
+From 60a16a3ddc52f1ca2554f7db46cd93f1ed96244d Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Fri, 17 Jul 2026 06:46:20 +1000
+Subject: [PATCH] Updated vkd3d to 1b0924d12c18df03912a8876ed17fd017ce9308e.
+
+---
+ libs/vkd3d/include/private/vkd3d_version.h  |   2 +-
+ libs/vkd3d/libs/vkd3d-shader/fx.c           | 387 ++++++++++++++++----
+ libs/vkd3d/libs/vkd3d-shader/hlsl.c         |   8 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl.h         |   6 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c |  84 ++---
+ libs/vkd3d/libs/vkd3d-shader/ir.c           |  41 +++
+ 6 files changed, 392 insertions(+), 136 deletions(-)
+
+diff --git a/libs/vkd3d/include/private/vkd3d_version.h b/libs/vkd3d/include/private/vkd3d_version.h
+index 47578f998d9..82c26f8e6a3 100644
+--- a/libs/vkd3d/include/private/vkd3d_version.h
++++ b/libs/vkd3d/include/private/vkd3d_version.h
+@@ -1 +1 @@
+-#define VKD3D_VCS_ID " (git 5d174f64)"
++#define VKD3D_VCS_ID " (git 1b0924d1)"
+diff --git a/libs/vkd3d/libs/vkd3d-shader/fx.c b/libs/vkd3d/libs/vkd3d-shader/fx.c
+index 5b8d6917ef9..0d162fb3b39 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d/libs/vkd3d-shader/fx.c
+@@ -268,6 +268,8 @@ struct fx_write_context_ops
+     void (*write_annotation)(struct hlsl_ir_var *var, struct fx_write_context *fx);
+     void (*write_state_assignment)(const struct hlsl_ir_var *var,
+             struct hlsl_state_block_entry *entry, struct fx_write_context *fx);
++    void (*resolve_state_block_values)(struct hlsl_ir_var *var, struct hlsl_state_block_entry *entry,
++            struct fx_write_context *fx);
+     bool are_child_effects_supported;
+ };
+ 
+@@ -337,6 +339,12 @@ static void write_state_assignment(const struct hlsl_ir_var *var,
+     fx->ops->write_state_assignment(var, entry, fx);
+ }
+ 
++static void resolve_state_block_values(struct hlsl_ir_var *var,
++        struct hlsl_state_block_entry *entry, struct fx_write_context *fx)
++{
++    fx->ops->resolve_state_block_values(var, entry, fx);
++}
++
+ static uint32_t write_state_block(struct hlsl_ir_var *var,
+         unsigned int block_index, struct fx_write_context *fx);
+ 
+@@ -1091,19 +1099,17 @@ static const struct fx_state fx_2_sampler_states[] =
+ 
+ static void write_fx_2_pass(struct hlsl_ir_var *var, struct fx_write_context *fx)
+ {
++    uint32_t name_offset, annotation_count_offset, count_offset, count;
+     struct vkd3d_bytecode_buffer *buffer = &fx->structured;
+-    uint32_t name_offset, annotation_count_offset;
+ 
+     name_offset = write_string(var->name, fx);
+     put_u32(buffer, name_offset);
+     annotation_count_offset = put_u32(buffer, 0);
+-    put_u32(buffer, 0); /* Assignment count. */
++    count_offset = put_u32(buffer, 0);
+ 
+     write_fx_2_annotations(var, annotation_count_offset, fx);
+-    /* TODO: assignments */
+-
+-    if (var->state_block_count && var->state_blocks[0]->count)
+-        hlsl_fixme(fx->ctx, &var->loc, "Write pass assignments.");
++    count = write_state_block(var, 0, fx);
++    set_u32(buffer, count_offset, count);
+ 
+     /* For some reason every pass adds to the total shader object count. */
+     fx->shader_count++;
+@@ -1897,6 +1903,62 @@ static uint32_t write_fx_2_default_value(struct hlsl_type *value_type, struct hl
+     return offset;
+ }
+ 
++static bool compile_shader(const struct hlsl_ir_compile *compile, struct fx_write_context *fx,
++        struct vkd3d_shader_code *code)
++{
++    bool d3dbc = compile->profile->major_version < 4;
++    struct vkd3d_shader_code reflection = { 0 };
++    const struct hlsl_profile_info *profile;
++    struct hlsl_ctx *ctx = fx->ctx;
++    struct vsir_program program;
++    int ret = 0;
++
++    static const struct vkd3d_shader_compile_option version_option =
++    {
++        .name = VKD3D_SHADER_COMPILE_OPTION_API_VERSION,
++        .value = VKD3D_SHADER_API_VERSION_CURRENT,
++    };
++    struct vkd3d_shader_compile_info compile_info =
++    {
++        .type = VKD3D_SHADER_STRUCTURE_TYPE_COMPILE_INFO,
++        .options = &version_option,
++        .option_count = 1,
++    };
++
++    struct vkd3d_shader_version version =
++    {
++        .type = compile->profile->type,
++        .major = compile->profile->major_version,
++        .minor = compile->profile->minor_version,
++    };
++
++    compile_info.target_type = d3dbc ? VKD3D_SHADER_TARGET_D3D_BYTECODE : VKD3D_SHADER_TARGET_DXBC_TPF;
++
++    if (!vsir_program_init(&program, &compile_info, &version, 0, VSIR_CF_STRUCTURED,
++            d3dbc ? VSIR_NORMALISED_SM1 : VSIR_NORMALISED_SM4))
++    {
++        return false;
++    }
++
++    profile = ctx->profile;
++    ctx->profile = compile->profile;
++    ret = hlsl_emit_vsir(ctx, &compile_info, compile->decl, &compile->initializers, &program, &reflection);
++    ctx->profile = profile;
++    if (ret < 0)
++    {
++        vsir_program_cleanup(&program);
++        return false;
++    }
++
++    ret = vsir_program_compile(&program, &reflection, vkd3d_shader_init_config_flags(),
++            &compile_info, code, ctx->message_context);
++
++    vkd3d_shader_free_shader_code(&reflection);
++    vsir_program_cleanup(&program);
++
++    return ret >= 0;
++}
++
+ static uint32_t write_fx_2_object_initializer(const struct hlsl_ir_var *var, struct fx_write_context *fx)
+ {
+     const struct hlsl_type *type = hlsl_get_multiarray_element_type(var->data_type);
+@@ -1904,6 +1966,7 @@ static uint32_t write_fx_2_object_initializer(const struct hlsl_ir_var *var, str
+     struct vkd3d_bytecode_buffer *buffer = &fx->objects;
+     uint32_t offset = fx->unstructured.size, id, size;
+     struct hlsl_ctx *ctx = fx->ctx;
++    struct vkd3d_shader_code code;
+     const void *data;
+ 
+     for (i = 0; i < elements_count; ++i)
+@@ -1914,6 +1977,9 @@ static uint32_t write_fx_2_object_initializer(const struct hlsl_ir_var *var, str
+         }
+         else
+         {
++            size = 0;
++            memset(&code, 0, sizeof(code));
++
+             switch (type->class)
+             {
+                 case HLSL_CLASS_STRING:
+@@ -1924,12 +1990,16 @@ static uint32_t write_fx_2_object_initializer(const struct hlsl_ir_var *var, str
+                     break;
+                 }
+                 case HLSL_CLASS_TEXTURE:
+-                    size = 0;
+                     break;
+                 case HLSL_CLASS_PIXEL_SHADER:
+                 case HLSL_CLASS_VERTEX_SHADER:
+-                    size = 0;
+-                    hlsl_fixme(ctx, &var->loc, "Writing fx_2_0 shader objects initializers is not implemented.");
++                    if (var->default_values
++                            && var->default_values[i].shader
++                            && compile_shader(var->default_values[i].shader, fx, &code))
++                    {
++                        size = code.size;
++                        data = code.code;
++                    }
+                     break;
+                 default:
+                     vkd3d_unreachable();
+@@ -1948,6 +2018,8 @@ static uint32_t write_fx_2_object_initializer(const struct hlsl_ir_var *var, str
+                 if (size % 4)
+                     bytecode_put_bytes_unaligned(buffer, &pad, 4 - (size % 4));
+             }
++
++            vkd3d_shader_free_shader_code(&code);
+         }
+     }
+ 
+@@ -2022,12 +2094,9 @@ static bool is_type_supported_fx_2(struct hlsl_ctx *ctx, const struct hlsl_type
+             break;
+ 
+         case HLSL_CLASS_STRING:
+-            return true;
+-
+         case HLSL_CLASS_PIXEL_SHADER:
+         case HLSL_CLASS_VERTEX_SHADER:
+-            hlsl_fixme(ctx, loc, "Write fx 2.0 parameter class %#x.", type->class);
+-            return false;
++            return true;
+ 
+         case HLSL_CLASS_DEPTH_STENCIL_STATE:
+         case HLSL_CLASS_DEPTH_STENCIL_VIEW:
+@@ -2040,8 +2109,6 @@ static bool is_type_supported_fx_2(struct hlsl_ctx *ctx, const struct hlsl_type
+         case HLSL_CLASS_HULL_SHADER:
+         case HLSL_CLASS_GEOMETRY_SHADER:
+         case HLSL_CLASS_BLEND_STATE:
+-            return false;
+-
+         case HLSL_CLASS_EFFECT_GROUP:
+         case HLSL_CLASS_ERROR:
+         case HLSL_CLASS_PASS:
+@@ -2049,11 +2116,10 @@ static bool is_type_supported_fx_2(struct hlsl_ctx *ctx, const struct hlsl_type
+         case HLSL_CLASS_CONSTANT_BUFFER:
+         case HLSL_CLASS_NULL:
+         case HLSL_CLASS_STREAM_OUTPUT:
+-            /* This cannot appear as an extern variable. */
+             break;
+     }
+ 
+-    vkd3d_unreachable();
++    return false;
+ }
+ 
+ static void write_fx_2_parameters(struct fx_write_context *fx)
+@@ -2067,7 +2133,7 @@ static void write_fx_2_parameters(struct fx_write_context *fx)
+         IS_SHARED = 0x1,
+     };
+ 
+-    LIST_FOR_EACH_ENTRY(var, &ctx->extern_vars, struct hlsl_ir_var, extern_entry)
++    LIST_FOR_EACH_ENTRY(var, &ctx->globals->vars, struct hlsl_ir_var, scope_entry)
+     {
+         if (!is_type_supported_fx_2(ctx, var->data_type, &var->loc))
+             continue;
+@@ -2102,20 +2168,74 @@ static void write_fx_2_annotation(struct hlsl_ir_var *var, struct fx_write_conte
+     put_u32(buffer, value_offset);
+ }
+ 
++static uint32_t write_fx_2_state_type(const struct hlsl_state_block_entry *entry, struct fx_write_context *fx)
++{
++    struct vkd3d_bytecode_buffer *buffer = &fx->unstructured;
++    struct hlsl_ir_node *value = entry->args->node;
++    struct hlsl_type *data_type = value->data_type;
++    uint32_t offset;
++
++    /* TODO: only handles numeric types */
++
++    offset = put_u32(buffer, hlsl_sm1_base_type(data_type, false, HLSL_SAMPLER_DIM_GENERIC));
++    put_u32(buffer, D3DXPC_MATRIX_ROWS);
++    put_u32(buffer, 0); /* Name */
++    put_u32(buffer, 0); /* Semantic */
++    put_u32(buffer, 1); /* Element count */
++
++    put_u32(buffer, entry->args_count); /* Rows */
++    put_u32(buffer, 1); /* Columns */
++
++    return offset;
++}
++
+ static void write_fx_2_state_assignment(const struct hlsl_ir_var *var,
+         struct hlsl_state_block_entry *entry, struct fx_write_context *fx)
+ {
++    struct vkd3d_bytecode_buffer *unstructured = &fx->unstructured;
++    struct vkd3d_bytecode_buffer *buffer = &fx->structured;
++    uint32_t value = 0, type = 0, rhs_offset, type_offset;
++    struct hlsl_ir_node *value_node = entry->args->node;
+     struct hlsl_ctx *ctx = fx->ctx;
++    struct hlsl_ir_constant *c;
++
++    put_u32(buffer, entry->name_id);
++    put_u32(buffer, entry->lhs_index);
++    type_offset = put_u32(buffer, 0);
++    rhs_offset = put_u32(buffer, 0);
+ 
+-    hlsl_fixme(ctx, &var->loc, "Writing fx_2_0 state assignments is not implemented.");
++    switch (value_node->type)
++    {
++        case HLSL_IR_CONSTANT:
++        {
++            type = write_fx_2_state_type(entry, fx);
++            value = unstructured->size;
++
++            for (int i = 0; i < entry->args_count; ++i)
++            {
++                c = hlsl_ir_constant(entry->args[i].node);
++                put_u32(unstructured, c->value.u[0].u);
++            }
++            break;
++        }
++        default:
++            hlsl_fixme(ctx, &var->loc, "Unsupported assignment type for state %s.", entry->name);
++    }
++
++    set_u32(buffer, type_offset, type);
++    set_u32(buffer, rhs_offset, value);
+ }
+ 
++static void resolve_fx_2_state_block_values(struct hlsl_ir_var *var, struct hlsl_state_block_entry *entry,
++        struct fx_write_context *fx);
++
+ static const struct fx_write_context_ops fx_2_ops =
+ {
+     .write_string = write_fx_2_string,
+     .write_technique = write_fx_2_technique,
+     .write_pass = write_fx_2_pass,
+     .write_annotation = write_fx_2_annotation,
++    .resolve_state_block_values = resolve_fx_2_state_block_values,
+     .write_state_assignment = write_fx_2_state_assignment,
+ };
+ 
+@@ -2180,6 +2300,9 @@ static int hlsl_fx_2_write(struct hlsl_ctx *ctx, struct vkd3d_shader_code *out)
+ static void write_fx_4_state_assignment(const struct hlsl_ir_var *var,
+         struct hlsl_state_block_entry *entry, struct fx_write_context *fx);
+ 
++static void resolve_fx_4_state_block_values(struct hlsl_ir_var *var,
++        struct hlsl_state_block_entry *entry, struct fx_write_context *fx);
++
+ static const struct fx_write_context_ops fx_4_ops =
+ {
+     .write_string = write_fx_4_string,
+@@ -2187,6 +2310,7 @@ static const struct fx_write_context_ops fx_4_ops =
+     .write_pass = write_fx_4_pass,
+     .write_annotation = write_fx_4_annotation,
+     .write_state_assignment = write_fx_4_state_assignment,
++    .resolve_state_block_values = resolve_fx_4_state_block_values,
+     .are_child_effects_supported = true,
+ };
+ 
+@@ -2390,64 +2514,21 @@ static uint32_t write_fx_4_state_numeric_value(struct hlsl_ir_constant *value, s
+ static uint32_t write_shader_blob(const struct hlsl_ir_compile *compile, struct fx_write_context *fx)
+ {
+     struct vkd3d_bytecode_buffer *buffer = &fx->unstructured;
+-    struct vkd3d_shader_code source = {0}, rdef = {0};
+-    const struct hlsl_profile_info *profile;
+-    struct vkd3d_shader_version version;
+-    struct hlsl_ctx *ctx = fx->ctx;
+-    struct vsir_program program;
++    struct vkd3d_shader_code code = { 0 };
+     uint32_t offset;
+-    int ret = 0;
+ 
+-    static const struct vkd3d_shader_compile_option version_option =
+-    {
+-        .name = VKD3D_SHADER_COMPILE_OPTION_API_VERSION,
+-        .value = VKD3D_SHADER_API_VERSION_CURRENT,
+-    };
+-    static const struct vkd3d_shader_compile_info compile_info =
+-    {
+-        .type = VKD3D_SHADER_STRUCTURE_TYPE_COMPILE_INFO,
+-        .target_type = VKD3D_SHADER_TARGET_DXBC_TPF,
+-        .options = &version_option,
+-        .option_count = 1,
+-    };
+-
+-    version = (struct vkd3d_shader_version)
+-    {
+-        .type = compile->profile->type,
+-        .major = compile->profile->major_version,
+-        .minor = compile->profile->minor_version,
+-    };
+-
+-    if (!vsir_program_init(&program, &compile_info, &version, 0, VSIR_CF_STRUCTURED, VSIR_NORMALISED_SM4))
+-        return 0;
+-
+-    profile = ctx->profile;
+-    ctx->profile = compile->profile;
+-    ret = hlsl_emit_vsir(ctx, &compile_info, compile->decl, &compile->initializers, &program, &rdef);
+-    ctx->profile = profile;
+-    if (ret < 0)
+-    {
+-        vsir_program_cleanup(&program);
++    if (!compile_shader(compile, fx, &code))
+         return 0;
+-    }
+ 
+-    ret = vsir_program_compile(&program, &rdef, vkd3d_shader_init_config_flags(),
+-            &compile_info, &source, ctx->message_context);
++    offset = put_u32(buffer, code.size);
++    bytecode_put_bytes_unaligned(buffer, code.code, code.size);
+ 
+-    vkd3d_shader_free_shader_code(&rdef);
+-    vsir_program_cleanup(&program);
+-    if (ret < 0)
+-        return 0;
+-
+-    offset = put_u32(buffer, source.size);
+-    bytecode_put_bytes_unaligned(buffer, source.code, source.size);
+-
+-    vkd3d_shader_free_shader_code(&source);
++    vkd3d_shader_free_shader_code(&code);
+ 
+     return offset;
+ }
+ 
+-static uint32_t write_fx_shader(enum fx_shader_type type, const struct hlsl_ir_compile *compile,
++static uint32_t write_fx_4_shader(enum fx_shader_type type, const struct hlsl_ir_compile *compile,
+         struct vkd3d_bytecode_buffer *buffer, struct fx_write_context *fx)
+ {
+     struct fx_5_shader shader = {0};
+@@ -2600,7 +2681,7 @@ static void write_fx_4_state_assignment(const struct hlsl_ir_var *var, struct hl
+                 shader_type = FX5_SHADER;
+             }
+ 
+-            value_offset = write_fx_shader(shader_type, hlsl_ir_compile(value), unstructured, fx);
++            value_offset = write_fx_4_shader(shader_type, hlsl_ir_compile(value), unstructured, fx);
+             ++fx->inline_shader_count;
+             ++fx->shader_count;
+             break;
+@@ -3042,7 +3123,165 @@ static struct fx_state_table fx_get_state_table(enum hlsl_type_class type_class,
+     return table;
+ }
+ 
+-static void resolve_fx_state_block_values(struct hlsl_ir_var *var,
++static void resolve_fx_2_state_block_values(struct hlsl_ir_var *var,
++        struct hlsl_state_block_entry *entry, struct fx_write_context *fx)
++{
++    const struct hlsl_type *type = hlsl_get_multiarray_element_type(var->data_type);
++    struct replace_state_context replace_context;
++    const struct fx_state *state = NULL;
++    struct hlsl_type *state_type = NULL;
++    struct hlsl_ctx *ctx = fx->ctx;
++    enum hlsl_base_type base_type;
++    struct fx_state_table table;
++    struct hlsl_ir_node *node;
++    unsigned int i;
++
++    table = fx_get_state_table(type->class, ctx->profile->major_version, ctx->profile->minor_version);
++
++    for (i = 0; i < table.count; ++i)
++    {
++        if (type->class == table.ptr[i].container && !ascii_strcasecmp(entry->name, table.ptr[i].name))
++        {
++            state = &table.ptr[i];
++            break;
++        }
++    }
++
++    if (!state)
++    {
++        hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_SYNTAX, "Unrecognized state name %s.", entry->name);
++        return;
++    }
++
++    if (state->class == HLSL_CLASS_SCALAR && !(entry->args_count == 1 || entry->args_count == 4))
++    {
++        hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_SYNTAX,
++                "Unrecognized initializer for the state %s.", entry->name);
++        return;
++    }
++
++    if (entry->lhs_has_index && state->array_size == 1)
++    {
++        hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_SYNTAX,
++                "Can't use array-style access for non-array state %s.", entry->name);
++        return;
++    }
++
++    if (!entry->lhs_has_index && state->array_size > 1)
++    {
++        hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_SYNTAX,
++                "Expected array index for array state %s.", entry->name);
++        return;
++    }
++
++    if (entry->lhs_has_index && (state->array_size <= entry->lhs_index))
++    {
++        hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_SYNTAX,
++                "Invalid element index %u for the state %s[%u].", entry->lhs_index, state->name, state->array_size);
++        return;
++    }
++
++    entry->name_id = state->id;
++
++    replace_context.values = state->values;
++    replace_context.var = var;
++
++    /* Turn named constants into actual constants. */
++    hlsl_transform_ir(ctx, lower_null_constant, entry->instrs, NULL);
++    hlsl_transform_ir(ctx, replace_state_block_constant, entry->instrs, &replace_context);
++    hlsl_run_const_passes(ctx, entry->instrs);
++
++    /* Now cast and run folding again. */
++
++    if (is_object_fx_type(state->type))
++    {
++        node = entry->args->node;
++
++        switch (node->type)
++        {
++            case HLSL_IR_LOAD:
++            {
++                struct hlsl_ir_load *load = hlsl_ir_load(node);
++
++                if (load->src.path_len)
++                    hlsl_fixme(ctx, &ctx->location, "Arrays are not supported for RHS.");
++
++                if (load->src.var->data_type->class != hlsl_type_class_from_fx_type(state->type))
++                    hlsl_error(ctx, &ctx->location, VKD3D_SHADER_ERROR_HLSL_INVALID_SYNTAX,
++                            "Type mismatch for the %s state value", entry->name);
++
++                break;
++            }
++            case HLSL_IR_CONSTANT:
++            {
++                struct hlsl_ir_constant *c = hlsl_ir_constant(node);
++                struct hlsl_type *data_type = c->node.data_type;
++
++                if (data_type->class == HLSL_CLASS_SCALAR
++                        && (data_type->e.numeric.type == HLSL_TYPE_INT || data_type->e.numeric.type == HLSL_TYPE_UINT))
++                {
++                    if (c->value.u[0].u != 0)
++                        hlsl_error(ctx, &ctx->location, VKD3D_SHADER_ERROR_HLSL_INVALID_SYNTAX,
++                                "Only 0 integer constants are allowed for object-typed fields.");
++                }
++                else
++                {
++                    hlsl_error(ctx, &ctx->location, VKD3D_SHADER_ERROR_HLSL_INVALID_SYNTAX,
++                            "Unexpected constant used for object-typed field.");
++                }
++
++                break;
++            }
++            case HLSL_IR_COMPILE:
++            case HLSL_IR_INDEX:
++                break;
++            default:
++                hlsl_fixme(ctx, &ctx->location, "Unhandled node type for object-typed field.");
++        }
++
++        return;
++    }
++
++    base_type = hlsl_type_from_fx_type(state->type);
++    switch (state->class)
++    {
++        case HLSL_CLASS_VECTOR:
++            state_type = hlsl_get_vector_type(ctx, base_type, state->dimx);
++            break;
++        case HLSL_CLASS_SCALAR:
++            state_type = hlsl_get_scalar_type(ctx, base_type);
++            break;
++        case HLSL_CLASS_TEXTURE:
++            hlsl_fixme(ctx, &ctx->location, "Object type fields are not supported.");
++            break;
++        default:
++            ;
++    }
++
++    if (state_type)
++    {
++        node = entry->args->node;
++        if (!hlsl_type_state_compatible(node->data_type, base_type))
++        {
++            struct hlsl_ir_node *cast;
++
++            if (!(cast = hlsl_new_cast(ctx, node, state_type, &var->loc)))
++                return;
++            list_add_after(&node->entry, &cast->entry);
++            node = cast;
++        }
++
++        if (node != entry->args->node)
++        {
++            hlsl_src_remove(entry->args);
++            hlsl_src_from_node(entry->args, node);
++        }
++
++        hlsl_run_const_passes(ctx, entry->instrs);
++    }
++}
++
++static void resolve_fx_4_state_block_values(struct hlsl_ir_var *var,
+         struct hlsl_state_block_entry *entry, struct fx_write_context *fx)
+ {
+     const struct hlsl_type *type = hlsl_get_multiarray_element_type(var->data_type);
+@@ -3382,7 +3621,7 @@ static uint32_t write_state_block(struct hlsl_ir_var *var, unsigned int block_in
+                 continue;
+ 
+             /* Resolve special constant names and property names. */
+-            resolve_fx_state_block_values(var, entry, fx);
++            resolve_state_block_values(var, entry, fx);
+ 
+             write_state_assignment(var, entry, fx);
+             ++count;
+@@ -3408,14 +3647,14 @@ static void write_fx_4_state_object_initializer(struct hlsl_ir_var *var, struct
+     }
+ }
+ 
+-static void write_fx_shader_initializer(struct hlsl_ir_var *var, struct fx_write_context *fx)
++static void write_fx_4_shader_initializer(struct hlsl_ir_var *var, struct fx_write_context *fx)
+ {
+     uint32_t elements_count = hlsl_get_multiarray_size(var->data_type);
+     enum fx_shader_type shader_type = get_shader_type(var, fx);
+ 
+     for (size_t i = 0; i < elements_count; ++i)
+     {
+-        write_fx_shader(shader_type, var->default_values ? var->default_values[i].shader : NULL, &fx->structured, fx);
++        write_fx_4_shader(shader_type, var->default_values ? var->default_values[i].shader : NULL, &fx->structured, fx);
+     }
+ }
+ 
+@@ -3466,7 +3705,7 @@ static void write_fx_4_object_variable(struct hlsl_ir_var *var, struct fx_write_
+         case HLSL_CLASS_COMPUTE_SHADER:
+         case HLSL_CLASS_DOMAIN_SHADER:
+         case HLSL_CLASS_GEOMETRY_SHADER:
+-            write_fx_shader_initializer(var, fx);
++            write_fx_4_shader_initializer(var, fx);
+             fx->shader_count += elements_count;
+             break;
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.c b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+index 98a9c718cd3..11a4c3134a3 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+@@ -2114,7 +2114,7 @@ struct hlsl_ir_node *hlsl_new_switch(struct hlsl_ctx *ctx, struct hlsl_ir_node *
+     return &s->node;
+ }
+ 
+-struct hlsl_ir_load *hlsl_new_load_index(struct hlsl_ctx *ctx, const struct hlsl_deref *deref,
++static struct hlsl_ir_load *hlsl_new_load_index(struct hlsl_ctx *ctx, const struct hlsl_deref *deref,
+         struct hlsl_ir_node *idx, const struct vkd3d_shader_location *loc)
+ {
+     struct hlsl_ir_load *load;
+@@ -2147,8 +2147,8 @@ struct hlsl_ir_node *hlsl_block_add_load_index(struct hlsl_ctx *ctx, struct hlsl
+     return append_new_instr(ctx, block, load ? &load->node : NULL);
+ }
+ 
+-struct hlsl_ir_load *hlsl_new_load_parent(struct hlsl_ctx *ctx, const struct hlsl_deref *deref,
+-        const struct vkd3d_shader_location *loc)
++struct hlsl_ir_node *hlsl_block_add_load_parent(struct hlsl_ctx *ctx, struct hlsl_block *block,
++        const struct hlsl_deref *deref, const struct vkd3d_shader_location *loc)
+ {
+     /* This deref can only exists temporarily because it is not the real owner of its members. */
+     struct hlsl_deref tmp_deref;
+@@ -2157,7 +2157,7 @@ struct hlsl_ir_load *hlsl_new_load_parent(struct hlsl_ctx *ctx, const struct hls
+ 
+     tmp_deref = *deref;
+     tmp_deref.path_len = deref->path_len - 1;
+-    return hlsl_new_load_index(ctx, &tmp_deref, NULL, loc);
++    return hlsl_block_add_load_index(ctx, block, &tmp_deref, NULL, loc);
+ }
+ 
+ struct hlsl_ir_load *hlsl_new_var_load(struct hlsl_ctx *ctx, struct hlsl_ir_var *var,
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.h b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+index a915bbcc8e5..b5312758ca0 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.h
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+@@ -1626,6 +1626,8 @@ struct hlsl_ir_node *hlsl_block_add_load_component(struct hlsl_ctx *ctx, struct
+         const struct hlsl_deref *deref, unsigned int comp, const struct vkd3d_shader_location *loc);
+ struct hlsl_ir_node *hlsl_block_add_load_index(struct hlsl_ctx *ctx, struct hlsl_block *block,
+         const struct hlsl_deref *deref, struct hlsl_ir_node *idx, const struct vkd3d_shader_location *loc);
++struct hlsl_ir_node *hlsl_block_add_load_parent(struct hlsl_ctx *ctx, struct hlsl_block *block,
++        const struct hlsl_deref *deref, const struct vkd3d_shader_location *loc);
+ void hlsl_block_add_loop(struct hlsl_ctx *ctx, struct hlsl_block *block,
+         struct hlsl_block *iter, struct hlsl_block *body, enum hlsl_loop_unroll_type unroll_type,
+         struct hlsl_ir_node *unroll_limit, const struct vkd3d_shader_location *loc);
+@@ -1744,10 +1746,6 @@ bool hlsl_constant_is_one(struct hlsl_ir_constant *c);
+ 
+ struct hlsl_ir_load *hlsl_new_var_load(struct hlsl_ctx *ctx, struct hlsl_ir_var *var,
+         const struct vkd3d_shader_location *loc);
+-struct hlsl_ir_load *hlsl_new_load_index(struct hlsl_ctx *ctx, const struct hlsl_deref *deref,
+-        struct hlsl_ir_node *idx, const struct vkd3d_shader_location *loc);
+-struct hlsl_ir_load *hlsl_new_load_parent(struct hlsl_ctx *ctx, const struct hlsl_deref *deref,
+-        const struct vkd3d_shader_location *loc);
+ struct hlsl_ir_node *hlsl_add_load_component(struct hlsl_ctx *ctx, struct hlsl_block *block,
+         struct hlsl_ir_node *var_instr, unsigned int comp, const struct vkd3d_shader_location *loc);
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+index acf66ff3bab..9e5323ca2a4 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+@@ -584,7 +584,6 @@ static void prepend_input_copy(struct hlsl_ctx *ctx, struct list *semantic_vars,
+     {
+         struct hlsl_ir_node *cast, *instr;
+         struct hlsl_ir_var *input;
+-        struct hlsl_ir_load *load;
+ 
+         if (hlsl_type_is_primitive_array(var->data_type))
+         {
+@@ -604,11 +603,7 @@ static void prepend_input_copy(struct hlsl_ctx *ctx, struct list *semantic_vars,
+             hlsl_deref_init_simple(&prim_deref, input);
+ 
+             idx = hlsl_block_add_uint_constant(ctx, block, prim_index, &var->loc);
+-
+-            if (!(load = hlsl_new_load_index(ctx, &prim_deref, idx, loc)))
+-                return;
+-            hlsl_block_add_instr(block, &load->node);
+-            instr = &load->node;
++            instr = hlsl_block_add_load_index(ctx, block, &prim_deref, idx, loc);
+         }
+         else if (ctx->profile->type == VKD3D_SHADER_TYPE_PIXEL && hlsl_version_ge(ctx, 4, 0)
+                 && ctx->compile_info.map_semantic_names && !ascii_strcasecmp(semantic->name, "VFACE"))
+@@ -619,7 +614,7 @@ static void prepend_input_copy(struct hlsl_ctx *ctx, struct list *semantic_vars,
+              * Note that VPOS is not similarly affected,
+              * despite also having different semantics between sm3 and sm4. */
+ 
+-            struct hlsl_ir_node *one, *minusone;
++            struct hlsl_ir_node *load, *one, *minusone;
+ 
+             if (!(input = add_semantic_var(ctx, semantic_vars, var,
+                     hlsl_change_base_type(ctx, vector_type_src, HLSL_TYPE_BOOL),
+@@ -627,13 +622,10 @@ static void prepend_input_copy(struct hlsl_ctx *ctx, struct list *semantic_vars,
+                 return;
+             ++semantic->index;
+ 
+-            if (!(load = hlsl_new_var_load(ctx, input, &var->loc)))
+-                return;
+-            hlsl_block_add_instr(block, &load->node);
+-
++            load = hlsl_block_add_simple_load(ctx, block, input, &var->loc);
+             one = hlsl_block_add_float_constant(ctx, block, 1.0f, &var->loc);
+             minusone = hlsl_block_add_float_constant(ctx, block, -1.0f, &var->loc);
+-            instr = hlsl_add_conditional(ctx, block, &load->node, one, minusone);
++            instr = hlsl_add_conditional(ctx, block, load, one, minusone);
+         }
+         else
+         {
+@@ -642,10 +634,7 @@ static void prepend_input_copy(struct hlsl_ctx *ctx, struct list *semantic_vars,
+                 return;
+             ++semantic->index;
+ 
+-            if (!(load = hlsl_new_var_load(ctx, input, &var->loc)))
+-                return;
+-            hlsl_block_add_instr(block, &load->node);
+-            instr = &load->node;
++            instr = hlsl_block_add_simple_load(ctx, block, input, &var->loc);
+         }
+ 
+         cast = hlsl_block_add_cast(ctx, block, instr, vector_type_dst, &var->loc);
+@@ -1138,21 +1127,18 @@ static bool find_recursive_calls(struct hlsl_ctx *ctx, struct hlsl_ir_node *inst
+ static void insert_early_return_break(struct hlsl_ctx *ctx,
+         struct hlsl_ir_function_decl *func, struct hlsl_ir_node *cf_instr)
+ {
+-    struct hlsl_block then_block;
+-    struct hlsl_ir_load *load;
+-    struct hlsl_ir_node *iff;
++    struct hlsl_block block, then_block;
++    struct hlsl_ir_node *load;
+ 
++    hlsl_block_init(&block);
+     hlsl_block_init(&then_block);
+ 
+-    if (!(load = hlsl_new_var_load(ctx, func->early_return_var, &cf_instr->loc)))
+-        return;
+-    list_add_after(&cf_instr->entry, &load->node.entry);
++    load = hlsl_block_add_simple_load(ctx, &block, func->early_return_var, &cf_instr->loc);
+ 
+     hlsl_block_add_jump(ctx, &then_block, HLSL_IR_JUMP_BREAK, NULL, &cf_instr->loc);
++    hlsl_block_add_if(ctx, &block, load, &then_block, NULL, HLSL_IF_FLATTEN_DEFAULT, false, &cf_instr->loc);
+ 
+-    if (!(iff = hlsl_new_if(ctx, &load->node, &then_block, NULL, HLSL_IF_FLATTEN_DEFAULT, false, &cf_instr->loc)))
+-        return;
+-    list_add_after(&load->node.entry, &iff->entry);
++    list_move_after(&cf_instr->entry, &block.instrs);
+ }
+ 
+ /* Remove HLSL_IR_JUMP_RETURN calls by altering subsequent control flow. */
+@@ -1254,17 +1240,21 @@ static bool lower_return(struct hlsl_ctx *ctx, struct hlsl_ir_function_decl *fun
+         else if (instr->type == HLSL_IR_JUMP)
+         {
+             struct hlsl_ir_jump *jump = hlsl_ir_jump(instr);
+-            struct hlsl_ir_node *constant, *store;
++            struct hlsl_ir_node *constant;
+ 
+             if (jump->type == HLSL_IR_JUMP_RETURN)
+             {
++                struct hlsl_block store_block;
++
++                hlsl_block_init(&store_block);
++
+                 if (!(constant = hlsl_new_bool_constant(ctx, true, &jump->node.loc)))
+                     return false;
+-                list_add_before(&jump->node.entry, &constant->entry);
++                hlsl_block_add_instr(&store_block, constant);
+ 
+-                if (!(store = hlsl_new_simple_store(ctx, func->early_return_var, constant)))
+-                    return false;
+-                list_add_after(&constant->entry, &store->entry);
++                hlsl_block_add_simple_store(ctx, &store_block, func->early_return_var, constant);
++
++                list_move_before(&jump->node.entry, &store_block.instrs);
+ 
+                 has_early_return = true;
+                 if (in_loop)
+@@ -1542,7 +1532,6 @@ static struct hlsl_ir_node *lower_index_load(struct hlsl_ctx *ctx, struct hlsl_i
+     struct hlsl_ir_node *instr = &index->node, *ret;
+     const struct hlsl_deref *deref;
+     struct hlsl_deref var_deref;
+-    struct hlsl_ir_load *load;
+     struct hlsl_ir_node *val;
+     struct hlsl_ir_var *var;
+ 
+@@ -1717,19 +1706,15 @@ static struct hlsl_ir_node *lower_index_load(struct hlsl_ctx *ctx, struct hlsl_i
+ 
+         for (i = 0; i < mat->data_type->e.numeric.dimx; ++i)
+         {
+-            struct hlsl_ir_node *c;
++            struct hlsl_ir_node *c, *load;
++            struct hlsl_deref child;
+ 
+             c = hlsl_block_add_uint_constant(ctx, block, i, &instr->loc);
+-
+-            if (!(load = hlsl_new_load_index(ctx, deref, c, &instr->loc)))
+-                return NULL;
+-            hlsl_block_add_instr(block, &load->node);
+-
+-            if (!(load = hlsl_new_load_index(ctx, &load->src, index->idx.node, &instr->loc)))
++            if (!hlsl_deref_init_child(&child, deref, c, ctx))
+                 return NULL;
+-            hlsl_block_add_instr(block, &load->node);
+-
+-            hlsl_block_add_store_index(ctx, block, &row_deref, c, &load->node, 0, &instr->loc);
++            load = hlsl_block_add_load_index(ctx, block, &child, index->idx.node, &instr->loc);
++            hlsl_block_add_store_index(ctx, block, &row_deref, c, load, 0, &instr->loc);
++            hlsl_deref_cleanup(&child);
+         }
+ 
+         return hlsl_block_add_simple_load(ctx, block, var, &instr->loc);
+@@ -2737,7 +2722,6 @@ static bool copy_propagation_replace_with_deref(struct hlsl_ctx *ctx,
+     const struct hlsl_ir_var *var = deref->var;
+     unsigned int time = load->node.index;
+     struct hlsl_deref tmp_deref = {0};
+-    struct hlsl_ir_load *new_load;
+     struct hlsl_ir_var *x = NULL;
+     int *c = NULL, *d = NULL;
+     uint32_t ret_swizzle = 0;
+@@ -2871,10 +2855,7 @@ static bool copy_propagation_replace_with_deref(struct hlsl_ctx *ctx,
+                 new_affine_path_index(ctx, &load->node.loc, &block, index, c[k], d[k]));
+     }
+ 
+-    if (!(new_load = hlsl_new_load_index(ctx, &tmp_deref, NULL, &load->node.loc)))
+-        goto done;
+-    new_instr = &new_load->node;
+-    hlsl_block_add_instr(&block, new_instr);
++    new_instr = hlsl_block_add_load_index(ctx, &block, &tmp_deref, NULL, &load->node.loc);
+ 
+     if (new_instr->data_type->class == HLSL_CLASS_SCALAR || new_instr->data_type->class == HLSL_CLASS_VECTOR)
+         new_instr = hlsl_block_add_swizzle(ctx, &block, ret_swizzle, instr_component_count, new_instr, &instr->loc);
+@@ -4931,8 +4912,7 @@ static bool normalize_switch_cases(struct hlsl_ctx *ctx, struct hlsl_ir_node *in
+ static struct hlsl_ir_node *lower_vector_derefs(struct hlsl_ctx *ctx,
+         struct hlsl_ir_node *instr, struct hlsl_block *block)
+ {
+-    struct hlsl_ir_load *vector_load;
+-    struct hlsl_ir_node *idx;
++    struct hlsl_ir_node *idx, *vector_load;
+     struct hlsl_deref *deref;
+     struct hlsl_type *type;
+     unsigned int i;
+@@ -4955,9 +4935,7 @@ static struct hlsl_ir_node *lower_vector_derefs(struct hlsl_ctx *ctx,
+ 
+     idx = deref->path[deref->path_len - 1].node;
+ 
+-    if (!(vector_load = hlsl_new_load_parent(ctx, deref, &instr->loc)))
+-        return NULL;
+-    hlsl_block_add_instr(block, &vector_load->node);
++    vector_load = hlsl_block_add_load_parent(ctx, block, deref, &instr->loc);
+ 
+     if (idx->type == HLSL_IR_CONSTANT)
+     {
+@@ -4967,7 +4945,7 @@ static struct hlsl_ir_node *lower_vector_derefs(struct hlsl_ctx *ctx,
+             return NULL;
+ 
+         hlsl_swizzle_set_component(&swizzle, 0, hlsl_ir_constant(idx)->value.u[0].u);
+-        return hlsl_block_add_swizzle(ctx, block, swizzle, 1, &vector_load->node, &instr->loc);
++        return hlsl_block_add_swizzle(ctx, block, swizzle, 1, vector_load, &instr->loc);
+     }
+     else
+     {
+@@ -4996,7 +4974,7 @@ static struct hlsl_ir_node *lower_vector_derefs(struct hlsl_ctx *ctx,
+ 
+         /* Note: We may be creating a DOT for bool vectors here, which we need to lower to
+          * LOGIC_OR + LOGIC_AND. */
+-        operands[0] = &vector_load->node;
++        operands[0] = vector_load;
+         operands[1] = eq;
+         return hlsl_block_add_expr(ctx, block, op, operands, instr->data_type, &instr->loc);
+     }
+diff --git a/libs/vkd3d/libs/vkd3d-shader/ir.c b/libs/vkd3d/libs/vkd3d-shader/ir.c
+index 79d6dcb9e31..296696c560b 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/ir.c
++++ b/libs/vkd3d/libs/vkd3d-shader/ir.c
+@@ -1936,6 +1936,43 @@ fail:
+     return VKD3D_ERROR_OUT_OF_MEMORY;
+ }
+ 
++static enum vkd3d_result vsir_program_lower_sub(struct vsir_program *program, struct vsir_program_iterator *sub)
++{
++    struct vkd3d_shader_instruction *ins = vsir_program_iterator_current(sub);
++    const struct vkd3d_shader_location location = ins->location;
++    const struct vsir_src_operand *src = ins->src;
++    const struct vsir_dst_operand *dst = ins->dst;
++    struct vsir_program_iterator it;
++    unsigned int neg_id;
++
++    /* sub DST, SRC0, SRC1
++     *      ->
++     * neg srNEG, SRC1
++     * add DST, SRC0, srNEG */
++
++    if (!(ins = vsir_program_iterator_insert_before(sub, &it, 1)))
++        return VKD3D_ERROR_OUT_OF_MEMORY;
++    if (!vsir_instruction_init_with_params(program, ins, &location, VSIR_OP_NEG, 1, 1))
++        goto fail;
++    neg_id = program->ssa_count++;
++    vsir_dst_operand_init_ssa(&ins->dst[0], neg_id, src[1].reg.data_type, src[1].reg.dimension);
++    ins->src[0] = src[1];
++
++    ins = vsir_program_iterator_next(&it);
++    if (!vsir_instruction_init_with_params(program, ins, &location, VSIR_OP_ADD, 1, 2))
++        goto fail;
++    ins->dst[0] = dst[0];
++    ins->src[0] = src[0];
++    vsir_src_operand_init_ssa(&ins->src[1], neg_id, src[1].reg.data_type, src[1].reg.dimension);
++
++    return VKD3D_OK;
++
++fail:
++    vsir_program_iterator_nop_range(&it, sub, &location);
++
++    return VKD3D_ERROR_OUT_OF_MEMORY;
++}
++
+ static enum vkd3d_result vsir_program_lower_texkill(struct vsir_program *program,
+         struct vsir_program_iterator *it, unsigned int *tmp_idx)
+ {
+@@ -3396,6 +3433,10 @@ static enum vkd3d_result vsir_program_lower_d3dbc_instructions(struct vsir_progr
+                 ret = vsir_program_lower_sm1_sincos(program, &it);
+                 break;
+ 
++            case VSIR_OP_SUB:
++                ret = vsir_program_lower_sub(program, &it);
++                break;
++
+             case VSIR_OP_TEXBEM:
+             case VSIR_OP_TEXBEML:
+                 ret = vsir_program_lower_texbem(program, &it, message_context);
+-- 
+2.53.0
+
