@@ -1,0 +1,78 @@
+From e45c14c96a9de9c43e654990d40ae33c72641fc3 Mon Sep 17 00:00:00 2001
+From: Ally Sommers <dropbear.sh@gmail.com>
+Date: Wed, 10 May 2023 18:23:20 +0000
+Subject: [PATCH] server: Allow for deletion of socket files.
+
+Deleting the socket file is a common pattern with
+AF_UNIX sockets, and is analogous to unbinding.
+
+Ugliness removed by Ralf Habacker.
+---
+ server/fd.c | 33 +++++++++++++++++++++++++++++----
+ 1 file changed, 29 insertions(+), 4 deletions(-)
+
+diff --git a/server/fd.c b/server/fd.c
+index 68745a47ee3..24c93aa3aab 100644
+--- a/server/fd.c
++++ b/server/fd.c
+@@ -1941,20 +1941,42 @@ struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_nam
+         {
+             /* check for trailing slash on file path */
+             if ((errno == ENOENT || (errno == ENOTDIR && !(options & FILE_DIRECTORY_FILE))) && name[strlen(name) - 1] == '/')
++            {
+                 set_error( STATUS_OBJECT_NAME_INVALID );
++                goto error;
++            }
++
++            if (stat( name, &st ))
++            {
++                file_set_error();
++                goto error;
++            }
++
++            /* POSIX requires that open(2) throws EOPNOTSUPP when `path` is a Unix
++             * socket. BSD throws EOPNOTSUPP in this case and the additional case of
++             * O_SHLOCK or O_EXLOCK being passed when `path` resides on a filesystem
++             * without lock support. Contrary to POSIX, Linux returns ENXIO in this
++             * case, so we also check that error code here.
++             */
++            if ((errno == EOPNOTSUPP || errno == ENXIO) && S_ISSOCK(st.st_mode) && (options & FILE_DELETE_ON_CLOSE))
++                ; /* no error, go to regular deletion code path */
+             else
++            {
+                 file_set_error();
+-            goto error;
++                goto error;
++            }
+         }
+     }
+ 
+     fd->nt_name = dup_nt_name( root, nt_name, &fd->nt_namelen );
+     fd->unix_name = NULL;
+-    fstat( fd->unix_fd, &st );
++    /* st was set from the file name if the file could not be opened */
++    if (fd->unix_fd != -1)
++        fstat( fd->unix_fd, &st );
+     *mode = st.st_mode;
+ 
+     /* only bother with an inode for normal files and directories */
+-    if (S_ISREG(st.st_mode) || S_ISDIR(st.st_mode))
++    if (S_ISREG(st.st_mode) || S_ISDIR(st.st_mode) || S_ISSOCK(st.st_mode))
+     {
+         unsigned int err;
+         struct inode *inode = get_inode( st.st_dev, st.st_ino, fd->unix_fd );
+@@ -2016,7 +2038,10 @@ struct fd *open_fd( struct fd *root, const char *name, struct unicode_str nt_nam
+                 set_error( STATUS_OBJECT_NAME_COLLISION );
+                 goto error;
+             }
+-            ftruncate( fd->unix_fd, 0 );
++            if (fd->unix_fd != -1)
++                ftruncate( fd->unix_fd, 0 );
++            else
++                truncate( fd->unix_name, 0 );
+         }
+     }
+     else  /* special file */
+-- 
+2.53.0
+
