@@ -1,0 +1,354 @@
+From e7eeb75faa964ce9c8be17d62b9ad93d5e4031a2 Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Tue, 1 Sep 2026 08:20:11 +1000
+Subject: [PATCH] Updated vkd3d to cdb067ae8efc62cd4f7a07e8fa027541c81fdc70.
+
+---
+ libs/vkd3d/libs/vkd3d/device.c        |   1 +
+ libs/vkd3d/libs/vkd3d/state.c         | 137 +++++++++++++++++++++-----
+ libs/vkd3d/libs/vkd3d/utils.c         |  16 +++
+ libs/vkd3d/libs/vkd3d/vkd3d_private.h |   3 +
+ 4 files changed, 134 insertions(+), 23 deletions(-)
+
+diff --git a/libs/vkd3d/libs/vkd3d/device.c b/libs/vkd3d/libs/vkd3d/device.c
+index 5f16fef5115..59466a4eda3 100644
+--- a/libs/vkd3d/libs/vkd3d/device.c
++++ b/libs/vkd3d/libs/vkd3d/device.c
+@@ -1797,6 +1797,7 @@ static HRESULT vkd3d_init_device_caps(struct d3d12_device *device,
+     }
+ 
+     vulkan_info->device_limits = physical_device_info->properties2.properties.limits;
++    vulkan_info->float_controls_properties = physical_device_info->float_controls_properties;
+     vulkan_info->sparse_properties = physical_device_info->properties2.properties.sparseProperties;
+     vulkan_info->geometry_shaders = physical_device_info->features2.features.geometryShader;
+     vulkan_info->tessellation_shaders = physical_device_info->features2.features.tessellationShader;
+diff --git a/libs/vkd3d/libs/vkd3d/state.c b/libs/vkd3d/libs/vkd3d/state.c
+index 98bbdb31203..bc2f5b6bde6 100644
+--- a/libs/vkd3d/libs/vkd3d/state.c
++++ b/libs/vkd3d/libs/vkd3d/state.c
+@@ -2384,9 +2384,17 @@ static unsigned int feature_flags_compile_option(const struct d3d12_device *devi
+     return flags;
+ }
+ 
++struct compile_option_overrides
++{
++    enum vkd3d_shader_denormal_mode f16_denormal_mode;
++    enum vkd3d_shader_denormal_mode f32_denormal_mode;
++    enum vkd3d_shader_denormal_mode f64_denormal_mode;
++};
++
+ static HRESULT create_shader_stage(struct d3d12_device *device,
+         struct VkPipelineShaderStageCreateInfo *stage_desc, enum VkShaderStageFlagBits stage,
+-        const D3D12_SHADER_BYTECODE *code, const struct vkd3d_shader_interface_info *shader_interface)
++        const D3D12_SHADER_BYTECODE *code, const struct vkd3d_shader_interface_info *shader_interface,
++        const struct compile_option_overrides *overrides)
+ {
+     const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
+     struct vkd3d_shader_compile_info compile_info;
+@@ -2403,9 +2411,9 @@ static HRESULT create_shader_stage(struct d3d12_device *device,
+         {VKD3D_SHADER_COMPILE_OPTION_TYPED_UAV, typed_uav_compile_option(device)},
+         {VKD3D_SHADER_COMPILE_OPTION_WRITE_TESS_GEOM_POINT_SIZE, 0},
+         {VKD3D_SHADER_COMPILE_OPTION_FEATURE, feature_flags_compile_option(device)},
+-        {VKD3D_SHADER_COMPILE_OPTION_DENORMAL_MODE_F16, VKD3D_SHADER_DENORMAL_MODE_ANY},
+-        {VKD3D_SHADER_COMPILE_OPTION_DENORMAL_MODE_F32, VKD3D_SHADER_DENORMAL_MODE_ANY},
+-        {VKD3D_SHADER_COMPILE_OPTION_DENORMAL_MODE_F64, VKD3D_SHADER_DENORMAL_MODE_ANY},
++        {VKD3D_SHADER_COMPILE_OPTION_DENORMAL_MODE_F16, overrides->f16_denormal_mode},
++        {VKD3D_SHADER_COMPILE_OPTION_DENORMAL_MODE_F32, overrides->f32_denormal_mode},
++        {VKD3D_SHADER_COMPILE_OPTION_DENORMAL_MODE_F64, overrides->f64_denormal_mode},
+         {VKD3D_SHADER_COMPILE_OPTION_GLOBAL_FLAGS0_OVERRIDE_MASK, VKD3D_SHADER_GLOBAL_FLAGS0_REFACTORING_ALLOWED},
+         {VKD3D_SHADER_COMPILE_OPTION_GLOBAL_FLAGS0_OVERRIDE_VALUE, VKD3D_SHADER_GLOBAL_FLAGS0_REFACTORING_ALLOWED},
+     };
+@@ -2462,7 +2470,8 @@ static HRESULT create_shader_stage(struct d3d12_device *device,
+ }
+ 
+ static int vkd3d_scan_dxbc(const struct d3d12_device *device, const D3D12_SHADER_BYTECODE *code,
+-        struct vkd3d_shader_scan_descriptor_info *descriptor_info)
++        struct vkd3d_shader_scan_descriptor_info *descriptor_info,
++        struct vkd3d_shader_scan_denormal_mode_info *denormal_info)
+ {
+     struct vkd3d_shader_compile_info compile_info;
+     enum vkd3d_result ret;
+@@ -2474,7 +2483,7 @@ static int vkd3d_scan_dxbc(const struct d3d12_device *device, const D3D12_SHADER
+     };
+ 
+     compile_info.type = VKD3D_SHADER_STRUCTURE_TYPE_COMPILE_INFO;
+-    compile_info.next = descriptor_info;
++    compile_info.next = NULL;
+     compile_info.source.code = code->pShaderBytecode;
+     compile_info.source.size = code->BytecodeLength;
+     compile_info.target_type = VKD3D_SHADER_TARGET_SPIRV_BINARY;
+@@ -2483,6 +2492,20 @@ static int vkd3d_scan_dxbc(const struct d3d12_device *device, const D3D12_SHADER
+     compile_info.log_level = VKD3D_SHADER_LOG_NONE;
+     compile_info.source_name = NULL;
+ 
++    if (denormal_info)
++    {
++        denormal_info->type = VKD3D_SHADER_STRUCTURE_TYPE_SCAN_DENORMAL_MODE_INFO;
++        denormal_info->next = compile_info.next;
++        compile_info.next = denormal_info;
++    }
++
++    if (descriptor_info)
++    {
++        descriptor_info->type = VKD3D_SHADER_STRUCTURE_TYPE_SCAN_DESCRIPTOR_INFO;
++        descriptor_info->next = compile_info.next;
++        compile_info.next = descriptor_info;
++    }
++
+     if ((ret = vkd3d_shader_parse_dxbc_source_type(&compile_info.source, &compile_info.source_type, NULL)) < 0)
+         return ret;
+ 
+@@ -2491,7 +2514,8 @@ static int vkd3d_scan_dxbc(const struct d3d12_device *device, const D3D12_SHADER
+ 
+ static HRESULT vkd3d_create_compute_pipeline(struct d3d12_device *device,
+         const D3D12_SHADER_BYTECODE *code, const struct vkd3d_shader_interface_info *shader_interface,
+-        VkPipelineLayout vk_pipeline_layout, VkPipeline *vk_pipeline)
++        VkPipelineLayout vk_pipeline_layout, VkPipeline *vk_pipeline,
++        const struct compile_option_overrides *overrides)
+ {
+     const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
+     VkComputePipelineCreateInfo pipeline_info;
+@@ -2502,7 +2526,7 @@ static HRESULT vkd3d_create_compute_pipeline(struct d3d12_device *device,
+     pipeline_info.pNext = NULL;
+     pipeline_info.flags = 0;
+     if (FAILED(hr = create_shader_stage(device, &pipeline_info.stage,
+-            VK_SHADER_STAGE_COMPUTE_BIT, code, shader_interface)))
++            VK_SHADER_STAGE_COMPUTE_BIT, code, shader_interface, overrides)))
+         return hr;
+     pipeline_info.layout = vk_pipeline_layout;
+     pipeline_info.basePipelineHandle = VK_NULL_HANDLE;
+@@ -2621,25 +2645,24 @@ static HRESULT d3d12_pipeline_state_init_uav_counters(struct d3d12_pipeline_stat
+     return S_OK;
+ }
+ 
+-static HRESULT d3d12_pipeline_state_find_and_init_uav_counters(struct d3d12_pipeline_state *state,
++static HRESULT d3d12_pipeline_state_scan_shader(struct d3d12_pipeline_state *state,
+         struct d3d12_device *device, const struct d3d12_root_signature *root_signature,
+-        const D3D12_SHADER_BYTECODE *code, VkShaderStageFlags stage_flags)
++        const D3D12_SHADER_BYTECODE *code, VkShaderStageFlags stage_flags,
++        struct vkd3d_shader_scan_denormal_mode_info *denorm_info)
+ {
+     struct vkd3d_shader_scan_descriptor_info shader_info;
+     HRESULT hr;
+     int ret;
+ 
+-    if (device->use_vk_heaps)
+-        return S_OK;
+-
+-    shader_info.type = VKD3D_SHADER_STRUCTURE_TYPE_SCAN_DESCRIPTOR_INFO;
+-    shader_info.next = NULL;
+-    if ((ret = vkd3d_scan_dxbc(device, code, &shader_info)) < 0)
++    if ((ret = vkd3d_scan_dxbc(device, code, device->use_vk_heaps ? NULL : &shader_info, denorm_info)) < 0)
+     {
+         WARN("Failed to scan shader bytecode, stage %#x, vkd3d result %d.\n", stage_flags, ret);
+         return hresult_from_vkd3d_result(ret);
+     }
+ 
++    if (device->use_vk_heaps)
++        return S_OK;
++
+     if (FAILED(hr = d3d12_pipeline_state_init_uav_counters(state, device, root_signature, &shader_info, stage_flags)))
+         WARN("Failed to create descriptor set layout for UAV counters, hr %s.\n", debugstr_hresult(hr));
+ 
+@@ -2648,14 +2671,69 @@ static HRESULT d3d12_pipeline_state_find_and_init_uav_counters(struct d3d12_pipe
+     return hr;
+ }
+ 
++static void d3d12_device_select_overrides(struct d3d12_device *device,
++        const struct vkd3d_shader_scan_denormal_mode_info *denorm_info,
++        struct compile_option_overrides *overrides)
++{
++    const VkPhysicalDeviceFloatControlsPropertiesKHR *float_control_props;
++
++    float_control_props = &device->vk_info.float_controls_properties;
++
++    /* f16 is currently unsupported. */
++    if (denorm_info->f16_denormal_mode != VKD3D_SHADER_DENORMAL_MODE_ANY)
++        WARN("Shader has unexpected f16 denormal mode %s.\n", debug_denormal_mode(denorm_info->f16_denormal_mode));
++
++    overrides->f16_denormal_mode = VKD3D_SHADER_DENORMAL_MODE_ANY;
++
++    /* f32 might have any denormal mode. */
++    if (denorm_info->f32_denormal_mode == VKD3D_SHADER_DENORMAL_MODE_FLUSH_TO_ZERO
++            && float_control_props->shaderDenormFlushToZeroFloat32)
++        overrides->f32_denormal_mode = VKD3D_SHADER_DENORMAL_MODE_FLUSH_TO_ZERO;
++    else if (denorm_info->f32_denormal_mode == VKD3D_SHADER_DENORMAL_MODE_PRESERVE
++            && float_control_props->shaderDenormPreserveFloat32)
++        overrides->f32_denormal_mode = VKD3D_SHADER_DENORMAL_MODE_PRESERVE;
++    else
++        overrides->f32_denormal_mode = VKD3D_SHADER_DENORMAL_MODE_ANY;
++
++    /* f64 might be ANY or PRESERVE, but if we don't have enough independence
++     * we let f32 prevail on the ground that it's expected to be more commonly
++     * used. */
++    if (denorm_info->f64_denormal_mode != VKD3D_SHADER_DENORMAL_MODE_ANY
++            && denorm_info->f64_denormal_mode != VKD3D_SHADER_DENORMAL_MODE_PRESERVE)
++        WARN("Shader has unexpected f64 denormal mode %s.\n", debug_denormal_mode(denorm_info->f64_denormal_mode));
++
++    if (float_control_props->denormBehaviorIndependence == VK_SHADER_FLOAT_CONTROLS_INDEPENDENCE_NONE_KHR)
++        /* Here we assume that if f32 and f64 are not independent then they
++         * have the same set of allowed values. I can't see that written in
++         * the specification, but it seems reasonable enough. */
++        overrides->f64_denormal_mode = overrides->f32_denormal_mode;
++    else if (denorm_info->f64_denormal_mode == VKD3D_SHADER_DENORMAL_MODE_PRESERVE
++            && float_control_props->shaderDenormPreserveFloat64)
++        overrides->f64_denormal_mode = VKD3D_SHADER_DENORMAL_MODE_PRESERVE;
++    else
++        overrides->f64_denormal_mode = VKD3D_SHADER_DENORMAL_MODE_ANY;
++
++    if (overrides->f16_denormal_mode != denorm_info->f16_denormal_mode)
++        WARN("Overriding f16 denormal mode from %s to %s.\n", debug_denormal_mode(denorm_info->f16_denormal_mode),
++                debug_denormal_mode(overrides->f16_denormal_mode));
++    if (overrides->f32_denormal_mode != denorm_info->f32_denormal_mode)
++        WARN("Overriding f32 denormal mode from %s to %s.\n", debug_denormal_mode(denorm_info->f32_denormal_mode),
++                debug_denormal_mode(overrides->f32_denormal_mode));
++    if (overrides->f64_denormal_mode != denorm_info->f64_denormal_mode)
++        WARN("Overriding f64 denormal mode from %s to %s.\n", debug_denormal_mode(denorm_info->f64_denormal_mode),
++                debug_denormal_mode(overrides->f64_denormal_mode));
++}
++
+ static HRESULT d3d12_pipeline_state_init_compute(struct d3d12_pipeline_state *state,
+         struct d3d12_device *device, const struct d3d12_pipeline_state_desc *desc)
+ {
+     const struct vkd3d_vk_device_procs *vk_procs = &device->vk_procs;
++    struct vkd3d_shader_scan_denormal_mode_info denorm_info;
+     struct vkd3d_shader_interface_info shader_interface;
+     struct vkd3d_shader_descriptor_offset_info offset_info;
+     struct vkd3d_shader_spirv_target_info target_info;
+     struct d3d12_root_signature *root_signature;
++    struct compile_option_overrides overrides;
+     VkPipelineLayout vk_pipeline_layout;
+     HRESULT hr;
+ 
+@@ -2680,14 +2758,16 @@ static HRESULT d3d12_pipeline_state_init_compute(struct d3d12_pipeline_state *st
+         state->implicit_root_signature = NULL;
+     }
+ 
+-    if (FAILED(hr = d3d12_pipeline_state_find_and_init_uav_counters(state, device, root_signature,
+-            &desc->cs, VK_SHADER_STAGE_COMPUTE_BIT)))
++    if (FAILED(hr = d3d12_pipeline_state_scan_shader(state, device, root_signature,
++            &desc->cs, VK_SHADER_STAGE_COMPUTE_BIT, &denorm_info)))
+     {
+         if (state->implicit_root_signature)
+             d3d12_root_signature_Release(state->implicit_root_signature);
+         return hr;
+     }
+ 
++    d3d12_device_select_overrides(device, &denorm_info, &overrides);
++
+     memset(&target_info, 0, sizeof(target_info));
+     target_info.type = VKD3D_SHADER_STRUCTURE_TYPE_SPIRV_TARGET_INFO;
+     target_info.environment = device->environment;
+@@ -2727,7 +2807,7 @@ static HRESULT d3d12_pipeline_state_init_compute(struct d3d12_pipeline_state *st
+     vk_pipeline_layout = state->uav_counters.vk_pipeline_layout
+             ? state->uav_counters.vk_pipeline_layout : root_signature->vk_pipeline_layout;
+     if (FAILED(hr = vkd3d_create_compute_pipeline(device, &desc->cs, &shader_interface,
+-            vk_pipeline_layout, &state->u.compute.vk_pipeline)))
++            vk_pipeline_layout, &state->u.compute.vk_pipeline, &overrides)))
+     {
+         WARN("Failed to create Vulkan compute pipeline, hr %s.\n", debugstr_hresult(hr));
+         d3d12_pipeline_uav_counter_state_cleanup(&state->uav_counters, device);
+@@ -3509,14 +3589,18 @@ static HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *s
+     for (i = 0; i < ARRAY_SIZE(shader_stages); ++i)
+     {
+         const D3D12_SHADER_BYTECODE *b = (const void *)((uintptr_t)desc + shader_stages[i].offset);
++        struct vkd3d_shader_scan_denormal_mode_info denorm_info;
++        struct compile_option_overrides overrides;
+ 
+         if (!b->pShaderBytecode)
+             continue;
+ 
+-        if (FAILED(hr = d3d12_pipeline_state_find_and_init_uav_counters(state, device, root_signature,
+-                b, shader_stages[i].stage)))
++        if (FAILED(hr = d3d12_pipeline_state_scan_shader(state, device, root_signature,
++                b, shader_stages[i].stage, &denorm_info)))
+             goto fail;
+ 
++        d3d12_device_select_overrides(device, &denorm_info, &overrides);
++
+         shader_interface.uav_counters = NULL;
+         shader_interface.uav_counter_count = 0;
+         stage_target_info = &target_info;
+@@ -3564,7 +3648,7 @@ static HRESULT d3d12_pipeline_state_init_graphics(struct d3d12_pipeline_state *s
+             vkd3d_prepend_struct(&shader_interface, &signature_info);
+ 
+         if (FAILED(hr = create_shader_stage(device, &graphics->stages[graphics->stage_count],
+-                shader_stages[i].stage, b, &shader_interface)))
++                shader_stages[i].stage, b, &shader_interface, &overrides)))
+             goto fail;
+ 
+         ++graphics->stage_count;
+@@ -4314,6 +4398,13 @@ HRESULT vkd3d_uav_clear_state_init(struct vkd3d_uav_clear_state *state, struct d
+ 
+     for (i = 0; i < ARRAY_SIZE(pipelines); ++i)
+     {
++        static const struct compile_option_overrides overrides =
++        {
++            .f16_denormal_mode = VKD3D_SHADER_DENORMAL_MODE_ANY,
++            .f32_denormal_mode = VKD3D_SHADER_DENORMAL_MODE_ANY,
++            .f64_denormal_mode = VKD3D_SHADER_DENORMAL_MODE_ANY,
++        };
++
+         struct vkd3d_shader_code dxbc;
+         int ret;
+ 
+@@ -4330,7 +4421,7 @@ HRESULT vkd3d_uav_clear_state_init(struct vkd3d_uav_clear_state *state, struct d
+             binding.flags = VKD3D_SHADER_BINDING_FLAG_IMAGE;
+ 
+         hr = vkd3d_create_compute_pipeline(device, &(D3D12_SHADER_BYTECODE){dxbc.code, dxbc.size},
+-                &shader_interface, *pipelines[i].pipeline_layout, pipelines[i].pipeline);
++                &shader_interface, *pipelines[i].pipeline_layout, pipelines[i].pipeline, &overrides);
+         vkd3d_shader_free_shader_code(&dxbc);
+         if (FAILED(hr))
+         {
+diff --git a/libs/vkd3d/libs/vkd3d/utils.c b/libs/vkd3d/libs/vkd3d/utils.c
+index a86572b1100..14ce774425c 100644
+--- a/libs/vkd3d/libs/vkd3d/utils.c
++++ b/libs/vkd3d/libs/vkd3d/utils.c
+@@ -696,6 +696,22 @@ const char *debug_d3d12_shader_component_mapping(unsigned int mapping)
+             debug_d3d12_shader_component(D3D12_DECODE_SHADER_4_COMPONENT_MAPPING(3, mapping)));
+ }
+ 
++const char *debug_denormal_mode(enum vkd3d_shader_denormal_mode m)
++{
++    switch (m)
++    {
++#define TO_STR(u) case VKD3D_SHADER_DENORMAL_MODE_##u: return #u;
++        TO_STR(ANY);
++        TO_STR(PRESERVE);
++        TO_STR(FLUSH_TO_ZERO);
++#undef TO_STR
++        case VKD3D_SHADER_DENORMAL_MODE_FORCE_32BIT:
++            break;
++    }
++
++    return vkd3d_dbg_sprintf("UNKNOWN(%#x)", m);
++}
++
+ const char *debug_gpu_handle(D3D12_GPU_DESCRIPTOR_HANDLE handle)
+ {
+     return vkd3d_dbg_sprintf("{%#"PRIx64"}", handle.ptr);
+diff --git a/libs/vkd3d/libs/vkd3d/vkd3d_private.h b/libs/vkd3d/libs/vkd3d/vkd3d_private.h
+index 822e17248ef..43a2084ce92 100644
+--- a/libs/vkd3d/libs/vkd3d/vkd3d_private.h
++++ b/libs/vkd3d/libs/vkd3d/vkd3d_private.h
+@@ -165,6 +165,8 @@ struct vkd3d_vulkan_info
+     VkPhysicalDeviceLimits device_limits;
+     struct vkd3d_device_descriptor_limits descriptor_limits;
+ 
++    VkPhysicalDeviceFloatControlsPropertiesKHR float_controls_properties;
++
+     VkPhysicalDeviceSparseProperties sparse_properties;
+     bool sparse_binding;
+     bool sparse_residency_3d;
+@@ -1788,6 +1790,7 @@ HRESULT return_interface(void *iface, REFIID iface_iid, REFIID requested_iid, vo
+ const char *debug_cpu_handle(D3D12_CPU_DESCRIPTOR_HANDLE handle);
+ const char *debug_d3d12_box(const D3D12_BOX *box);
+ const char *debug_d3d12_shader_component_mapping(unsigned int mapping);
++const char *debug_denormal_mode(enum vkd3d_shader_denormal_mode m);
+ const char *debug_gpu_handle(D3D12_GPU_DESCRIPTOR_HANDLE handle);
+ const char *debug_vk_extent_3d(VkExtent3D extent);
+ const char *debug_vk_memory_heap_flags(VkMemoryHeapFlags flags);
+-- 
+2.53.0
+
