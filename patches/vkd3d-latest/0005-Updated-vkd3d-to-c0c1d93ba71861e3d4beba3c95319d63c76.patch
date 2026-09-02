@@ -1,0 +1,866 @@
+From 7c1906a82c6e9c558ae75d9eaac786ae956771a9 Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Thu, 3 Sep 2026 06:46:44 +1000
+Subject: [PATCH] Updated vkd3d to c0c1d93ba71861e3d4beba3c95319d63c76de619.
+
+---
+ libs/vkd3d/Makefile.in                        |   2 +-
+ libs/vkd3d/include/private/vkd3d_version.h    |   2 +-
+ .../libs/vkd3d-shader/vkd3d_shader_main.c     | 239 +-------------
+ .../libs/vkd3d-shader/vkd3d_shader_private.h  |  30 +-
+ libs/vkd3d/libs/vkd3d/resource.c              |  16 +
+ libs/vkd3d/libs/vkd3d/state.c                 |  83 ++++-
+ libs/vkd3d/libs/vkd3d/utils.c                 | 301 +++++++++++++++---
+ libs/vkd3d/libs/vkd3d/vkd3d_private.h         |   9 +-
+ 8 files changed, 365 insertions(+), 317 deletions(-)
+
+diff --git a/libs/vkd3d/Makefile.in b/libs/vkd3d/Makefile.in
+index 58e9a382c1c..78299e58e5b 100644
+--- a/libs/vkd3d/Makefile.in
++++ b/libs/vkd3d/Makefile.in
+@@ -12,7 +12,7 @@ SOURCES = \
+ 	libs/vkd3d-common/debug.c \
+ 	libs/vkd3d-common/error.c \
+ 	libs/vkd3d-common/memory.c \
+-	libs/vkd3d-common/utf8.c \
++	libs/vkd3d-common/string.c \
+ 	libs/vkd3d-shader/checksum.c \
+ 	libs/vkd3d-shader/d3d_asm.c \
+ 	libs/vkd3d-shader/d3dbc.c \
+diff --git a/libs/vkd3d/include/private/vkd3d_version.h b/libs/vkd3d/include/private/vkd3d_version.h
+index 5a1c2069008..83668f72504 100644
+--- a/libs/vkd3d/include/private/vkd3d_version.h
++++ b/libs/vkd3d/include/private/vkd3d_version.h
+@@ -1 +1 @@
+-#define VKD3D_VCS_ID " (git 6aee6465)"
++#define VKD3D_VCS_ID " (git c0c1d93b)"
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
+index 3e9b7276e2f..97fbcfd06a0 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_main.c
+@@ -21,7 +21,6 @@
+ #include "hlsl.h"
+ 
+ #include <stdio.h>
+-#include <math.h>
+ 
+ float vkd3d_parse_float(const char *s, vkd3d_locale l)
+ {
+@@ -102,242 +101,6 @@ void vkd3d_shader_source_list_init(struct vkd3d_shader_source_list *l)
+     memset(l, 0, sizeof(*l));
+ }
+ 
+-void vkd3d_string_buffer_init(struct vkd3d_string_buffer *buffer)
+-{
+-    buffer->buffer_size = 16;
+-    buffer->content_size = 0;
+-    buffer->buffer = vkd3d_malloc(buffer->buffer_size);
+-    VKD3D_ASSERT(buffer->buffer);
+-    memset(buffer->buffer, 0, buffer->buffer_size);
+-}
+-
+-void vkd3d_string_buffer_cleanup(struct vkd3d_string_buffer *buffer)
+-{
+-    vkd3d_free(buffer->buffer);
+-}
+-
+-void vkd3d_string_buffer_clear(struct vkd3d_string_buffer *buffer)
+-{
+-    vkd3d_string_buffer_truncate(buffer, 0);
+-}
+-
+-void vkd3d_string_buffer_truncate(struct vkd3d_string_buffer *buffer, size_t size)
+-{
+-    if (size < buffer->content_size)
+-    {
+-        buffer->buffer[size] = '\0';
+-        buffer->content_size = size;
+-    }
+-}
+-
+-static bool vkd3d_string_buffer_resize(struct vkd3d_string_buffer *buffer, int rc)
+-{
+-    size_t new_buffer_size = rc >= 0 ? buffer->content_size + rc + 1 : buffer->buffer_size * 2;
+-
+-    if (!vkd3d_array_reserve((void **)&buffer->buffer, &buffer->buffer_size, new_buffer_size, 1))
+-    {
+-        ERR("Failed to grow buffer.\n");
+-        buffer->buffer[buffer->content_size] = '\0';
+-        return false;
+-    }
+-    return true;
+-}
+-
+-int vkd3d_string_buffer_vprintf(struct vkd3d_string_buffer *buffer, const char *format, va_list args)
+-{
+-    size_t rem;
+-    va_list a;
+-    int rc;
+-
+-    for (;;)
+-    {
+-        rem = buffer->buffer_size - buffer->content_size;
+-        va_copy(a, args);
+-        rc = vsnprintf(&buffer->buffer[buffer->content_size], rem, format, a);
+-        va_end(a);
+-        if (rc >= 0 && (unsigned int)rc < rem)
+-        {
+-            buffer->content_size += rc;
+-            return 0;
+-        }
+-
+-        if (!vkd3d_string_buffer_resize(buffer, rc))
+-            return -1;
+-    }
+-}
+-
+-int vkd3d_string_buffer_printf(struct vkd3d_string_buffer *buffer, const char *format, ...)
+-{
+-    va_list args;
+-    int ret;
+-
+-    va_start(args, format);
+-    ret = vkd3d_string_buffer_vprintf(buffer, format, args);
+-    va_end(args);
+-
+-    return ret;
+-}
+-
+-int vkd3d_string_buffer_print_f16(struct vkd3d_string_buffer *buffer, uint16_t f)
+-{
+-    size_t idx = buffer->content_size + 1;
+-    union
+-    {
+-        uint32_t u32;
+-        float f32;
+-    } v;
+-    int ret;
+-
+-    v.u32 = vkd3d_f32_from_f16(f);
+-    if (!(ret = vkd3d_string_buffer_printf(buffer, "%.4e", v.f32)) && isfinite(v.f32))
+-    {
+-        if (signbit(v.f32))
+-            ++idx;
+-        buffer->buffer[idx] = '.';
+-    }
+-
+-    return ret;
+-}
+-
+-int vkd3d_string_buffer_print_f32(struct vkd3d_string_buffer *buffer, float f)
+-{
+-    size_t idx = buffer->content_size + 1;
+-    int ret;
+-
+-    if (!(ret = vkd3d_string_buffer_printf(buffer, "%.8e", f)) && isfinite(f))
+-    {
+-        if (signbit(f))
+-            ++idx;
+-        buffer->buffer[idx] = '.';
+-    }
+-
+-    return ret;
+-}
+-
+-int vkd3d_string_buffer_print_f64(struct vkd3d_string_buffer *buffer, double d)
+-{
+-    size_t idx = buffer->content_size + 1;
+-    int ret;
+-
+-    if (!(ret = vkd3d_string_buffer_printf(buffer, "%.16e", d)) && isfinite(d))
+-    {
+-        if (signbit(d))
+-            ++idx;
+-        buffer->buffer[idx] = '.';
+-    }
+-
+-    return ret;
+-}
+-
+-static char get_escape_char(char c)
+-{
+-    switch (c)
+-    {
+-        case '"':
+-        case '\\':
+-            return c;
+-        case '\t':
+-            return 't';
+-        case '\n':
+-            return 'n';
+-        case '\v':
+-            return 'v';
+-        case '\f':
+-            return 'f';
+-        case '\r':
+-            return 'r';
+-        default:
+-            return 0;
+-    }
+-}
+-
+-int vkd3d_string_buffer_print_string_escaped(struct vkd3d_string_buffer *buffer, const char *s, size_t len)
+-{
+-    size_t content_size, start, i;
+-    int ret;
+-    char c;
+-
+-    content_size = buffer->content_size;
+-    for (i = 0, start = 0; i < len; ++i)
+-    {
+-        if ((c = get_escape_char(s[i])))
+-        {
+-            if ((ret = vkd3d_string_buffer_printf(buffer, "%.*s\\%c", (int)(i - start), &s[start], c)) < 0)
+-                goto fail;
+-            start = i + 1;
+-        }
+-        else if (!isprint(s[i]))
+-        {
+-            if ((ret = vkd3d_string_buffer_printf(buffer, "%.*s\\%03o",
+-                    (int)(i - start), &s[start], (uint8_t)s[i])) < 0)
+-                goto fail;
+-            start = i + 1;
+-        }
+-    }
+-    if ((ret = vkd3d_string_buffer_printf(buffer, "%.*s", (int)(len - start), &s[start])) < 0)
+-        goto fail;
+-    return ret;
+-
+-fail:
+-    buffer->content_size = content_size;
+-    return ret;
+-}
+-
+-void vkd3d_string_buffer_trace_(const struct vkd3d_string_buffer *buffer, const char *function)
+-{
+-    vkd3d_debug_channel_print_text(vkd3d_debug_channel_default, VKD3D_DEBUG_ENV_NAME,
+-            VKD3D_DEBUG_CLASS_TRACE, function, buffer->buffer, buffer->content_size);
+-}
+-
+-void vkd3d_string_buffer_cache_init(struct vkd3d_string_buffer_cache *cache)
+-{
+-    memset(cache, 0, sizeof(*cache));
+-}
+-
+-void vkd3d_string_buffer_cache_cleanup(struct vkd3d_string_buffer_cache *cache)
+-{
+-    unsigned int i;
+-
+-    for (i = 0; i < cache->count; ++i)
+-    {
+-        vkd3d_string_buffer_cleanup(cache->buffers[i]);
+-        vkd3d_free(cache->buffers[i]);
+-    }
+-    vkd3d_free(cache->buffers);
+-    vkd3d_string_buffer_cache_init(cache);
+-}
+-
+-struct vkd3d_string_buffer *vkd3d_string_buffer_get(struct vkd3d_string_buffer_cache *cache)
+-{
+-    struct vkd3d_string_buffer *buffer;
+-
+-    if (!cache->count)
+-    {
+-        if (!vkd3d_array_reserve((void **)&cache->buffers, &cache->capacity,
+-                cache->max_count + 1, sizeof(*cache->buffers)))
+-            return NULL;
+-        ++cache->max_count;
+-
+-        if (!(buffer = vkd3d_malloc(sizeof(*buffer))))
+-            return NULL;
+-        vkd3d_string_buffer_init(buffer);
+-    }
+-    else
+-    {
+-        buffer = cache->buffers[--cache->count];
+-    }
+-    vkd3d_string_buffer_clear(buffer);
+-    return buffer;
+-}
+-
+-void vkd3d_string_buffer_release(struct vkd3d_string_buffer_cache *cache, struct vkd3d_string_buffer *buffer)
+-{
+-    if (!buffer)
+-        return;
+-    VKD3D_ASSERT(cache->count + 1 <= cache->max_count);
+-    cache->buffers[cache->count++] = buffer;
+-}
+-
+ static char *vkd3d_shader_string_from_string_buffer(struct vkd3d_string_buffer *buffer)
+ {
+     char *s = buffer->buffer;
+@@ -370,7 +133,7 @@ void vkd3d_shader_message_context_cleanup(struct vkd3d_shader_message_context *c
+ void vkd3d_shader_message_context_trace_messages_(const struct vkd3d_shader_message_context *context,
+         const char *function)
+ {
+-    vkd3d_string_buffer_trace_(&context->messages, function);
++    vkd3d_string_buffer_trace_(&context->messages, VKD3D_DEBUG_ENV_NAME, function);
+ }
+ 
+ void vkd3d_shader_string_from_message_context(char **out, struct vkd3d_shader_message_context *context)
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+index 26685f180f6..08164023c1c 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+@@ -49,6 +49,7 @@
+ #include "vkd3d_common.h"
+ #include "vkd3d_memory.h"
+ #include "vkd3d_shader.h"
++#include "vkd3d_string.h"
+ #include "wine/list.h"
+ 
+ #include <inttypes.h>
+@@ -1870,18 +1871,6 @@ void vsir_program_trace(struct vsir_program *program);
+ 
+ const char *shader_get_type_prefix(enum vkd3d_shader_type type);
+ 
+-struct vkd3d_string_buffer
+-{
+-    char *buffer;
+-    size_t buffer_size, content_size;
+-};
+-
+-struct vkd3d_string_buffer_cache
+-{
+-    struct vkd3d_string_buffer **buffers;
+-    size_t count, max_count, capacity;
+-};
+-
+ enum vsir_asm_flags
+ {
+     VSIR_ASM_FLAG_NONE = 0,
+@@ -1895,23 +1884,6 @@ enum vsir_asm_flags
+ enum vkd3d_result d3d_asm_compile(struct vsir_program *program,
+         const struct vsir_compile_info *compile_info, struct vkd3d_shader_code *out,
+         enum vsir_asm_flags flags, struct vkd3d_shader_message_context *message_context);
+-void vkd3d_string_buffer_cleanup(struct vkd3d_string_buffer *buffer);
+-struct vkd3d_string_buffer *vkd3d_string_buffer_get(struct vkd3d_string_buffer_cache *list);
+-void vkd3d_string_buffer_init(struct vkd3d_string_buffer *buffer);
+-void vkd3d_string_buffer_cache_cleanup(struct vkd3d_string_buffer_cache *list);
+-void vkd3d_string_buffer_cache_init(struct vkd3d_string_buffer_cache *list);
+-void vkd3d_string_buffer_clear(struct vkd3d_string_buffer *buffer);
+-void vkd3d_string_buffer_truncate(struct vkd3d_string_buffer *buffer, size_t size);
+-int vkd3d_string_buffer_print_f16(struct vkd3d_string_buffer *buffer, uint16_t f);
+-int vkd3d_string_buffer_print_f32(struct vkd3d_string_buffer *buffer, float f);
+-int vkd3d_string_buffer_print_f64(struct vkd3d_string_buffer *buffer, double d);
+-int vkd3d_string_buffer_print_string_escaped(struct vkd3d_string_buffer *buffer, const char *s, size_t len);
+-int vkd3d_string_buffer_printf(struct vkd3d_string_buffer *buffer, const char *format, ...) VKD3D_PRINTF_FUNC(2, 3);
+-void vkd3d_string_buffer_release(struct vkd3d_string_buffer_cache *list, struct vkd3d_string_buffer *buffer);
+-#define vkd3d_string_buffer_trace(buffer) \
+-        vkd3d_string_buffer_trace_(buffer, __FUNCTION__)
+-void vkd3d_string_buffer_trace_(const struct vkd3d_string_buffer *buffer, const char *function);
+-int vkd3d_string_buffer_vprintf(struct vkd3d_string_buffer *buffer, const char *format, va_list args);
+ void vkd3d_shader_code_from_string_buffer(struct vkd3d_shader_code *code, struct vkd3d_string_buffer *buffer);
+ 
+ struct vkd3d_bytecode_buffer
+diff --git a/libs/vkd3d/libs/vkd3d/resource.c b/libs/vkd3d/libs/vkd3d/resource.c
+index f1491cbc2b6..47a5807491a 100644
+--- a/libs/vkd3d/libs/vkd3d/resource.c
++++ b/libs/vkd3d/libs/vkd3d/resource.c
+@@ -3842,6 +3842,22 @@ void d3d12_desc_create_sampler(struct d3d12_desc *sampler,
+         return;
+     }
+ 
++    if (TRACE_ON())
++    {
++        TRACE("    filter %s.\n", debug_d3d12_filter(desc->Filter));
++        TRACE("    address {%s, %s, %s}.\n",
++                debug_d3d12_texture_address_mode(desc->AddressU),
++                debug_d3d12_texture_address_mode(desc->AddressV),
++                debug_d3d12_texture_address_mode(desc->AddressW));
++        TRACE("    lod-bias %.8e.\n", desc->MipLODBias);
++        TRACE("    max-anisotropy %u.\n", desc->MaxAnisotropy);
++        TRACE("    comparison %s.\n", debug_d3d12_comparison_func(desc->ComparisonFunc));
++        TRACE("    border-colour {%.8e, %.8e, %.8e, %.8e}.\n",
++                desc->BorderColor[0], desc->BorderColor[1], desc->BorderColor[2], desc->BorderColor[3]);
++        TRACE("    min-lod %.8e.\n", desc->MinLOD);
++        TRACE("    max-lod %.8e.\n", desc->MaxLOD);
++    }
++
+     if (desc->AddressU == D3D12_TEXTURE_ADDRESS_MODE_BORDER
+             || desc->AddressV == D3D12_TEXTURE_ADDRESS_MODE_BORDER
+             || desc->AddressW == D3D12_TEXTURE_ADDRESS_MODE_BORDER)
+diff --git a/libs/vkd3d/libs/vkd3d/state.c b/libs/vkd3d/libs/vkd3d/state.c
+index bc2f5b6bde6..2ce6616d5e3 100644
+--- a/libs/vkd3d/libs/vkd3d/state.c
++++ b/libs/vkd3d/libs/vkd3d/state.c
+@@ -1621,10 +1621,89 @@ static HRESULT d3d12_root_signature_init(struct d3d12_root_signature *root_signa
+     const struct vkd3d_vulkan_info *vk_info = &device->vk_info;
+     struct vkd3d_descriptor_set_context context;
+     struct d3d12_root_signature_info info;
++    const D3D12_ROOT_DESCRIPTOR_TABLE *t;
++    const D3D12_STATIC_SAMPLER_DESC *s;
++    unsigned int i, j, first, last;
++    const D3D12_ROOT_DESCRIPTOR *d;
++    const D3D12_ROOT_CONSTANTS *c;
++    const D3D12_ROOT_PARAMETER *p;
+     bool use_vk_heaps;
+-    unsigned int i;
+     HRESULT hr;
+ 
++    if (TRACE_ON())
++    {
++        if (desc->NumParameters)
++            TRACE("Parameters:\n");
++        for (i = 0; i < desc->NumParameters; ++i)
++        {
++            p = &desc->pParameters[i];
++            switch (p->ParameterType)
++            {
++                case D3D12_ROOT_PARAMETER_TYPE_DESCRIPTOR_TABLE:
++                    t = &p->u.DescriptorTable;
++                    TRACE("    %u: table, visibility %s.\n", i, debug_d3d12_shader_visibility(p->ShaderVisibility));
++                    for (j = 0; j < t->NumDescriptorRanges; ++j)
++                    {
++                        TRACE("        %u: %s.\n", j, debug_d3d12_descriptor_range(&t->pDescriptorRanges[j]));
++                    }
++                    break;
++
++                case D3D12_ROOT_PARAMETER_TYPE_32BIT_CONSTANTS:
++                    c = &p->u.Constants;
++                    first = c->ShaderRegister;
++                    last = first + c->Num32BitValues - 1;
++                    TRACE("    %u: constants[%u:%u], space %u, visibility %s.\n", i, first, last,
++                            c->RegisterSpace, debug_d3d12_shader_visibility(p->ShaderVisibility));
++                    break;
++
++                case D3D12_ROOT_PARAMETER_TYPE_CBV:
++                    d = &p->u.Descriptor;
++                    TRACE("    %u: cbv[%u], space %u, visibility %s.\n", i, d->ShaderRegister,
++                            d->RegisterSpace, debug_d3d12_shader_visibility(p->ShaderVisibility));
++                    break;
++
++                case D3D12_ROOT_PARAMETER_TYPE_SRV:
++                    d = &p->u.Descriptor;
++                    TRACE("    %u: srv[%u], space %u, visibility %s.\n", i, d->ShaderRegister,
++                            d->RegisterSpace, debug_d3d12_shader_visibility(p->ShaderVisibility));
++                    break;
++
++                case D3D12_ROOT_PARAMETER_TYPE_UAV:
++                    d = &p->u.Descriptor;
++                    TRACE("    %u: uav[%u], space %u, visibility %s.\n", i, d->ShaderRegister,
++                            d->RegisterSpace, debug_d3d12_shader_visibility(p->ShaderVisibility));
++                    break;
++
++                default:
++                    TRACE("    %u: UNKNOWN(%#x), visibility %s.\n", i, p->ParameterType,
++                            debug_d3d12_shader_visibility(p->ShaderVisibility));
++                    break;
++            }
++        }
++
++        if (desc->NumStaticSamplers)
++            TRACE("Static samplers:\n");
++        for (i = 0; i < desc->NumStaticSamplers; ++i)
++        {
++            s = &desc->pStaticSamplers[i];
++            TRACE("    %u: sampler[%u], space %u, visibility %s.\n", i, s->ShaderRegister,
++                    s->RegisterSpace, debug_d3d12_shader_visibility(s->ShaderVisibility));
++            TRACE("        filter %s.\n", debug_d3d12_filter(s->Filter));
++            TRACE("        address {%s, %s, %s}.\n",
++                    debug_d3d12_texture_address_mode(s->AddressU),
++                    debug_d3d12_texture_address_mode(s->AddressV),
++                    debug_d3d12_texture_address_mode(s->AddressW));
++            TRACE("        lod-bias %.8e.\n", s->MipLODBias);
++            TRACE("        max-anisotropy %u.\n", s->MaxAnisotropy);
++            TRACE("        comparison %s.\n", debug_d3d12_comparison_func(s->ComparisonFunc));
++            TRACE("        border-colour %s.\n", debug_d3d12_static_border_color(s->BorderColor));
++            TRACE("        min-lod %.8e.\n", s->MinLOD);
++            TRACE("        max-lod %.8e.\n", s->MaxLOD);
++        }
++
++        TRACE("Flags: %s.\n", debug_d3d12_root_signature_flags(desc->Flags));
++    }
++
+     memset(&context, 0, sizeof(context));
+ 
+     root_signature->ID3D12RootSignature_iface.lpVtbl = &d3d12_root_signature_vtbl;
+@@ -1644,7 +1723,7 @@ static HRESULT d3d12_root_signature_init(struct d3d12_root_signature *root_signa
+ 
+     if (desc->Flags & ~(D3D12_ROOT_SIGNATURE_FLAG_ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
+             | D3D12_ROOT_SIGNATURE_FLAG_ALLOW_STREAM_OUTPUT))
+-        FIXME("Ignoring root signature flags %#x.\n", desc->Flags);
++        FIXME("Ignoring root signature flags %s.\n", debug_d3d12_root_signature_flags(desc->Flags));
+ 
+     if (FAILED(hr = d3d12_root_signature_info_from_desc(&info, desc, device->vk_info.EXT_descriptor_indexing)))
+         return hr;
+diff --git a/libs/vkd3d/libs/vkd3d/utils.c b/libs/vkd3d/libs/vkd3d/utils.c
+index 14ce774425c..6290a9ff1ba 100644
+--- a/libs/vkd3d/libs/vkd3d/utils.c
++++ b/libs/vkd3d/libs/vkd3d/utils.c
+@@ -650,6 +650,54 @@ HRESULT return_interface(void *iface, REFIID iface_iid,
+     return hr;
+ }
+ 
++struct debug_buffer
++{
++    struct vkd3d_string_buffer b;
++};
++
++static void debug_buffer_cleanup(struct debug_buffer *buffer)
++{
++    vkd3d_string_buffer_cleanup(&buffer->b);
++}
++
++static void debug_buffer_init(struct debug_buffer *buffer)
++{
++    vkd3d_string_buffer_init(&buffer->b);
++}
++
++static void debug_buffer_append(struct debug_buffer *buffer, const char *format, ...)
++{
++    va_list args;
++
++    if (buffer->b.content_size)
++        vkd3d_string_buffer_printf(&buffer->b, " | ");
++
++    va_start(args, format);
++    vkd3d_string_buffer_vprintf(&buffer->b, format, args);
++    va_end(args);
++}
++
++static void debug_buffer_append_flag(struct debug_buffer *buffer, uint32_t *flags, uint32_t flag, const char *name)
++{
++    if (!(*flags & flag))
++        return;
++    debug_buffer_append(buffer, "%s", name);
++    *flags &= ~flag;
++}
++
++static const char *debug_buffer_ret(struct debug_buffer *buffer, uint32_t flags, const char *default_string)
++{
++    const char *ret = default_string;
++
++    if (flags)
++        debug_buffer_append(buffer, "%#x", flags);
++    if (buffer->b.content_size)
++        ret = vkd3d_dbg_sprintf("%s", buffer->b.buffer);
++    debug_buffer_cleanup(buffer);
++
++    return ret;
++}
++
+ const char *debug_cpu_handle(D3D12_CPU_DESCRIPTOR_HANDLE handle)
+ {
+     return vkd3d_dbg_sprintf("{%#"PRIxPTR"}", (uintptr_t)handle.ptr);
+@@ -665,6 +713,132 @@ const char *debug_d3d12_box(const D3D12_BOX *box)
+             box->right, box->bottom, box->back);
+ }
+ 
++const char *debug_d3d12_comparison_func(D3D12_COMPARISON_FUNC f)
++{
++    switch (f)
++    {
++#define TO_STR(f) case D3D12_COMPARISON_FUNC_##f: return #f;
++        TO_STR(NEVER);
++        TO_STR(LESS);
++        TO_STR(EQUAL);
++        TO_STR(LESS_EQUAL);
++        TO_STR(GREATER);
++        TO_STR(NOT_EQUAL);
++        TO_STR(GREATER_EQUAL);
++        TO_STR(ALWAYS);
++#undef TO_STR
++    }
++
++    return vkd3d_dbg_sprintf("UNKNOWN(%#x)", f);
++}
++
++const char *debug_d3d12_descriptor_range(const D3D12_DESCRIPTOR_RANGE *r)
++{
++    unsigned int first, last;
++    const char *type = NULL;
++
++    switch (r->RangeType)
++    {
++        case D3D12_DESCRIPTOR_RANGE_TYPE_SRV:
++            type = "srv";
++            break;
++
++        case D3D12_DESCRIPTOR_RANGE_TYPE_UAV:
++            type = "uav";
++            break;
++
++        case D3D12_DESCRIPTOR_RANGE_TYPE_CBV:
++            type = "cbv";
++            break;
++
++        case D3D12_DESCRIPTOR_RANGE_TYPE_SAMPLER:
++            type = "sampler";
++            break;
++    }
++
++    first = r->BaseShaderRegister;
++    last = first + r->NumDescriptors - 1;
++
++    if (type)
++        return vkd3d_dbg_sprintf("%s[%u:%u], space %u, offset %u",
++                type, first, last, r->RegisterSpace, r->OffsetInDescriptorsFromTableStart);
++
++    return vkd3d_dbg_sprintf("unknown<%#x>[%u:%u], space %u, offset %u",
++            r->RangeType, first, last, r->RegisterSpace,
++            r->OffsetInDescriptorsFromTableStart);
++}
++
++const char *debug_d3d12_filter(D3D12_FILTER f)
++{
++    switch (f)
++    {
++#define TO_STR(f) case D3D12_FILTER_##f: return #f;
++        TO_STR(MIN_MAG_MIP_POINT);
++        TO_STR(MIN_MAG_POINT_MIP_LINEAR);
++        TO_STR(MIN_POINT_MAG_LINEAR_MIP_POINT);
++        TO_STR(MIN_POINT_MAG_MIP_LINEAR);
++        TO_STR(MIN_LINEAR_MAG_MIP_POINT);
++        TO_STR(MIN_LINEAR_MAG_POINT_MIP_LINEAR);
++        TO_STR(MIN_MAG_LINEAR_MIP_POINT);
++        TO_STR(MIN_MAG_MIP_LINEAR);
++        TO_STR(ANISOTROPIC);
++        TO_STR(COMPARISON_MIN_MAG_MIP_POINT);
++        TO_STR(COMPARISON_MIN_MAG_POINT_MIP_LINEAR);
++        TO_STR(COMPARISON_MIN_POINT_MAG_LINEAR_MIP_POINT);
++        TO_STR(COMPARISON_MIN_POINT_MAG_MIP_LINEAR);
++        TO_STR(COMPARISON_MIN_LINEAR_MAG_MIP_POINT);
++        TO_STR(COMPARISON_MIN_LINEAR_MAG_POINT_MIP_LINEAR);
++        TO_STR(COMPARISON_MIN_MAG_LINEAR_MIP_POINT);
++        TO_STR(COMPARISON_MIN_MAG_MIP_LINEAR);
++        TO_STR(COMPARISON_ANISOTROPIC);
++        TO_STR(MINIMUM_MIN_MAG_MIP_POINT);
++        TO_STR(MINIMUM_MIN_MAG_POINT_MIP_LINEAR);
++        TO_STR(MINIMUM_MIN_POINT_MAG_LINEAR_MIP_POINT);
++        TO_STR(MINIMUM_MIN_POINT_MAG_MIP_LINEAR);
++        TO_STR(MINIMUM_MIN_LINEAR_MAG_MIP_POINT);
++        TO_STR(MINIMUM_MIN_LINEAR_MAG_POINT_MIP_LINEAR);
++        TO_STR(MINIMUM_MIN_MAG_LINEAR_MIP_POINT);
++        TO_STR(MINIMUM_MIN_MAG_MIP_LINEAR);
++        TO_STR(MINIMUM_ANISOTROPIC);
++        TO_STR(MAXIMUM_MIN_MAG_MIP_POINT);
++        TO_STR(MAXIMUM_MIN_MAG_POINT_MIP_LINEAR);
++        TO_STR(MAXIMUM_MIN_POINT_MAG_LINEAR_MIP_POINT);
++        TO_STR(MAXIMUM_MIN_POINT_MAG_MIP_LINEAR);
++        TO_STR(MAXIMUM_MIN_LINEAR_MAG_MIP_POINT);
++        TO_STR(MAXIMUM_MIN_LINEAR_MAG_POINT_MIP_LINEAR);
++        TO_STR(MAXIMUM_MIN_MAG_LINEAR_MIP_POINT);
++        TO_STR(MAXIMUM_MIN_MAG_MIP_LINEAR);
++        TO_STR(MAXIMUM_ANISOTROPIC);
++#undef TO_STR
++    }
++
++    return vkd3d_dbg_sprintf("UNKNOWN(%#x)", f);
++}
++
++const char *debug_d3d12_root_signature_flags(D3D12_ROOT_SIGNATURE_FLAGS flags)
++{
++    struct debug_buffer buffer;
++
++    debug_buffer_init(&buffer);
++#define FLAG_TO_STR(f) debug_buffer_append_flag(&buffer, (uint32_t *)&flags, D3D12_ROOT_SIGNATURE_FLAG_##f, #f)
++    FLAG_TO_STR(NONE);
++    FLAG_TO_STR(ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT);
++    FLAG_TO_STR(DENY_VERTEX_SHADER_ROOT_ACCESS);
++    FLAG_TO_STR(DENY_HULL_SHADER_ROOT_ACCESS);
++    FLAG_TO_STR(DENY_DOMAIN_SHADER_ROOT_ACCESS);
++    FLAG_TO_STR(DENY_GEOMETRY_SHADER_ROOT_ACCESS);
++    FLAG_TO_STR(DENY_PIXEL_SHADER_ROOT_ACCESS);
++    FLAG_TO_STR(ALLOW_STREAM_OUTPUT);
++    FLAG_TO_STR(LOCAL_ROOT_SIGNATURE);
++    FLAG_TO_STR(DENY_AMPLIFICATION_SHADER_ROOT_ACCESS);
++    FLAG_TO_STR(DENY_MESH_SHADER_ROOT_ACCESS);
++    FLAG_TO_STR(CBV_SRV_UAV_HEAP_DIRECTLY_INDEXED);
++    FLAG_TO_STR(SAMPLER_HEAP_DIRECTLY_INDEXED);
++#undef FLAG_TO_STR
++
++    return debug_buffer_ret(&buffer, flags, "NONE");
++}
++
+ static const char *debug_d3d12_shader_component(D3D12_SHADER_COMPONENT_MAPPING component)
+ {
+     switch (component)
+@@ -696,6 +870,55 @@ const char *debug_d3d12_shader_component_mapping(unsigned int mapping)
+             debug_d3d12_shader_component(D3D12_DECODE_SHADER_4_COMPONENT_MAPPING(3, mapping)));
+ }
+ 
++const char *debug_d3d12_shader_visibility(D3D12_SHADER_VISIBILITY v)
++{
++    switch (v)
++    {
++#define TO_STR(v) case D3D12_SHADER_VISIBILITY_##v: return #v;
++        TO_STR(ALL);
++        TO_STR(VERTEX);
++        TO_STR(HULL);
++        TO_STR(DOMAIN);
++        TO_STR(GEOMETRY);
++        TO_STR(PIXEL);
++        TO_STR(AMPLIFICATION);
++        TO_STR(MESH);
++#undef TO_STR
++    }
++
++    return vkd3d_dbg_sprintf("UNKNOWN(%#x)", v);
++}
++
++const char *debug_d3d12_static_border_color(D3D12_STATIC_BORDER_COLOR c)
++{
++    switch (c)
++    {
++#define TO_STR(c) case D3D12_STATIC_BORDER_COLOR_##c: return #c;
++        TO_STR(TRANSPARENT_BLACK);
++        TO_STR(OPAQUE_BLACK);
++        TO_STR(OPAQUE_WHITE);
++#undef TO_STR
++    }
++
++    return vkd3d_dbg_sprintf("UNKNOWN(%#x)", c);
++}
++
++const char *debug_d3d12_texture_address_mode(D3D12_TEXTURE_ADDRESS_MODE m)
++{
++    switch (m)
++    {
++#define TO_STR(m) case D3D12_TEXTURE_ADDRESS_MODE_##m: return #m;
++        TO_STR(WRAP);
++        TO_STR(MIRROR);
++        TO_STR(CLAMP);
++        TO_STR(BORDER);
++        TO_STR(MIRROR_ONCE);
++#undef TO_STR
++    }
++
++    return vkd3d_dbg_sprintf("UNKNOWN(%#x)", m);
++}
++
+ const char *debug_denormal_mode(enum vkd3d_shader_denormal_mode m)
+ {
+     switch (m)
+@@ -727,67 +950,55 @@ const char *debug_vk_extent_3d(VkExtent3D extent)
+ 
+ const char *debug_vk_queue_flags(VkQueueFlags flags)
+ {
+-    char buffer[222];
+-
+-    buffer[0] = '\0';
+-#define FLAG_TO_STR(f) if (flags & f) { strcat(buffer, " | "#f); flags &= ~f; }
+-    FLAG_TO_STR(VK_QUEUE_GRAPHICS_BIT)
+-    FLAG_TO_STR(VK_QUEUE_COMPUTE_BIT)
+-    FLAG_TO_STR(VK_QUEUE_TRANSFER_BIT)
+-    FLAG_TO_STR(VK_QUEUE_SPARSE_BINDING_BIT)
+-    FLAG_TO_STR(VK_QUEUE_PROTECTED_BIT)
++    struct debug_buffer buffer;
++
++    debug_buffer_init(&buffer);
++#define FLAG_TO_STR(f) debug_buffer_append_flag(&buffer, (uint32_t *)&flags, f, #f)
++    FLAG_TO_STR(VK_QUEUE_GRAPHICS_BIT);
++    FLAG_TO_STR(VK_QUEUE_COMPUTE_BIT);
++    FLAG_TO_STR(VK_QUEUE_TRANSFER_BIT);
++    FLAG_TO_STR(VK_QUEUE_SPARSE_BINDING_BIT);
++    FLAG_TO_STR(VK_QUEUE_PROTECTED_BIT);
+ #undef FLAG_TO_STR
+-#define FLAG_TO_STR(f, n) if (flags & f) { strcat(buffer, " | "#n); flags &= ~f; }
+-    FLAG_TO_STR(0x20, VK_QUEUE_VIDEO_DECODE_BIT_KHR)
+-    FLAG_TO_STR(0x40, VK_QUEUE_VIDEO_ENCODE_BIT_KHR)
+-    FLAG_TO_STR(0x100, VK_QUEUE_OPTICAL_FLOW_BIT_NV)
++#define FLAG_TO_STR(f, n) debug_buffer_append_flag(&buffer, (uint32_t *)&flags, f, #n)
++    FLAG_TO_STR(0x20, VK_QUEUE_VIDEO_DECODE_BIT_KHR);
++    FLAG_TO_STR(0x40, VK_QUEUE_VIDEO_ENCODE_BIT_KHR);
++    FLAG_TO_STR(0x100, VK_QUEUE_OPTICAL_FLOW_BIT_NV);
+ #undef FLAG_TO_STR
+-    if (flags)
+-        FIXME("Unrecognized flag(s) %#x.\n", flags);
+ 
+-    if (!buffer[0])
+-        return "0";
+-    return vkd3d_dbg_sprintf("%s", &buffer[3]);
++    return debug_buffer_ret(&buffer, flags, "0");
+ }
+ 
+ const char *debug_vk_memory_heap_flags(VkMemoryHeapFlags flags)
+ {
+-    char buffer[80];
++    struct debug_buffer buffer;
+ 
+-    buffer[0] = '\0';
+-#define FLAG_TO_STR(f) if (flags & f) { strcat(buffer, " | "#f); flags &= ~f; }
+-    FLAG_TO_STR(VK_MEMORY_HEAP_DEVICE_LOCAL_BIT)
+-    FLAG_TO_STR(VK_MEMORY_HEAP_MULTI_INSTANCE_BIT)
++    debug_buffer_init(&buffer);
++#define FLAG_TO_STR(f) debug_buffer_append_flag(&buffer, (uint32_t *)&flags, f, #f)
++    FLAG_TO_STR(VK_MEMORY_HEAP_DEVICE_LOCAL_BIT);
++    FLAG_TO_STR(VK_MEMORY_HEAP_MULTI_INSTANCE_BIT);
+ #undef FLAG_TO_STR
+-    if (flags)
+-        FIXME("Unrecognized flag(s) %#x.\n", flags);
+ 
+-    if (!buffer[0])
+-        return "0";
+-    return vkd3d_dbg_sprintf("%s", &buffer[3]);
++    return debug_buffer_ret(&buffer, flags, "0");
+ }
+ 
+ const char *debug_vk_memory_property_flags(VkMemoryPropertyFlags flags)
+ {
+-    char buffer[320];
+-
+-    buffer[0] = '\0';
+-#define FLAG_TO_STR(f) if (flags & f) { strcat(buffer, " | "#f); flags &= ~f; }
+-    FLAG_TO_STR(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT)
+-    FLAG_TO_STR(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT)
+-    FLAG_TO_STR(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT)
+-    FLAG_TO_STR(VK_MEMORY_PROPERTY_HOST_CACHED_BIT)
+-    FLAG_TO_STR(VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT)
+-    FLAG_TO_STR(VK_MEMORY_PROPERTY_PROTECTED_BIT)
+-    FLAG_TO_STR(VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD)
+-    FLAG_TO_STR(VK_MEMORY_PROPERTY_DEVICE_UNCACHED_BIT_AMD)
++    struct debug_buffer buffer;
++
++    debug_buffer_init(&buffer);
++#define FLAG_TO_STR(f) debug_buffer_append_flag(&buffer, (uint32_t *)&flags, f, #f)
++    FLAG_TO_STR(VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
++    FLAG_TO_STR(VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
++    FLAG_TO_STR(VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
++    FLAG_TO_STR(VK_MEMORY_PROPERTY_HOST_CACHED_BIT);
++    FLAG_TO_STR(VK_MEMORY_PROPERTY_LAZILY_ALLOCATED_BIT);
++    FLAG_TO_STR(VK_MEMORY_PROPERTY_PROTECTED_BIT);
++    FLAG_TO_STR(VK_MEMORY_PROPERTY_DEVICE_COHERENT_BIT_AMD);
++    FLAG_TO_STR(VK_MEMORY_PROPERTY_DEVICE_UNCACHED_BIT_AMD);
+ #undef FLAG_TO_STR
+-    if (flags)
+-        FIXME("Unrecognized flag(s) %#x.\n", flags);
+ 
+-    if (!buffer[0])
+-        return "0";
+-    return vkd3d_dbg_sprintf("%s", &buffer[3]);
++    return debug_buffer_ret(&buffer, flags, "0");
+ }
+ 
+ HRESULT hresult_from_errno(int rc)
+diff --git a/libs/vkd3d/libs/vkd3d/vkd3d_private.h b/libs/vkd3d/libs/vkd3d/vkd3d_private.h
+index 43a2084ce92..3f267d706a6 100644
+--- a/libs/vkd3d/libs/vkd3d/vkd3d_private.h
++++ b/libs/vkd3d/libs/vkd3d/vkd3d_private.h
+@@ -30,7 +30,7 @@
+ #include "vkd3d_common.h"
+ #include "vkd3d_blob.h"
+ #include "vkd3d_memory.h"
+-#include "vkd3d_utf8.h"
++#include "vkd3d_string.h"
+ #include "wine/list.h"
+ #include "wine/rbtree.h"
+ 
+@@ -1789,7 +1789,14 @@ HRESULT return_interface(void *iface, REFIID iface_iid, REFIID requested_iid, vo
+ 
+ const char *debug_cpu_handle(D3D12_CPU_DESCRIPTOR_HANDLE handle);
+ const char *debug_d3d12_box(const D3D12_BOX *box);
++const char *debug_d3d12_comparison_func(D3D12_COMPARISON_FUNC f);
++const char *debug_d3d12_descriptor_range(const D3D12_DESCRIPTOR_RANGE *r);
++const char *debug_d3d12_filter(D3D12_FILTER f);
++const char *debug_d3d12_root_signature_flags(D3D12_ROOT_SIGNATURE_FLAGS flags);
+ const char *debug_d3d12_shader_component_mapping(unsigned int mapping);
++const char *debug_d3d12_shader_visibility(D3D12_SHADER_VISIBILITY v);
++const char *debug_d3d12_static_border_color(D3D12_STATIC_BORDER_COLOR c);
++const char *debug_d3d12_texture_address_mode(D3D12_TEXTURE_ADDRESS_MODE m);
+ const char *debug_denormal_mode(enum vkd3d_shader_denormal_mode m);
+ const char *debug_gpu_handle(D3D12_GPU_DESCRIPTOR_HANDLE handle);
+ const char *debug_vk_extent_3d(VkExtent3D extent);
+-- 
+2.53.0
+
