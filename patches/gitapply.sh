@@ -249,7 +249,7 @@ awk_eof_textpatch='
 BEGIN{
   ofs=1;
 }
-!/^(@| |+|-|\\)/{
+!/^(@| |\+|-|\\)/{
   ofs=0; exit 0;
 }
 END{
