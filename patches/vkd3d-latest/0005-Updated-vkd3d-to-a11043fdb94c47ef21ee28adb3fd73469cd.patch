@@ -1,0 +1,577 @@
+From 051925def99a1f7a74d3992c8cfb31e8f440d04e Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Thu, 1 Oct 2026 06:27:57 +1000
+Subject: [PATCH] Updated vkd3d to a11043fdb94c47ef21ee28adb3fd73469cd4fa4e.
+
+---
+ libs/vkd3d/libs/vkd3d-shader/d3d_asm.c        |  27 ----
+ libs/vkd3d/libs/vkd3d-shader/d3dbc.c          | 117 +++++++++++++++---
+ libs/vkd3d/libs/vkd3d-shader/dxil.c           |   6 -
+ libs/vkd3d/libs/vkd3d-shader/glsl.c           |   4 -
+ libs/vkd3d/libs/vkd3d-shader/ir.c             | 100 +--------------
+ libs/vkd3d/libs/vkd3d-shader/msl.c            |   4 -
+ libs/vkd3d/libs/vkd3d-shader/tpf.c            |   1 -
+ .../libs/vkd3d-shader/vkd3d_shader_private.h  |   4 +-
+ 8 files changed, 108 insertions(+), 155 deletions(-)
+
+diff --git a/libs/vkd3d/libs/vkd3d-shader/d3d_asm.c b/libs/vkd3d/libs/vkd3d-shader/d3d_asm.c
+index 9edc21619bb..e1c4bc7c843 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/d3d_asm.c
++++ b/libs/vkd3d/libs/vkd3d-shader/d3d_asm.c
+@@ -1205,33 +1205,6 @@ static void shader_dump_ins_modifiers(struct vkd3d_d3d_asm_compiler *compiler,
+     struct vkd3d_string_buffer *buffer = &compiler->buffer;
+     uint32_t mmask = dst->modifiers;
+ 
+-    switch (dst->shift)
+-    {
+-        case 0:
+-            break;
+-        case 13:
+-            vkd3d_string_buffer_printf(buffer, "_d8");
+-            break;
+-        case 14:
+-            vkd3d_string_buffer_printf(buffer, "_d4");
+-            break;
+-        case 15:
+-            vkd3d_string_buffer_printf(buffer, "_d2");
+-            break;
+-        case 1:
+-            vkd3d_string_buffer_printf(buffer, "_x2");
+-            break;
+-        case 2:
+-            vkd3d_string_buffer_printf(buffer, "_x4");
+-            break;
+-        case 3:
+-            vkd3d_string_buffer_printf(buffer, "_x8");
+-            break;
+-        default:
+-            vkd3d_string_buffer_printf(buffer, "_unhandled_shift(%d)", dst->shift);
+-            break;
+-    }
+-
+     if (mmask & VKD3DSPDM_SATURATE)
+         vkd3d_string_buffer_printf(buffer, "_sat");
+     if (mmask & VKD3DSPDM_PARTIALPRECISION)
+diff --git a/libs/vkd3d/libs/vkd3d-shader/d3dbc.c b/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
+index f52cfa69c54..b21f3df7889 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
++++ b/libs/vkd3d/libs/vkd3d-shader/d3dbc.c
+@@ -1521,22 +1521,36 @@ static void vsir_dst_operand_from_d3dbc(struct vkd3d_shader_sm1_parser *parser,
+         const struct d3dbc_dst_operand *d3dbc, const struct d3dbc_src_operand *rel_addr)
+ {
+     vsir_operand_from_d3dbc(parser, &vsir->reg, &d3dbc->o, rel_addr);
+-    vsir->modifiers = d3dbc->modifiers;
++    vsir->modifiers = VKD3DSPDM_NONE;
+     if (vsir->reg.dimension == VSIR_DIMENSION_SCALAR)
+         vsir->write_mask = VKD3DSP_WRITEMASK_0;
+     else if (vsir->reg.dimension == VSIR_DIMENSION_VEC4)
+         vsir->write_mask = d3dbc->write_mask;
+     else
+         vsir->write_mask = 0;
+-    vsir->shift = d3dbc->shift;
++}
++
++static struct vsir_instruction *d3dbc_append_instruction(struct vkd3d_shader_sm1_parser *parser,
++        enum vsir_opcode opcode, unsigned int dst_count, unsigned int src_count)
++{
++    struct vsir_instruction *ins;
++
++    if (!(ins = vsir_program_append(parser->program)))
++        return NULL;
++    if (!vsir_instruction_init_with_params(parser->program, ins, &parser->p.location, opcode, dst_count, src_count))
++    {
++        vsir_instruction_init(ins, &parser->p.location, VSIR_OP_NOP);
++        return NULL;
++    }
++    return ins;
+ }
+ 
+ static enum vkd3d_result shader_sm1_read_instruction(struct vkd3d_shader_sm1_parser *parser,
+-        const struct d3dbc_instruction *d3dbc_ins,
+-        const struct vkd3d_sm1_opcode_info *opcode_info, struct vsir_instruction *ins)
++        const struct d3dbc_instruction *d3dbc_ins, const struct vkd3d_sm1_opcode_info *opcode_info)
+ {
+     struct vsir_program *program = parser->program;
+     struct vkd3d_shader_semantic *semantic;
++    struct vsir_instruction *ins;
+     unsigned int resource_idx, i;
+ 
+     if (program->shader_version.major == 1)
+@@ -1554,14 +1568,15 @@ static enum vkd3d_result shader_sm1_read_instruction(struct vkd3d_shader_sm1_par
+         for (i = 0; i < d3dbc_ins->src_count; ++i)
+         {
+             d3dbc_scan_operand(parser, &d3dbc_ins->src[i].o, mask_from_swizzle(d3dbc_ins->src[i].swizzle),
+-                    false, d3dbc_get_src_register_count(ins->opcode, i));
++                    false, d3dbc_get_src_register_count(opcode_info->vsir_opcode, i));
+         }
+     }
+ 
+     switch (d3dbc_ins->opcode)
+     {
+         case VKD3D_SM1_OP_DCL:
+-            vsir_instruction_init(ins, &parser->p.location, VSIR_OP_DCL);
++            if (!(ins = d3dbc_append_instruction(parser, VSIR_OP_DCL, 0, 0)))
++                return VKD3D_ERROR_OUT_OF_MEMORY;
+ 
+             semantic = &ins->declaration.semantic;
+             semantic->usage = d3dbc_ins->semantic.usage;
+@@ -1600,8 +1615,7 @@ static enum vkd3d_result shader_sm1_read_instruction(struct vkd3d_shader_sm1_par
+         case VKD3D_SM1_OP_DEF:
+         case VKD3D_SM1_OP_DEFB:
+         case VKD3D_SM1_OP_DEFI:
+-            if (!vsir_instruction_init_with_params(program, ins,
+-                    &parser->p.location, opcode_info->vsir_opcode, 1, 1))
++            if (!(ins = d3dbc_append_instruction(parser, opcode_info->vsir_opcode, 1, 1)))
+                 return VKD3D_ERROR_OUT_OF_MEMORY;
+             vsir_dst_operand_from_d3dbc(parser, &ins->dst[0], &d3dbc_ins->dst[0], &d3dbc_ins->dst_rel_addr[0]);
+ 
+@@ -1631,8 +1645,7 @@ static enum vkd3d_result shader_sm1_read_instruction(struct vkd3d_shader_sm1_par
+          * is semantically a source. Since we have multiple passes which
+          * operate generically on sources or destinations, normalise that. */
+         case VKD3D_SM1_OP_TEXKILL:
+-            if (!vsir_instruction_init_with_params(program, ins, &parser->p.location,
+-                    opcode_info->vsir_opcode, 0, 1))
++            if (!(ins = d3dbc_append_instruction(parser, VSIR_OP_TEXKILL, 0, 1)))
+                 return VKD3D_ERROR_OUT_OF_MEMORY;
+ 
+             vsir_operand_from_d3dbc(parser, &ins->src[0].reg, &d3dbc_ins->dst[0].o, &d3dbc_ins->dst_rel_addr[0]);
+@@ -1640,8 +1653,8 @@ static enum vkd3d_result shader_sm1_read_instruction(struct vkd3d_shader_sm1_par
+             break;
+ 
+         default:
+-            if (!vsir_instruction_init_with_params(program, ins, &parser->p.location,
+-                    opcode_info->vsir_opcode, d3dbc_ins->dst_count, d3dbc_ins->src_count))
++            if (!(ins = d3dbc_append_instruction(parser, opcode_info->vsir_opcode,
++                    d3dbc_ins->dst_count, d3dbc_ins->src_count)))
+                 return VKD3D_ERROR_OUT_OF_MEMORY;
+ 
+             if (d3dbc_ins->dst_count)
+@@ -1767,11 +1780,33 @@ static uint32_t get_external_constant_count(struct vkd3d_shader_sm1_parser *sm1,
+     return 0;
+ }
+ 
++static float scale_from_shift(struct vkd3d_shader_sm1_parser *parser, unsigned int shift)
++{
++    switch (shift)
++    {
++        case 1: /* _x2 */
++            return 2.0f;
++        case 2: /* _x4 */
++            return 4.0f;
++        case 3: /* _x8 */
++            return 8.0f;
++        case 13: /* _d8 */
++            return 1.0f / 8.0f;
++        case 14: /* _d4 */
++            return 1.0f / 4.0f;
++        case 15: /* _d2 */
++            return 1.0f / 2.0f;
++        default:
++            vkd3d_shader_parser_error(&parser->p, VKD3D_SHADER_ERROR_D3DBC_NOT_IMPLEMENTED,
++                    "Unhandled destination shift %#x.", shift);
++            return 0.0f;
++    }
++}
++
+ int d3dbc_parse(const struct vkd3d_shader_compile_info *compile_info, uint64_t config_flags,
+         struct vkd3d_shader_message_context *message_context, struct vsir_program *program)
+ {
+     struct vkd3d_shader_sm1_parser sm1 = {0};
+-    struct vsir_instruction *ins;
+     struct vsir_descriptor *d;
+     unsigned int i;
+     int ret;
+@@ -1786,6 +1821,7 @@ int d3dbc_parse(const struct vkd3d_shader_compile_info *compile_info, uint64_t c
+     {
+         const struct vkd3d_sm1_opcode_info *opcode_info;
+         struct d3dbc_instruction d3dbc_ins;
++        struct d3dbc_dst_operand orig_dst;
+ 
+         if (!d3dbc_parse_instruction(&sm1, &d3dbc_ins, &opcode_info))
+         {
+@@ -1793,21 +1829,66 @@ int d3dbc_parse(const struct vkd3d_shader_compile_info *compile_info, uint64_t c
+             vsir_program_cleanup(program);
+             return VKD3D_ERROR_INVALID_SHADER;
+         }
++        orig_dst = d3dbc_ins.dst[0];
+ 
+         shader_sm1_validate_instruction(&sm1, &d3dbc_ins);
+ 
+-        if (!(ins = vsir_program_append(program)))
++        if (d3dbc_ins.dst_count)
+         {
+-            vkd3d_shader_parser_error(&sm1.p, VKD3D_SHADER_ERROR_D3DBC_OUT_OF_MEMORY, "Out of memory.");
+-            vsir_program_cleanup(program);
+-            return VKD3D_ERROR_OUT_OF_MEMORY;
++            /* It is always legitimate to ignore _pp. */
++            d3dbc_ins.dst[0].modifiers &= ~VKD3DSPDM_PARTIALPRECISION;
++
++            if ((d3dbc_ins.dst[0].modifiers & VKD3DSPDM_SATURATE) || d3dbc_ins.dst[0].shift)
++            {
++                /* Don't forget to scan the original. */
++                d3dbc_scan_operand(&sm1, &orig_dst.o, orig_dst.write_mask, false, 1);
++
++                /* Replace the output with a temporary, r32, which is outside
++                 * the range of legal temps for any d3dbc program.
++                 * We will insert VSIR_OP_SATURATE and/or shift after
++                 * translating the instruction. */
++                d3dbc_ins.dst[0].modifiers &= ~VKD3DSPDM_SATURATE;
++                d3dbc_ins.dst[0].shift = 0;
++                d3dbc_ins.dst[0].o.type = D3DBC_REGISTER_TEMP;
++                d3dbc_ins.dst[0].o.index = 32;
++                d3dbc_ins.dst[0].o.has_rel_addr = false;
++            }
++
++            /* We handle _centroid in d3dbc_append_instruction(). */
++            if (d3dbc_ins.dst[0].modifiers & ~VKD3DSPDM_MSAMPCENTROID)
++                vkd3d_shader_parser_error(&sm1.p, VKD3D_SHADER_ERROR_D3DBC_NOT_IMPLEMENTED,
++                        "Aborting due to unimplemented feature: Destination modifier %#x.", d3dbc_ins.dst[0].modifiers);
+         }
+ 
+-        if ((ret = shader_sm1_read_instruction(&sm1, &d3dbc_ins, opcode_info, ins)))
++        if ((ret = shader_sm1_read_instruction(&sm1, &d3dbc_ins, opcode_info)))
+         {
+             vsir_program_cleanup(program);
+             return ret;
+         }
++
++        if (d3dbc_ins.dst_count && orig_dst.shift)
++        {
++            struct vsir_instruction *ins;
++
++            if (!(ins = d3dbc_append_instruction(&sm1, VSIR_OP_MUL, 1, 2)))
++                break;
++            if (orig_dst.modifiers & VKD3DSPDM_SATURATE)
++                vsir_dst_operand_init_temp_f32v4(&ins->dst[0], 32);
++            else
++                vsir_dst_operand_from_d3dbc(&sm1, &ins->dst[0], &orig_dst, &d3dbc_ins.dst_rel_addr[0]);
++            vsir_src_operand_init_temp_f32v4(&ins->src[0], 32);
++            vsir_src_operand_init_const_f32(&ins->src[1], scale_from_shift(&sm1, orig_dst.shift));
++        }
++
++        if (d3dbc_ins.dst_count && (orig_dst.modifiers & VKD3DSPDM_SATURATE))
++        {
++            struct vsir_instruction *ins;
++
++            if (!(ins = d3dbc_append_instruction(&sm1, VSIR_OP_SATURATE, 1, 1)))
++                break;
++            vsir_dst_operand_from_d3dbc(&sm1, &ins->dst[0], &orig_dst, &d3dbc_ins.dst_rel_addr[0]);
++            vsir_src_operand_init_temp_f32v4(&ins->src[0], 32);
++        }
+     }
+ 
+     for (i = 0; i < 3; ++i)
+diff --git a/libs/vkd3d/libs/vkd3d-shader/dxil.c b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+index efc774cdc18..4887c9b8f4c 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/dxil.c
++++ b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+@@ -3030,28 +3030,24 @@ static void dst_param_init(struct vsir_dst_operand *param)
+ {
+     param->write_mask = VKD3DSP_WRITEMASK_0;
+     param->modifiers = 0;
+-    param->shift = 0;
+ }
+ 
+ static void dst_param_init_with_mask(struct vsir_dst_operand *param, unsigned int mask)
+ {
+     param->write_mask = mask;
+     param->modifiers = 0;
+-    param->shift = 0;
+ }
+ 
+ static inline void dst_param_init_scalar(struct vsir_dst_operand *param, unsigned int component_idx)
+ {
+     param->write_mask = 1u << component_idx;
+     param->modifiers = 0;
+-    param->shift = 0;
+ }
+ 
+ static void dst_param_init_vector(struct vsir_dst_operand *param, unsigned int component_count)
+ {
+     param->write_mask = (1u << component_count) - 1;
+     param->modifiers = 0;
+-    param->shift = 0;
+ }
+ 
+ static inline void src_param_init(struct vsir_src_operand *param)
+@@ -4559,7 +4555,6 @@ static void dst_param_io_init(struct vsir_dst_operand *param, const struct vsir_
+ 
+     param->write_mask = e->mask;
+     param->modifiers = 0;
+-    param->shift = 0;
+     /* DXIL types do not have signedness. Load signed elements as unsigned. */
+     component_type = e->component_type == VKD3D_SHADER_COMPONENT_INT ? VKD3D_SHADER_COMPONENT_UINT : e->component_type;
+     vsir_operand_init(&param->reg, reg_type, vsir_data_type_from_component_type(component_type), 0);
+@@ -10304,7 +10299,6 @@ static void init_resource_declaration(struct vkd3d_shader_resource *resource, en
+     struct vsir_dst_operand *param = &resource->reg;
+ 
+     param->modifiers = 0;
+-    param->shift = 0;
+     vsir_operand_init(&param->reg, reg_type, data_type, 3);
+     param->reg.idx[0].offset = id;
+     param->reg.idx[1].offset = range->first;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/glsl.c b/libs/vkd3d/libs/vkd3d-shader/glsl.c
+index dfe42d9bdb5..1b50f45e7ac 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/glsl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/glsl.c
+@@ -562,10 +562,6 @@ static void VKD3D_PRINTF_FUNC(4, 0) shader_glsl_vprint_assignment(struct vkd3d_g
+     struct vkd3d_string_buffer *buffer = gen->buffer;
+     bool close = true;
+ 
+-    if (dst->vsir->shift)
+-        vkd3d_glsl_compiler_error(gen, VKD3D_SHADER_ERROR_GLSL_INTERNAL,
+-                "Internal compiler error: Unhandled destination shift %#x.", dst->vsir->shift);
+-
+     shader_glsl_print_indent(buffer, gen->indent);
+     vkd3d_string_buffer_printf(buffer, "%s%s = ", dst->register_name->buffer, dst->mask->buffer);
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/ir.c b/libs/vkd3d/libs/vkd3d-shader/ir.c
+index 9a997a9fafa..d3607e34aec 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/ir.c
++++ b/libs/vkd3d/libs/vkd3d-shader/ir.c
+@@ -1225,7 +1225,7 @@ void vsir_src_operand_init(struct vsir_src_operand *src, enum vsir_register_type
+     src->owner_index = 0;
+ }
+ 
+-static void vsir_src_operand_init_const_f32(struct vsir_src_operand *src, float value)
++void vsir_src_operand_init_const_f32(struct vsir_src_operand *src, float value)
+ {
+     vsir_src_operand_init(src, VSIR_REGISTER_IMMCONST, VSIR_DATA_F32, 0);
+     src->reg.u.immconst_f32[0] = value;
+@@ -1335,7 +1335,7 @@ static void vsir_src_operand_init_temp_f32(struct vsir_src_operand *src, unsigne
+     src->reg.idx[0].offset = idx;
+ }
+ 
+-static void vsir_src_operand_init_temp_f32v4(struct vsir_src_operand *src, unsigned int idx)
++void vsir_src_operand_init_temp_f32v4(struct vsir_src_operand *src, unsigned int idx)
+ {
+     vsir_src_operand_init(src, VSIR_REGISTER_TEMP, VSIR_DATA_F32, 1);
+     src->reg.dimension = VSIR_DIMENSION_VEC4;
+@@ -1355,7 +1355,6 @@ void vsir_dst_operand_init(struct vsir_dst_operand *dst, enum vsir_register_type
+     vsir_operand_init(&dst->reg, reg_type, data_type, idx_count);
+     dst->write_mask = VKD3DSP_WRITEMASK_0;
+     dst->modifiers = VKD3DSPDM_NONE;
+-    dst->shift = 0;
+ }
+ 
+ static void vsir_dst_operand_init_io(struct vsir_dst_operand *dst, enum vsir_register_type reg_type,
+@@ -1413,7 +1412,7 @@ static void vsir_dst_operand_init_temp_bool(struct vsir_dst_operand *dst, unsign
+     dst->reg.idx[0].offset = idx;
+ }
+ 
+-static void vsir_dst_operand_init_temp_f32v4(struct vsir_dst_operand *dst, unsigned int idx)
++void vsir_dst_operand_init_temp_f32v4(struct vsir_dst_operand *dst, unsigned int idx)
+ {
+     vsir_dst_operand_init(dst, VSIR_REGISTER_TEMP, VSIR_DATA_F32, 1);
+     dst->reg.idx[0].offset = idx;
+@@ -3586,10 +3585,9 @@ static enum vkd3d_result vsir_program_lower_d3dbc_modifiers(struct vsir_program
+         struct vsir_program_iterator *it, struct vkd3d_shader_message_context *message_context)
+ {
+     struct vsir_instruction *ins = vsir_program_iterator_current(it);
+-    unsigned int tmp_dst_id, tmp_src_id, i;
+     struct vsir_program_iterator new_it;
+     struct vsir_instruction *new_ins;
+-    float scale;
++    unsigned int tmp_src_id, i;
+ 
+     for (i = 0; i < ins->src_count; ++i)
+     {
+@@ -3700,59 +3698,6 @@ static enum vkd3d_result vsir_program_lower_d3dbc_modifiers(struct vsir_program
+         vsir_src_operand_init_ssa(src, tmp_src_id, src->reg.data_type, src->reg.dimension);
+     }
+ 
+-    for (i = 0; i < ins->dst_count; ++i)
+-    {
+-        struct vsir_dst_operand *dst = &ins->dst[i];
+-
+-        if (!dst->shift)
+-            continue;
+-
+-        switch (dst->shift)
+-        {
+-            case 1: /* _x2 */
+-                scale = 2.0f;
+-                break;
+-            case 2: /* _x4 */
+-                scale = 4.0f;
+-                break;
+-            case 3: /* _x8 */
+-                scale = 8.0f;
+-                break;
+-            case 13: /* _d8 */
+-                scale = 0.125f;
+-                break;
+-            case 14: /* _d4 */
+-                scale = 0.25f;
+-                break;
+-            case 15: /* _d2 */
+-                scale = 0.5f;
+-                break;
+-            default:
+-                vkd3d_shader_error(message_context, &ins->location, VKD3D_SHADER_ERROR_VSIR_NOT_IMPLEMENTED,
+-                        "Unhandled destination shift %#x.", dst->shift);
+-                return VKD3D_ERROR_NOT_IMPLEMENTED;
+-        }
+-
+-        if (!vsir_program_iterator_insert_after(it, 1))
+-            return VKD3D_ERROR_OUT_OF_MEMORY;
+-        new_ins = vsir_program_iterator_next(it);
+-        ins = vsir_program_iterator_prev(it);
+-
+-        if (!vsir_instruction_init_with_params(program, new_ins, &ins->location, VSIR_OP_MUL, 1, 2))
+-        {
+-            vsir_instruction_init(new_ins, &ins->location, VSIR_OP_NOP);
+-            return VKD3D_ERROR_OUT_OF_MEMORY;
+-        }
+-
+-        new_ins->dst[0] = *dst;
+-        new_ins->dst[0].shift = 0;
+-
+-        tmp_dst_id = program->ssa_count++;
+-        vsir_dst_operand_init_ssa(dst, tmp_dst_id, dst->reg.data_type, dst->reg.dimension);
+-        vsir_src_operand_init_ssa(&new_ins->src[0], tmp_dst_id, dst->reg.data_type, dst->reg.dimension);
+-        vsir_src_operand_init_const_f32(&new_ins->src[1], scale);
+-    }
+-
+     return VKD3D_OK;
+ 
+ fail:
+@@ -13755,28 +13700,6 @@ static void vsir_validate_dst_operand(struct validation_context *ctx, const stru
+         }
+     }
+ 
+-    switch (dst->shift)
+-    {
+-        case 0:
+-            break;
+-
+-        case 1:
+-        case 2:
+-        case 3:
+-        case 13:
+-        case 14:
+-        case 15:
+-            if (dst->reg.data_type != VSIR_DATA_F32)
+-                validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_DATA_TYPE,
+-                        "Invalid data type \"%s\" (%#x) for destination with shift.",
+-                        vsir_data_type_get_name(dst->reg.data_type, "<unknown>"), dst->reg.data_type);
+-            break;
+-
+-        default:
+-            validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_SHIFT, "Destination has invalid shift %#x.",
+-                    dst->shift);
+-    }
+-
+     switch (dst->reg.type)
+     {
+         case VSIR_REGISTER_SSA:
+@@ -14958,10 +14881,6 @@ static void vsir_validate_dcl_index_range(struct validation_context *ctx,
+         validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_MODIFIERS,
+                 "Invalid modifier %#x on a DCL_INDEX_RANGE destination parameter.", range->dst.modifiers);
+ 
+-    if (range->dst.shift != 0)
+-        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_SHIFT,
+-                "Invalid shift %u on a DCL_INDEX_RANGE destination parameter.", range->dst.shift);
+-
+     if (!vsir_get_io_register_data(ctx, range->dst.reg.type, &io_reg_data))
+     {
+         validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_REGISTER_TYPE,
+@@ -15568,11 +15487,6 @@ static void vsir_validate_phi(struct validation_context *ctx, const struct vsir_
+         validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_MODIFIERS,
+                 "Invalid modifiers %#x for the destination of a PHI instruction, expected none.",
+                 instruction->dst[0].modifiers);
+-
+-    if (instruction->dst[0].shift != 0)
+-        validator_error(ctx, VKD3D_SHADER_ERROR_VSIR_INVALID_SHIFT,
+-                "Invalid shift %#x for the destination of a PHI instruction, expected none.",
+-                instruction->dst[0].shift);
+ }
+ 
+ static void vsir_validate_rep(struct validation_context *ctx, const struct vsir_instruction *instruction)
+@@ -16726,7 +16640,7 @@ static bool can_propagate_ssa_source(const struct vsir_program *program, const s
+     /* TODO: Propagate copies for other register types. */
+     if (ins->dst[0].reg.type != VSIR_REGISTER_SSA)
+         return false;
+-    if (ins->dst[0].modifiers || ins->dst[0].shift)
++    if (ins->dst[0].modifiers)
+         return false;
+ 
+     dst_data_type = ins->dst[0].reg.data_type;
+@@ -17035,7 +16949,7 @@ static void vsir_program_output_copy_hoisting_record_mov(
+     if (!is_write_only(dst->reg.type))
+         return;
+     if (src->modifiers || (dst->modifiers & ~VKD3DSPDM_SATURATE)
+-            || dst->shift || data_type_is_64_bit(src->reg.data_type))
++            || data_type_is_64_bit(src->reg.data_type))
+         return;
+     for (unsigned int i = 0; i < dst->reg.idx_count; ++i)
+     {
+@@ -17315,8 +17229,6 @@ static int vsir_cse_expr_key_compare(const void *key, const struct rb_entry *e)
+         return ret;
+     if ((ret = vkd3d_u32_compare(a->dst->modifiers, b->dst->modifiers)))
+         return ret;
+-    if ((ret = vkd3d_u32_compare(a->dst->shift, b->dst->shift)))
+-        return ret;
+ 
+     VKD3D_ASSERT(a->src_count == b->src_count);
+     for (unsigned int i = 0; i < a->src_count; ++i)
+diff --git a/libs/vkd3d/libs/vkd3d-shader/msl.c b/libs/vkd3d/libs/vkd3d-shader/msl.c
+index 1957e4ca25a..c358729547a 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/msl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/msl.c
+@@ -645,10 +645,6 @@ static void VKD3D_PRINTF_FUNC(3, 4) msl_print_assignment(
+ {
+     va_list args;
+ 
+-    if (dst->vsir->shift)
+-        msl_compiler_error(gen, VKD3D_SHADER_ERROR_MSL_INTERNAL,
+-                "Internal compiler error: Unhandled destination shift %#x.", dst->vsir->shift);
+-
+     msl_print_indent(gen->buffer, gen->indent);
+     vkd3d_string_buffer_printf(gen->buffer, "%s%s = ", dst->register_name->buffer, dst->mask->buffer);
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/tpf.c b/libs/vkd3d/libs/vkd3d-shader/tpf.c
+index 017df4a7d3e..b29e3227eed 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/tpf.c
++++ b/libs/vkd3d/libs/vkd3d-shader/tpf.c
+@@ -2507,7 +2507,6 @@ static bool tpf_read_dst_operand(struct vkd3d_shader_sm4_parser *tpf, const uint
+     if (!dst->write_mask && shader_sm4_is_scalar_register(&dst->reg))
+         dst->write_mask = VKD3DSP_WRITEMASK_0;
+     dst->modifiers = 0;
+-    dst->shift = 0;
+ 
+     if (register_is_input_output(&dst->reg)
+             && !shader_sm4_validate_input_output_register(tpf, &dst->reg, dst->write_mask))
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+index c77b9ceb2e6..c225c983765 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+@@ -1163,13 +1163,13 @@ struct vsir_dst_operand
+     struct vsir_operand reg;
+     uint32_t write_mask;
+     uint32_t modifiers;
+-    unsigned int shift;
+ };
+ 
+ void vsir_dst_operand_init(struct vsir_dst_operand *dst, enum vsir_register_type reg_type,
+         enum vsir_data_type data_type, unsigned int idx_count);
+ void vsir_dst_operand_init_null(struct vsir_dst_operand *dst);
+ void vsir_dst_operand_init_ssa_f32v4(struct vsir_dst_operand *dst, unsigned int idx);
++void vsir_dst_operand_init_temp_f32v4(struct vsir_dst_operand *dst, unsigned int idx);
+ 
+ /* This structure is used by vsir_src_operand_compare(); changes to the
+  * structure should be reflected by the comparison function as well. */
+@@ -1185,8 +1185,10 @@ struct vsir_src_operand
+ 
+ void vsir_src_operand_init(struct vsir_src_operand *src, enum vsir_register_type reg_type,
+         enum vsir_data_type data_type, unsigned int idx_count);
++void vsir_src_operand_init_const_f32(struct vsir_src_operand *src, float value);
+ void vsir_src_operand_init_label(struct vsir_src_operand *src, unsigned int label_id);
+ void vsir_src_operand_init_ssa_f32v4(struct vsir_src_operand *src, unsigned int idx);
++void vsir_src_operand_init_temp_f32v4(struct vsir_src_operand *src, unsigned int idx);
+ 
+ struct vkd3d_shader_index_range
+ {
+-- 
+2.53.0
+
