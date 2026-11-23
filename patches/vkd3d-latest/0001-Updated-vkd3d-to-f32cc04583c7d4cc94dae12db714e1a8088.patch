@@ -1,0 +1,664 @@
+From 17f3ffb92097240977d7ab1ccb79ef9ca2c027a4 Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Tue, 24 Nov 2026 09:21:47 +1100
+Subject: [PATCH] Updated vkd3d to f32cc04583c7d4cc94dae12db714e1a808826d47.
+
+---
+ libs/vkd3d/include/private/vkd3d_common.h     |   9 +-
+ libs/vkd3d/include/private/vkd3d_version.h    |   2 +-
+ libs/vkd3d/libs/vkd3d-common/blob.c           |   4 +
+ libs/vkd3d/libs/vkd3d-shader/hlsl.c           |  12 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl.h           |  20 +--
+ libs/vkd3d/libs/vkd3d-shader/hlsl.y           | 124 ++++++++++++++----
+ libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c   |  77 ++++++++---
+ libs/vkd3d/libs/vkd3d-shader/preproc.l        |   1 +
+ libs/vkd3d/libs/vkd3d-shader/tpf.c            |  17 +++
+ libs/vkd3d/libs/vkd3d-utils/reflection.c      |   3 +-
+ .../vkd3d/libs/vkd3d-utils/vkd3d_utils_main.c |  31 ++++-
+ 11 files changed, 233 insertions(+), 67 deletions(-)
+
+diff --git a/libs/vkd3d/include/private/vkd3d_common.h b/libs/vkd3d/include/private/vkd3d_common.h
+index 08f9f574e7c..47d89541627 100644
+--- a/libs/vkd3d/include/private/vkd3d_common.h
++++ b/libs/vkd3d/include/private/vkd3d_common.h
+@@ -331,7 +331,7 @@ static inline unsigned int vkd3d_popcount(unsigned int v)
+ {
+ #ifdef _MSC_VER
+     return __popcnt(v);
+-#elif defined(__MINGW32__)
++#elif defined(HAVE_BUILTIN_POPCOUNT)
+     return __builtin_popcount(v);
+ #else
+     v -= (v >> 1) & 0x55555555;
+@@ -395,12 +395,7 @@ static inline unsigned int vkd3d_log2i(unsigned int x)
+ 
+ static inline unsigned int vkd3d_ctz(uint32_t v)
+ {
+-#ifdef _WIN32
+-    ULONG result;
+-    if (_BitScanForward(&result, v))
+-        return (unsigned int)result;
+-    return 32;
+-#elif defined(HAVE_BUILTIN_CTZ)
++#ifdef HAVE_BUILTIN_CTZ
+     return __builtin_ctz(v);
+ #else
+     unsigned int c = 31;
+diff --git a/libs/vkd3d/include/private/vkd3d_version.h b/libs/vkd3d/include/private/vkd3d_version.h
+index 0edc4428022..c3f4b7f3829 100644
+--- a/libs/vkd3d/include/private/vkd3d_version.h
++++ b/libs/vkd3d/include/private/vkd3d_version.h
+@@ -1 +1 @@
+-#define VKD3D_VCS_ID " (Wine bundled)"
++#define VKD3D_VCS_ID " (git f32cc045)"
+diff --git a/libs/vkd3d/libs/vkd3d-common/blob.c b/libs/vkd3d/libs/vkd3d-common/blob.c
+index f60ef7db769..cc795a1433f 100644
+--- a/libs/vkd3d/libs/vkd3d-common/blob.c
++++ b/libs/vkd3d/libs/vkd3d-common/blob.c
+@@ -20,10 +20,14 @@
+ #define WIDL_C_INLINE_WRAPPERS
+ #endif
+ #define COBJMACROS
++
+ #define CONST_VTABLE
+ #include "vkd3d.h"
+ #include "vkd3d_blob.h"
+ #include "vkd3d_memory.h"
++#include "d3d10effect.h"
++#include "d3d10_1shader.h"
++#include "d3d11shader.h"
+ #include "d3d12shader.h"
+ 
+ struct vkd3d_blob
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.c b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+index 0652e9cb969..4e50559f5a2 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+@@ -1361,6 +1361,8 @@ bool hlsl_types_are_equal(const struct hlsl_type *t1, const struct hlsl_type *t2
+         case HLSL_CLASS_MATRIX:
+             if (t1->e.numeric.type != t2->e.numeric.type)
+                 return false;
++            if (t1->is_minimum_precision != t2->is_minimum_precision)
++                return false;
+             if ((t1->modifiers & HLSL_MODIFIER_ROW_MAJOR)
+                     != (t2->modifiers & HLSL_MODIFIER_ROW_MAJOR))
+                 return false;
+@@ -1526,6 +1528,7 @@ struct hlsl_type *hlsl_type_clone(struct hlsl_ctx *ctx, struct hlsl_type *old,
+             type->e.resource.rasteriser_ordered = old->e.resource.rasteriser_ordered;
+             /* fall through */
+         case HLSL_CLASS_TEXTURE:
++        case HLSL_CLASS_CONSTANT_BUFFER:
+             type->e.resource.format = old->e.resource.format;
+             break;
+ 
+@@ -3781,6 +3784,8 @@ struct vkd3d_string_buffer *hlsl_modifiers_to_string(struct hlsl_ctx *ctx, uint3
+         vkd3d_string_buffer_printf(string, "row_major ");
+     if (modifiers & HLSL_MODIFIER_COLUMN_MAJOR)
+         vkd3d_string_buffer_printf(string, "column_major ");
++    if (modifiers & HLSL_MODIFIER_GLOBALLYCOHERENT)
++        vkd3d_string_buffer_printf(string, "globallycoherent ");
+     if (modifiers & HLSL_PRIMITIVE_POINT)
+         vkd3d_string_buffer_printf(string, "point ");
+     if (modifiers & HLSL_PRIMITIVE_LINE)
+@@ -4043,6 +4048,7 @@ const char *debug_hlsl_expr_op(enum hlsl_ir_expr_op op)
+         [HLSL_OP1_FRACT]        = "fract",
+         [HLSL_OP1_ISFINITE]     = "isfinite",
+         [HLSL_OP1_ISINF]        = "isinf",
++        [HLSL_OP1_ISNAN]        = "isnan",
+         [HLSL_OP1_LOG2]         = "log2",
+         [HLSL_OP1_LOGIC_NOT]    = "!",
+         [HLSL_OP1_MIPS]         = "mips",
+@@ -4319,9 +4325,11 @@ static void dump_ir_interlocked(struct vkd3d_string_buffer *buffer, const struct
+         [HLSL_INTERLOCKED_AND] = "and",
+         [HLSL_INTERLOCKED_CMP_EXCH] = "cmp_exch",
+         [HLSL_INTERLOCKED_EXCH] = "exch",
+-        [HLSL_INTERLOCKED_MAX] = "max",
+-        [HLSL_INTERLOCKED_MIN] = "min",
++        [HLSL_INTERLOCKED_IMAX] = "imax",
++        [HLSL_INTERLOCKED_IMIN] = "imin",
+         [HLSL_INTERLOCKED_OR] = "or",
++        [HLSL_INTERLOCKED_UMAX] = "umax",
++        [HLSL_INTERLOCKED_UMIN] = "umin",
+         [HLSL_INTERLOCKED_XOR] = "xor",
+     };
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.h b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+index be894a6b6d1..751f055f84a 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.h
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+@@ -212,13 +212,13 @@ struct hlsl_type
+             unsigned int elements_count;
+             enum hlsl_array_type array_type;
+         } array;
+-        /* Additional information if the class is HLSL_CLASS_TEXTURE or
+-         * HLSL_CLASS_UAV. */
++        /* Additional information if type is HLSL_CLASS_TEXTURE, HLSL_CLASS_UAV,
++         * or HLSL_CLASS_CONSTANT_BUFFER. */
+         struct
+         {
+             /* Format of the data contained within the type. */
+             struct hlsl_type *format;
+-            /* The type is a rasteriser-ordered view. */
++            /* The type is a rasteriser-ordered view. Only used for HLSL_CLASS_UAV. */
+             bool rasteriser_ordered;
+         } resource;
+         /* Additional field to distinguish object types. Currently used only for technique types. */
+@@ -447,10 +447,11 @@ struct hlsl_attribute
+ #define HLSL_PRIMITIVE_TRIANGLE          0x01000000
+ #define HLSL_PRIMITIVE_LINEADJ           0x02000000
+ #define HLSL_PRIMITIVE_TRIANGLEADJ       0x04000000
++#define HLSL_MODIFIER_GLOBALLYCOHERENT   0x08000000
+ 
+-#define HLSL_TYPE_MODIFIERS_MASK     (HLSL_MODIFIER_PRECISE | HLSL_MODIFIER_VOLATILE | \
+-                                      HLSL_MODIFIER_CONST | HLSL_MODIFIER_ROW_MAJOR | \
+-                                      HLSL_MODIFIER_COLUMN_MAJOR | HLSL_MODIFIER_UNORM | HLSL_MODIFIER_SNORM)
++#define HLSL_TYPE_MODIFIERS_MASK (HLSL_MODIFIER_PRECISE | HLSL_MODIFIER_VOLATILE \
++        | HLSL_MODIFIER_CONST | HLSL_MODIFIER_ROW_MAJOR | HLSL_MODIFIER_COLUMN_MAJOR \
++        | HLSL_MODIFIER_UNORM | HLSL_MODIFIER_SNORM | HLSL_MODIFIER_GLOBALLYCOHERENT)
+ 
+ #define HLSL_INTERPOLATION_MODIFIERS_MASK (HLSL_STORAGE_NOINTERPOLATION | HLSL_STORAGE_CENTROID | \
+                                            HLSL_STORAGE_NOPERSPECTIVE | HLSL_STORAGE_LINEAR)
+@@ -783,6 +784,7 @@ enum hlsl_ir_expr_op
+     HLSL_OP1_FRACT,
+     HLSL_OP1_ISFINITE,
+     HLSL_OP1_ISINF,
++    HLSL_OP1_ISNAN,
+     HLSL_OP1_LOG2,
+     HLSL_OP1_LOGIC_NOT,
+     HLSL_OP1_MIPS,
+@@ -1038,9 +1040,11 @@ enum hlsl_interlocked_op
+     HLSL_INTERLOCKED_AND,
+     HLSL_INTERLOCKED_CMP_EXCH,
+     HLSL_INTERLOCKED_EXCH,
+-    HLSL_INTERLOCKED_MAX,
+-    HLSL_INTERLOCKED_MIN,
++    HLSL_INTERLOCKED_IMAX,
++    HLSL_INTERLOCKED_IMIN,
+     HLSL_INTERLOCKED_OR,
++    HLSL_INTERLOCKED_UMAX,
++    HLSL_INTERLOCKED_UMIN,
+     HLSL_INTERLOCKED_XOR,
+ };
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.y b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+index da6b62ecee4..90c668e34e5 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.y
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+@@ -1070,6 +1070,9 @@ static struct hlsl_type *apply_type_modifiers(struct hlsl_ctx *ctx, struct hlsl_
+                 "'row_major' and 'column_major' modifiers are only allowed for matrices.");
+     }
+ 
++    if (type->class == HLSL_CLASS_STRUCT)
++        *modifiers &= ~HLSL_MODIFIER_GLOBALLYCOHERENT;
++
+     if (!default_majority && !(*modifiers & HLSL_TYPE_MODIFIERS_MASK))
+         return type;
+ 
+@@ -2534,6 +2537,25 @@ static void validate_groupshared_var(struct hlsl_ctx *ctx, const struct hlsl_ir_
+     }
+ }
+ 
++static void check_invalid_globallycoherent(struct hlsl_ctx *ctx, const struct hlsl_type *type,
++        const struct vkd3d_shader_location *loc)
++{
++    if (type->class == HLSL_CLASS_ARRAY)
++    {
++        check_invalid_globallycoherent(ctx, type->e.array.type, loc);
++    }
++    else if (type->class == HLSL_CLASS_STRUCT)
++    {
++        for (unsigned int i = 0; i < type->e.record.field_count; ++i)
++            check_invalid_globallycoherent(ctx, type->e.record.fields[i].type, loc);
++    }
++    else if (type->class != HLSL_CLASS_UAV && (type->modifiers & HLSL_MODIFIER_GLOBALLYCOHERENT))
++    {
++        hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INVALID_MODIFIER,
++                "globallycoherent can only be used with UAVs.");
++    }
++}
++
+ static void declare_var(struct hlsl_ctx *ctx, struct parse_variable_def *v)
+ {
+     bool nonlocal = ctx->cur_scope == ctx->globals || ctx->cur_scope->namespace;
+@@ -2729,6 +2751,9 @@ static void declare_var(struct hlsl_ctx *ctx, struct parse_variable_def *v)
+             hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_MISPLACED_STREAM_OUTPUT,
+                     "Stream output object '%s' is not allowed in the global scope.", var->name);
+ 
++        if (!(modifiers & HLSL_STORAGE_STATIC))
++            check_invalid_globallycoherent(ctx, basic_type, &var->loc);
++
+         if ((ctx->profile->major_version < 5 || ctx->profile->type == VKD3D_SHADER_TYPE_EFFECT)
+                 && (var->storage_modifiers & HLSL_STORAGE_UNIFORM))
+         {
+@@ -4325,6 +4350,16 @@ static bool intrinsic_isinf(struct hlsl_ctx *ctx,
+     return !!add_expr(ctx, params->instrs, HLSL_OP1_ISINF, args, bool_type, loc);
+ }
+ 
++static bool intrinsic_isnan(struct hlsl_ctx *ctx,
++        const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
++{
++    struct hlsl_type *bool_type = hlsl_change_base_type(ctx, params->args[0]->data_type, HLSL_TYPE_BOOL);
++    struct hlsl_ir_node *args[HLSL_MAX_OPERANDS] = {0};
++
++    args[0] = params->args[0];
++    return !!add_expr(ctx, params->instrs, HLSL_OP1_ISNAN, args, bool_type, loc);
++}
++
+ static bool intrinsic_ldexp(struct hlsl_ctx *ctx,
+         const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+ {
+@@ -5290,12 +5325,47 @@ static bool intrinsic_GetRenderTargetSampleCount(struct hlsl_ctx *ctx,
+     return true;
+ }
+ 
++static struct hlsl_type *get_interlocked_exchange_type(struct hlsl_ctx *ctx, const struct hlsl_type *type)
++{
++    if (!type->is_minimum_precision
++            && (type->e.numeric.type == HLSL_TYPE_INT || type->e.numeric.type == HLSL_TYPE_UINT))
++        return hlsl_get_scalar_type(ctx, type->e.numeric.type);
++
++    return hlsl_get_scalar_type(ctx, HLSL_TYPE_FLOAT);
++}
++
++static void check_interlocked_dst_type(struct hlsl_ctx *ctx, const char *name, const struct hlsl_type *type,
++        enum hlsl_interlocked_op op, const struct vkd3d_shader_location *loc)
++{
++    struct vkd3d_string_buffer *string;
++
++    if (type->class == HLSL_CLASS_SCALAR && !type->is_minimum_precision)
++    {
++        if (type->e.numeric.type == HLSL_TYPE_INT || type->e.numeric.type == HLSL_TYPE_UINT)
++            return;
++
++        /* InterlockedExchange() also allows float/half destinations,
++         * but not double destinations. */
++        if (op == HLSL_INTERLOCKED_EXCH
++                && (type->e.numeric.type == HLSL_TYPE_FLOAT || type->e.numeric.type == HLSL_TYPE_HALF))
++            return;
++    }
++
++    if ((string = hlsl_type_to_string(ctx, type)))
++    {
++        hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
++                "Unexpected type for argument 0 of '%s': expected %s, but got '%s'.", name,
++                op == HLSL_INTERLOCKED_EXCH ? "'uint', 'int', 'float', or 'half'" : "'uint' or 'int'",
++                string->buffer);
++        hlsl_release_string_buffer(ctx, string);
++    }
++}
++
+ static bool intrinsic_interlocked(struct hlsl_ctx *ctx, enum hlsl_interlocked_op op,
+         const struct parse_initializer *params, const struct vkd3d_shader_location *loc, const char *name)
+ {
+     struct hlsl_ir_node *interlocked, *lhs, *val, *cmp_val = NULL, *orig_val = NULL;
+     struct hlsl_type *lhs_type, *val_type, *ret_type = NULL;
+-    struct vkd3d_string_buffer *string;
+     unsigned int writemask, component;
+     struct hlsl_deref dst_deref;
+     bool matrix_writemask;
+@@ -5316,6 +5386,8 @@ static bool intrinsic_interlocked(struct hlsl_ctx *ctx, enum hlsl_interlocked_op
+     lhs = params->args[0];
+     lhs_type = lhs->data_type;
+ 
++    check_interlocked_dst_type(ctx, name, lhs_type, op, loc);
++
+     if (op == HLSL_INTERLOCKED_CMP_EXCH)
+     {
+         cmp_val = params->args[1];
+@@ -5331,34 +5403,35 @@ static bool intrinsic_interlocked(struct hlsl_ctx *ctx, enum hlsl_interlocked_op
+     }
+ 
+     if (orig_val)
+-        ret_type = lhs_type;
+-
+-    if (lhs_type->class != HLSL_CLASS_SCALAR || (lhs_type->e.numeric.type != HLSL_TYPE_UINT
+-            && lhs_type->e.numeric.type != HLSL_TYPE_INT))
+     {
+-        if ((string = hlsl_type_to_string(ctx, lhs_type)))
+-        {
+-            hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
+-                    "Unexpected type for argument 0 of '%s': expected 'uint' or 'int', but got '%s'.",
+-                    name, string->buffer);
+-            hlsl_release_string_buffer(ctx, string);
+-        }
+-        return false;
++        /* Other than InterlockedExchange(), the original value is returned as int. */
++        if (op == HLSL_INTERLOCKED_EXCH)
++            ret_type = get_interlocked_exchange_type(ctx, orig_val->data_type);
++        else
++            ret_type = hlsl_get_scalar_type(ctx, HLSL_TYPE_INT);
+     }
+ 
+     /* Interlocked*() functions always take uint for the value parameters,
+      * except for InterlockedMax()/InterlockedMin(). */
+-    if (op == HLSL_INTERLOCKED_MAX || op == HLSL_INTERLOCKED_MIN)
++    if (op == HLSL_INTERLOCKED_UMAX || op == HLSL_INTERLOCKED_UMIN)
+     {
+-        enum hlsl_base_type val_base_type = val->data_type->e.numeric.type;
+-
+-        /* Floating values are always cast to signed integers. */
+-        if (val_base_type == HLSL_TYPE_FLOAT || val_base_type == HLSL_TYPE_HALF || val_base_type == HLSL_TYPE_DOUBLE)
+-            val_type = hlsl_get_scalar_type(ctx, HLSL_TYPE_INT);
+-        else if (val_base_type != lhs_type->e.numeric.type)
++        if (val->data_type->e.numeric.type == HLSL_TYPE_UINT)
++        {
+             val_type = hlsl_get_scalar_type(ctx, HLSL_TYPE_UINT);
++        }
+         else
+-            val_type = hlsl_get_scalar_type(ctx, val_base_type);
++        {
++            /* For InterlockedMax/Min, values other than uint are always cast to
++             * int first, but the interlocked operation itself is signed only if
++             * the destination type is int as well. */
++            val_type = hlsl_get_scalar_type(ctx, HLSL_TYPE_INT);
++            if (lhs_type->e.numeric.type == HLSL_TYPE_INT)
++                op = op == HLSL_INTERLOCKED_UMAX ? HLSL_INTERLOCKED_IMAX : HLSL_INTERLOCKED_IMIN;
++        }
++    }
++    else if (op == HLSL_INTERLOCKED_EXCH)
++    {
++        val_type = get_interlocked_exchange_type(ctx, val->data_type);
+     }
+     else
+     {
+@@ -5375,8 +5448,6 @@ static bool intrinsic_interlocked(struct hlsl_ctx *ctx, enum hlsl_interlocked_op
+         return false;
+ 
+     VKD3D_ASSERT(writemask);
+-    /* The writemask should be single component. */
+-    VKD3D_ASSERT(!(writemask & (writemask - 1)));
+ 
+     component = vkd3d_log2i(writemask);
+     if (matrix_writemask)
+@@ -5466,13 +5537,13 @@ static bool intrinsic_InterlockedExchange(struct hlsl_ctx *ctx,
+ static bool intrinsic_InterlockedMax(struct hlsl_ctx *ctx,
+         const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+ {
+-    return intrinsic_interlocked(ctx, HLSL_INTERLOCKED_MAX, params, loc, "InterlockedMax");
++    return intrinsic_interlocked(ctx, HLSL_INTERLOCKED_UMAX, params, loc, "InterlockedMax");
+ }
+ 
+ static bool intrinsic_InterlockedMin(struct hlsl_ctx *ctx,
+         const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+ {
+-    return intrinsic_interlocked(ctx, HLSL_INTERLOCKED_MIN, params, loc, "InterlockedMin");
++    return intrinsic_interlocked(ctx, HLSL_INTERLOCKED_UMIN, params, loc, "InterlockedMin");
+ }
+ 
+ static bool intrinsic_InterlockedOr(struct hlsl_ctx *ctx,
+@@ -5713,6 +5784,7 @@ intrinsic_functions[] =
+     {"fwidth",                              1, true,  intrinsic_fwidth},
+     {"isfinite",                            1, true,  intrinsic_isfinite},
+     {"isinf",                               1, true,  intrinsic_isinf},
++    {"isnan",                               1, true,  intrinsic_isnan},
+     {"ldexp",                               2, true,  intrinsic_ldexp},
+     {"length",                              1, true,  intrinsic_length},
+     {"lerp",                                3, true,  intrinsic_lerp},
+@@ -9431,6 +9503,8 @@ var_modifiers:
+                 $$ = add_modifiers(ctx, $2, HLSL_MODIFIER_PRECISE, &@1);
+             else if (!strcmp($1, "single"))
+                 $$ = add_modifiers(ctx, $2, HLSL_MODIFIER_SINGLE, &@1);
++            else if (!strcmp($1, "globallycoherent"))
++                $$ = add_modifiers(ctx, $2, HLSL_MODIFIER_GLOBALLYCOHERENT, &@1);
+             else
+                 hlsl_error(ctx, &@1, VKD3D_SHADER_ERROR_HLSL_UNKNOWN_MODIFIER,
+                         "Unknown modifier %s.", debugstr_a($1));
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+index ed7f9857bd5..ffb4ce45545 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+@@ -12816,6 +12816,12 @@ static bool sm4_generate_vsir_instr_expr(struct hlsl_ctx *ctx,
+             generate_vsir_instr_expr_single_instr_op(ctx, program, expr, VSIR_OP_FRC, 0, 0, true);
+             return true;
+ 
++        case HLSL_OP1_ISNAN:
++            VKD3D_ASSERT(dst_type->e.numeric.type == HLSL_TYPE_BOOL);
++            VKD3D_ASSERT(type_is_float(expr->operands[0].node->data_type));
++            generate_vsir_instr_expr_single_instr_op(ctx, program, expr, VSIR_OP_ISNAN, 0, 0, true);
++            return true;
++
+         case HLSL_OP1_LOG2:
+             VKD3D_ASSERT(type_is_float(dst_type));
+             generate_vsir_instr_expr_single_instr_op(ctx, program, expr, VSIR_OP_LOG, 0, 0, true);
+@@ -13815,9 +13821,11 @@ static bool sm4_generate_vsir_instr_interlocked(struct hlsl_ctx *ctx,
+         [HLSL_INTERLOCKED_ADD] = VSIR_OP_ATOMIC_IADD,
+         [HLSL_INTERLOCKED_AND] = VSIR_OP_ATOMIC_AND,
+         [HLSL_INTERLOCKED_CMP_EXCH] = VSIR_OP_ATOMIC_CMP_STORE,
+-        [HLSL_INTERLOCKED_MAX] = VSIR_OP_ATOMIC_UMAX,
+-        [HLSL_INTERLOCKED_MIN] = VSIR_OP_ATOMIC_UMIN,
++        [HLSL_INTERLOCKED_IMAX] = VSIR_OP_ATOMIC_IMAX,
++        [HLSL_INTERLOCKED_IMIN] = VSIR_OP_ATOMIC_IMIN,
+         [HLSL_INTERLOCKED_OR] = VSIR_OP_ATOMIC_OR,
++        [HLSL_INTERLOCKED_UMAX] = VSIR_OP_ATOMIC_UMAX,
++        [HLSL_INTERLOCKED_UMIN] = VSIR_OP_ATOMIC_UMIN,
+         [HLSL_INTERLOCKED_XOR] = VSIR_OP_ATOMIC_XOR,
+     };
+ 
+@@ -13827,9 +13835,11 @@ static bool sm4_generate_vsir_instr_interlocked(struct hlsl_ctx *ctx,
+         [HLSL_INTERLOCKED_AND] = VSIR_OP_IMM_ATOMIC_AND,
+         [HLSL_INTERLOCKED_CMP_EXCH] = VSIR_OP_IMM_ATOMIC_CMP_EXCH,
+         [HLSL_INTERLOCKED_EXCH] = VSIR_OP_IMM_ATOMIC_EXCH,
+-        [HLSL_INTERLOCKED_MAX] = VSIR_OP_IMM_ATOMIC_UMAX,
+-        [HLSL_INTERLOCKED_MIN] = VSIR_OP_IMM_ATOMIC_UMIN,
++        [HLSL_INTERLOCKED_IMAX] = VSIR_OP_IMM_ATOMIC_IMAX,
++        [HLSL_INTERLOCKED_IMIN] = VSIR_OP_IMM_ATOMIC_IMIN,
+         [HLSL_INTERLOCKED_OR] = VSIR_OP_IMM_ATOMIC_OR,
++        [HLSL_INTERLOCKED_UMAX] = VSIR_OP_IMM_ATOMIC_UMAX,
++        [HLSL_INTERLOCKED_UMIN] = VSIR_OP_IMM_ATOMIC_UMIN,
+         [HLSL_INTERLOCKED_XOR] = VSIR_OP_IMM_ATOMIC_XOR,
+     };
+ 
+@@ -13850,18 +13860,6 @@ static bool sm4_generate_vsir_instr_interlocked(struct hlsl_ctx *ctx,
+ 
+     opcode = is_imm ? imm_opcodes[interlocked->op] : opcodes[interlocked->op];
+ 
+-    if (value->data_type->e.numeric.type == HLSL_TYPE_INT)
+-    {
+-        if (opcode == VSIR_OP_ATOMIC_UMAX)
+-            opcode = VSIR_OP_ATOMIC_IMAX;
+-        else if (opcode == VSIR_OP_ATOMIC_UMIN)
+-            opcode = VSIR_OP_ATOMIC_IMIN;
+-        else if (opcode == VSIR_OP_IMM_ATOMIC_UMAX)
+-            opcode = VSIR_OP_IMM_ATOMIC_IMAX;
+-        else if (opcode == VSIR_OP_IMM_ATOMIC_UMIN)
+-            opcode = VSIR_OP_IMM_ATOMIC_IMIN;
+-    }
+-
+     if (!(ins = generate_vsir_add_program_instruction(ctx, program, &instr->loc, opcode,
+             is_imm ? 2 : 1, cmp_value ? 3 : 2)))
+         return false;
+@@ -14609,8 +14607,13 @@ static void sm4_generate_vsir_add_dcl_texture(struct hlsl_ctx *ctx,
+         vsir_dst_operand_init(&vsir_resource->reg,
+                 uav ? VSIR_REGISTER_UAV : VSIR_REGISTER_RESOURCE, VSIR_DATA_UNUSED, 0);
+ 
+-        if (uav && component_type->e.resource.rasteriser_ordered)
+-            ins->flags = VKD3DSUF_RASTERISER_ORDERED_VIEW;
++        if (uav)
++        {
++            if (component_type->e.resource.rasteriser_ordered)
++                ins->flags |= VKD3DSUF_RASTERISER_ORDERED_VIEW;
++            if (component_type->modifiers & HLSL_MODIFIER_GLOBALLYCOHERENT)
++                ins->flags |= VKD3DSUF_GLOBALLY_COHERENT;
++        }
+ 
+         multisampled = component_type->sampler_dim == HLSL_SAMPLER_DIM_2DMS
+                 || component_type->sampler_dim == HLSL_SAMPLER_DIM_2DMSARRAY;
+@@ -14871,8 +14874,13 @@ static void generate_vsir_descriptors_for_var(struct hlsl_ctx *ctx, struct vsir_
+                     || component_type->sampler_dim == HLSL_SAMPLER_DIM_2DMSARRAY)
+                 d->sample_count = component_type->sample_count;
+ 
+-            if (type == VKD3D_SHADER_DESCRIPTOR_TYPE_UAV && component_type->e.resource.rasteriser_ordered)
+-                d->uav_flags |= VKD3DSUF_RASTERISER_ORDERED_VIEW;
++            if (type == VKD3D_SHADER_DESCRIPTOR_TYPE_UAV)
++            {
++                if (component_type->e.resource.rasteriser_ordered)
++                    d->uav_flags |= VKD3DSUF_RASTERISER_ORDERED_VIEW;
++                if (component_type->modifiers & HLSL_MODIFIER_GLOBALLYCOHERENT)
++                    d->uav_flags |= VKD3DSUF_GLOBALLY_COHERENT;
++            }
+ 
+             if (var->objects_usage[r][regset_offset].uav_read)
+                 d->flags |= VKD3D_SHADER_DESCRIPTOR_INFO_FLAG_UAV_READ;
+@@ -16701,6 +16709,34 @@ static struct hlsl_ir_node *lower_isinf(struct hlsl_ctx *ctx, struct hlsl_ir_nod
+     return hlsl_block_add_simple_load(ctx, block, func->return_var, &node->loc);
+ }
+ 
++static struct hlsl_ir_node *lower_isnan(struct hlsl_ctx *ctx, struct hlsl_ir_node *node, struct hlsl_block *block)
++{
++    struct hlsl_ir_node *operands[HLSL_MAX_OPERANDS] = {0};
++    struct hlsl_constant_value false_value = {0};
++    struct hlsl_type *float_type;
++    struct hlsl_ir_expr *expr;
++    struct hlsl_ir_node *arg;
++
++    if (node->type != HLSL_IR_EXPR)
++        return NULL;
++
++    expr = hlsl_ir_expr(node);
++    if (expr->op != HLSL_OP1_ISNAN)
++        return NULL;
++
++    arg = expr->operands[0].node;
++
++    if (hlsl_version_lt(ctx, 4, 0) || hlsl_type_is_integer(arg->data_type))
++        return hlsl_block_add_constant(ctx, block, node->data_type, &false_value, &node->loc);
++
++    if (type_is_float(arg->data_type))
++        return NULL;
++
++    float_type = hlsl_change_base_type(ctx, arg->data_type, HLSL_TYPE_FLOAT);
++    operands[0] = hlsl_block_add_cast(ctx, block, arg, float_type, &node->loc);
++    return hlsl_block_add_expr(ctx, block, HLSL_OP1_ISNAN, operands, node->data_type, &node->loc);
++}
++
+ static void process_entry_function(struct hlsl_ctx *ctx, struct vsir_program *program,
+         struct list *semantic_vars, struct hlsl_block *body,
+         const struct hlsl_block *global_uniform_block, struct hlsl_ir_function_decl *entry_func)
+@@ -16747,6 +16783,7 @@ static void process_entry_function(struct hlsl_ctx *ctx, struct vsir_program *pr
+ 
+     replace_ir(ctx, lower_isfinite, body);
+     replace_ir(ctx, lower_isinf, body);
++    replace_ir(ctx, lower_isnan, body);
+ 
+     lower_return(ctx, entry_func, body, false);
+ 
+diff --git a/libs/vkd3d/libs/vkd3d-shader/preproc.l b/libs/vkd3d/libs/vkd3d-shader/preproc.l
+index 9b7760ebb48..71f06fa14fc 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/preproc.l
++++ b/libs/vkd3d/libs/vkd3d-shader/preproc.l
+@@ -24,6 +24,7 @@
+ 
+ %{
+ 
++#include "preproc.h"
+ #include "preproc.tab.h"
+ 
+ #undef ERROR  /* defined in wingdi.h */
+diff --git a/libs/vkd3d/libs/vkd3d-shader/tpf.c b/libs/vkd3d/libs/vkd3d-shader/tpf.c
+index b29e3227eed..d39b27bd224 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/tpf.c
++++ b/libs/vkd3d/libs/vkd3d-shader/tpf.c
+@@ -4192,6 +4192,19 @@ static void tpf_simple_instruction(struct tpf_compiler *tpf, const struct vsir_i
+     write_sm4_instruction(tpf, &instr);
+ }
+ 
++static void tpf_isnan(struct tpf_compiler *tpf, const struct vsir_instruction *ins)
++{
++    struct vsir_src_operand src[2] = {ins->src[0], ins->src[0]};
++    struct vsir_instruction neu_ins;
++
++    neu_ins = *ins;
++    neu_ins.opcode = VSIR_OP_NEU;
++    neu_ins.src_count = 2;
++    neu_ins.src = src;
++
++    tpf_simple_instruction(tpf, &neu_ins);
++}
++
+ static void tpf_handle_instruction(struct tpf_compiler *tpf, const struct vsir_instruction *ins)
+ {
+     tpf->location = ins->location;
+@@ -4397,6 +4410,10 @@ static void tpf_handle_instruction(struct tpf_compiler *tpf, const struct vsir_i
+             tpf_simple_instruction(tpf, ins);
+             break;
+ 
++        case VSIR_OP_ISNAN:
++            tpf_isnan(tpf, ins);
++            break;
++
+         default:
+             tpf_compiler_error(tpf, VKD3D_SHADER_ERROR_TPF_NOT_IMPLEMENTED,
+                     "Unhandled instruction \"%s\" (%#x).\n",
+diff --git a/libs/vkd3d/libs/vkd3d-utils/reflection.c b/libs/vkd3d/libs/vkd3d-utils/reflection.c
+index 010bb98a784..dcbbd541173 100644
+--- a/libs/vkd3d/libs/vkd3d-utils/reflection.c
++++ b/libs/vkd3d/libs/vkd3d-utils/reflection.c
+@@ -18,7 +18,8 @@
+  */
+ 
+ #include "vkd3d_utils_private.h"
+-#include <d3d10.h>
++#include <d3dcommon.h>
++#include <d3d10effect.h>
+ #include <d3d10_1shader.h>
+ #include <d3d11shader.h>
+ #include <d3d12shader.h>
+diff --git a/libs/vkd3d/libs/vkd3d-utils/vkd3d_utils_main.c b/libs/vkd3d/libs/vkd3d-utils/vkd3d_utils_main.c
+index 18eb4c3b5c9..1deb72d41d2 100644
+--- a/libs/vkd3d/libs/vkd3d-utils/vkd3d_utils_main.c
++++ b/libs/vkd3d/libs/vkd3d-utils/vkd3d_utils_main.c
+@@ -71,7 +71,7 @@ HRESULT WINAPI D3D12CreateDeviceVKD3D(IUnknown *adapter, D3D_FEATURE_LEVEL minim
+     struct vkd3d_instance_create_info instance_create_info;
+     struct vkd3d_device_create_info device_create_info;
+ 
+-    static const char * const optional_instance_extensions[] =
++    static const char * const optional_instance_extensions_mvk[] =
+     {
+         VK_KHR_SURFACE_EXTENSION_NAME,
+         "VK_KHR_android_surface",
+@@ -83,6 +83,16 @@ HRESULT WINAPI D3D12CreateDeviceVKD3D(IUnknown *adapter, D3D_FEATURE_LEVEL minim
+         "VK_MVK_macos_surface",
+         "VK_MVK_ios_surface",
+     };
++    static const char * const optional_instance_extensions[] =
++    {
++        VK_KHR_SURFACE_EXTENSION_NAME,
++        "VK_KHR_android_surface",
++        "VK_KHR_wayland_surface",
++        "VK_KHR_win32_surface",
++        "VK_KHR_xcb_surface",
++        "VK_KHR_xlib_surface",
++        "VK_EXT_metal_surface",
++    };
+     static const char * const optional_device_extensions[] =
+     {
+         VK_KHR_SWAPCHAIN_EXTENSION_NAME,
+@@ -102,8 +112,23 @@ HRESULT WINAPI D3D12CreateDeviceVKD3D(IUnknown *adapter, D3D_FEATURE_LEVEL minim
+     memset(&optional_instance_extensions_info, 0, sizeof(optional_instance_extensions_info));
+     optional_instance_extensions_info.type = VKD3D_STRUCTURE_TYPE_OPTIONAL_INSTANCE_EXTENSIONS_INFO;
+     optional_instance_extensions_info.next = &application_info;
+-    optional_instance_extensions_info.extensions = optional_instance_extensions;
+-    optional_instance_extensions_info.extension_count = ARRAY_SIZE(optional_instance_extensions);
++    if (api_version <= VKD3D_API_VERSION_2_2)
++    {
++        optional_instance_extensions_info.extensions = optional_instance_extensions_mvk;
++        optional_instance_extensions_info.extension_count = ARRAY_SIZE(optional_instance_extensions_mvk);
++    }
++    else
++    {
++        /* A macOS system with both MoltenVK and KosmicKrisp installed will
++         * offer instance extension VK_MVK_macos_surface, but creating a
++         * KosmicKrisp device with that extension will fail because
++         * KosmicKrisp only supports VK_EXT_metal_surface. Since
++         * VK_MVK_macos_surface is now deprecated, and VK_EXT_metal_surface is
++         * the extension blessed by the specification that both MoltenVK and
++         * KosmicKrisp support, do not request VK_MVK_macos_surface any more. */
++        optional_instance_extensions_info.extensions = optional_instance_extensions;
++        optional_instance_extensions_info.extension_count = ARRAY_SIZE(optional_instance_extensions);
++    }
+ 
+     memset(&instance_create_info, 0, sizeof(instance_create_info));
+     instance_create_info.type = VKD3D_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+-- 
+2.53.0
+
