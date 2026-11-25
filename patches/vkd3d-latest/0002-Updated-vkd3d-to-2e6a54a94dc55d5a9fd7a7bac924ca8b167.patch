@@ -1,0 +1,1851 @@
+From 979c1f25d22865af216f22bc3fa3ec443121a0a0 Mon Sep 17 00:00:00 2001
+From: Alistair Leslie-Hughes <leslie_alistair@hotmail.com>
+Date: Wed, 25 Nov 2026 06:57:42 +1100
+Subject: [PATCH] Updated vkd3d to 2e6a54a94dc55d5a9fd7a7bac924ca8b167f085f.
+
+---
+ libs/vkd3d/include/private/vkd3d_version.h    |   2 +-
+ libs/vkd3d/libs/vkd3d-shader/dxbc.c           |  27 +-
+ libs/vkd3d/libs/vkd3d-shader/dxil.c           |  13 +-
+ libs/vkd3d/libs/vkd3d-shader/fx.c             |   9 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl.c           |  45 +-
+ libs/vkd3d/libs/vkd3d-shader/hlsl.h           |  52 ++-
+ libs/vkd3d/libs/vkd3d-shader/hlsl.y           | 414 ++++++++++++------
+ libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c   | 225 +++++-----
+ .../libs/vkd3d-shader/hlsl_constant_ops.c     |  14 +
+ libs/vkd3d/libs/vkd3d-shader/preproc.y        |   1 +
+ libs/vkd3d/libs/vkd3d-shader/tpf.c            |  17 +
+ .../libs/vkd3d-shader/vkd3d_shader_private.h  |   2 +
+ 12 files changed, 552 insertions(+), 269 deletions(-)
+
+diff --git a/libs/vkd3d/include/private/vkd3d_version.h b/libs/vkd3d/include/private/vkd3d_version.h
+index c3f4b7f3829..5c2a2dc6cb2 100644
+--- a/libs/vkd3d/include/private/vkd3d_version.h
++++ b/libs/vkd3d/include/private/vkd3d_version.h
+@@ -1 +1 @@
+-#define VKD3D_VCS_ID " (git f32cc045)"
++#define VKD3D_VCS_ID " (git 2e6a54a9)"
+diff --git a/libs/vkd3d/libs/vkd3d-shader/dxbc.c b/libs/vkd3d/libs/vkd3d-shader/dxbc.c
+index 10222d84e3d..26bca0453c2 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/dxbc.c
++++ b/libs/vkd3d/libs/vkd3d-shader/dxbc.c
+@@ -178,7 +178,7 @@ static int parse_dxbc(const struct vkd3d_shader_code *dxbc, struct vkd3d_shader_
+     const char *data = dxbc->code;
+     size_t data_size = dxbc->size;
+     const char *ptr = data;
+-    uint32_t chunk_count;
++    uint32_t section_count;
+     uint32_t total_size;
+     uint32_t version;
+     unsigned int i;
+@@ -232,16 +232,22 @@ static int parse_dxbc(const struct vkd3d_shader_code *dxbc, struct vkd3d_shader_
+     total_size = read_u32(&ptr);
+     TRACE("total size: %#x\n", total_size);
+ 
+-    chunk_count = read_u32(&ptr);
+-    TRACE("chunk count: %#x\n", chunk_count);
++    section_count = read_u32(&ptr);
++    TRACE("section count: %#x\n", section_count);
++    if (!require_space(VKD3D_DXBC_HEADER_SIZE, section_count, sizeof(uint32_t), data_size))
++    {
++        vkd3d_shader_error(message_context, &location, VKD3D_SHADER_ERROR_DXBC_INVALID_SECTION_COUNT,
++                "DXBC section count %u is too large for DXBC size %zu.", section_count, data_size);
++        return VKD3D_ERROR_INVALID_ARGUMENT;
++    }
+ 
+-    if (!(sections = vkd3d_calloc(chunk_count, sizeof(*sections))))
++    if (!(sections = vkd3d_calloc(section_count, sizeof(*sections))))
+     {
+         vkd3d_shader_error(message_context, &location, VKD3D_SHADER_ERROR_DXBC_OUT_OF_MEMORY, "Out of memory.");
+         return VKD3D_ERROR_OUT_OF_MEMORY;
+     }
+ 
+-    for (i = 0; i < chunk_count; ++i)
++    for (i = 0; i < section_count; ++i)
+     {
+         uint32_t chunk_tag, chunk_size;
+         const char *chunk_ptr;
+@@ -282,7 +288,7 @@ static int parse_dxbc(const struct vkd3d_shader_code *dxbc, struct vkd3d_shader_
+     memcpy(desc->checksum, checksum, sizeof(checksum));
+     desc->version = version;
+     desc->size = total_size;
+-    desc->section_count = chunk_count;
++    desc->section_count = section_count;
+     desc->sections = sections;
+ 
+     return VKD3D_OK;
+@@ -370,6 +376,7 @@ static int vsir_signature_parse(struct vsir_signature *s, const struct vkd3d_sha
+     struct vsir_signature_element *e;
+     uint32_t count, header_size;
+     const char *ptr = data;
++    size_t element_size;
+     bool fail = false;
+     unsigned int i;
+ 
+@@ -394,7 +401,10 @@ static int vsir_signature_parse(struct vsir_signature *s, const struct vkd3d_sha
+     }
+     skip_dword_unknown(&ptr, i - 2);
+ 
+-    if (!require_space(ptr - data, count, 6 * sizeof(uint32_t), section->data.size))
++    has_min_precision = section->tag == TAG_OSG1 || section->tag == TAG_PSG1 || section->tag == TAG_ISG1;
++    has_stream_index = section->tag == TAG_OSG5 || has_min_precision;
++    element_size = (6 + !!has_min_precision + !!has_stream_index) * sizeof(uint32_t);
++    if (!require_space(ptr - data, count, element_size, section->data.size))
+     {
+         WARN("Invalid count %#x (data size %#zx).\n", count, section->data.size);
+         return VKD3D_ERROR_INVALID_ARGUMENT;
+@@ -406,9 +416,6 @@ static int vsir_signature_parse(struct vsir_signature *s, const struct vkd3d_sha
+         return VKD3D_ERROR_OUT_OF_MEMORY;
+     }
+ 
+-    has_min_precision = section->tag == TAG_OSG1 || section->tag == TAG_PSG1 || section->tag == TAG_ISG1;
+-    has_stream_index = section->tag == TAG_OSG5 || has_min_precision;
+-
+     for (i = 0; i < count; ++i)
+     {
+         size_t name_offset;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/dxil.c b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+index 51e273a17ab..f9a53127fff 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/dxil.c
++++ b/libs/vkd3d/libs/vkd3d-shader/dxil.c
+@@ -1063,13 +1063,16 @@ static uint32_t sm6_parser_read_bits(struct sm6_parser *sm6, unsigned int length
+     if (l <= length)
+     {
+         ++sm6->ptr;
+-        if (sm6_parser_is_end(sm6) && l < length)
++        sm6->bitpos = 0;
++        if (l < length)
+         {
+-            sm6->p.status = VKD3D_ERROR_INVALID_SHADER;
+-            return bits;
++            if (sm6_parser_is_end(sm6))
++            {
++                sm6->p.status = VKD3D_ERROR_INVALID_SHADER;
++                return bits;
++            }
++            bits |= *sm6->ptr << l;
+         }
+-        sm6->bitpos = 0;
+-        bits |= *sm6->ptr << l;
+         prev_len = l;
+     }
+     if (length < 32)
+diff --git a/libs/vkd3d/libs/vkd3d-shader/fx.c b/libs/vkd3d/libs/vkd3d-shader/fx.c
+index 2e8615c84b5..307a97042f3 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/fx.c
++++ b/libs/vkd3d/libs/vkd3d-shader/fx.c
+@@ -3665,12 +3665,13 @@ static void write_fx_4_object_variable(struct hlsl_ir_var *var, struct fx_write_
+     const struct hlsl_type *type = hlsl_get_multiarray_element_type(var->data_type);
+     uint32_t elements_count = hlsl_get_multiarray_size(var->data_type);
+     struct vkd3d_bytecode_buffer *buffer = &fx->structured;
++    const struct hlsl_reg_reservation *reservation;
+     uint32_t semantic_offset, bind_point = ~0u;
+     uint32_t name_offset, type_offset;
+     struct hlsl_ctx *ctx = fx->ctx;
+ 
+-    if (var->reg_reservation.reg_type)
+-        bind_point = var->reg_reservation.reg_index;
++    if ((reservation = hlsl_ir_var_get_current_reservation(var, ctx)))
++        bind_point = reservation->index;
+ 
+     type_offset = write_var_type(var, fx);
+     name_offset = write_string(var->name, fx);
+@@ -3767,8 +3768,8 @@ static void write_fx_4_buffer(struct hlsl_buffer *b, struct fx_write_context *fx
+ 
+     shared = fx->child_effect && b->modifiers & HLSL_STORAGE_SHARED;
+ 
+-    if (b->reservation.reg_type)
+-        bind_point = b->reservation.reg_index;
++    if (b->reservation.type)
++        bind_point = b->reservation.index;
+     if (b->type == HLSL_BUFFER_TEXTURE)
+         flags |= IS_TBUFFER;
+     if (ctx->profile->major_version == 5 && b->modifiers & HLSL_MODIFIER_SINGLE)
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.c b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+index 4e50559f5a2..0aac36af3f1 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.c
+@@ -226,6 +226,7 @@ void hlsl_free_var(struct hlsl_ir_var *decl)
+     for (i = 0; i < decl->state_block_count; ++i)
+         hlsl_free_state_block(decl->state_blocks[i]);
+     vkd3d_free(decl->state_blocks);
++    vkd3d_free(decl->reservations.list);
+ 
+     vkd3d_free(decl);
+ }
+@@ -1585,7 +1586,7 @@ struct hlsl_ir_node *hlsl_new_copy(struct hlsl_ctx *ctx, struct hlsl_ir_node *no
+ 
+ struct hlsl_ir_var *hlsl_new_var(struct hlsl_ctx *ctx, const char *name, struct hlsl_type *type,
+         const struct vkd3d_shader_location *loc, const struct hlsl_semantic *semantic, uint32_t modifiers,
+-        const struct hlsl_reg_reservation *reg_reservation)
++        const struct hlsl_packoffset *offset, struct hlsl_reg_reservation_list *reservations)
+ {
+     struct hlsl_ir_var *var;
+     unsigned int k;
+@@ -1596,11 +1597,13 @@ struct hlsl_ir_var *hlsl_new_var(struct hlsl_ctx *ctx, const char *name, struct
+     var->name = name;
+     var->data_type = type;
+     var->loc = *loc;
++    if (offset)
++        var->offset = *offset;
+     if (semantic)
+         var->semantic = *semantic;
+     var->storage_modifiers = modifiers;
+-    if (reg_reservation)
+-        var->reg_reservation = *reg_reservation;
++    if (reservations)
++        var->reservations = *reservations;
+ 
+     for (k = 0; k <= HLSL_REGSET_LAST_OBJECT; ++k)
+     {
+@@ -1613,6 +1616,7 @@ struct hlsl_ir_var *hlsl_new_var(struct hlsl_ctx *ctx, const char *name, struct
+         {
+             for (i = 0; i < k; ++i)
+                 vkd3d_free(var->objects_usage[i]);
++            vkd3d_free(var->reservations.list);
+             vkd3d_free(var);
+             return NULL;
+         }
+@@ -1643,7 +1647,7 @@ struct hlsl_ir_var *hlsl_new_synthetic_var_named(struct hlsl_ctx *ctx, const cha
+ 
+     if (!(name_copy = hlsl_strdup(ctx, name)))
+         return NULL;
+-    var = hlsl_new_var(ctx, name_copy, type, loc, NULL, 0, NULL);
++    var = hlsl_new_var(ctx, name_copy, type, loc, NULL, 0, NULL, NULL);
+     if (var)
+     {
+         if (dummy_scope)
+@@ -5100,6 +5104,7 @@ const struct hlsl_profile_info *hlsl_get_target_info(const char *target)
+         {"vs_1_1",              VKD3D_SHADER_TYPE_VERTEX,   1, 1, 0, 0, false},
+         {"vs_2_0",              VKD3D_SHADER_TYPE_VERTEX,   2, 0, 0, 0, false},
+         {"vs_2_a",              VKD3D_SHADER_TYPE_VERTEX,   2, 1, 0, 0, false},
++        {"vs_2_x",              VKD3D_SHADER_TYPE_VERTEX,   2, 1, 0, 0, false},
+         {"vs_2_sw",             VKD3D_SHADER_TYPE_VERTEX,   2, 0, 0, 0, true},
+         {"vs_3_0",              VKD3D_SHADER_TYPE_VERTEX,   3, 0, 0, 0, false},
+         {"vs_3_sw",             VKD3D_SHADER_TYPE_VERTEX,   3, 0, 0, 0, true},
+@@ -5709,3 +5714,35 @@ struct hlsl_ir_function_decl *hlsl_compile_internal_function(struct hlsl_ctx *ct
+     hlsl_release_string_buffer(ctx, internal_name);
+     return func;
+ }
++
++const struct hlsl_reg_reservation *hlsl_ir_var_get_current_reservation(const struct hlsl_ir_var *var,
++        struct hlsl_ctx *ctx)
++{
++    const struct hlsl_reg_reservation *reservation, *ret = NULL;
++
++    for (size_t i = 0; i < var->reservations.count; ++i)
++    {
++        reservation = &var->reservations.list[i];
++
++        if (hlsl_version_ge(ctx, 5, 1))
++            return reservation;
++
++        if (reservation->shader_type != VKD3D_SHADER_TYPE_UNSPECIFIED && reservation->shader_type != ctx->profile->type)
++            continue;
++
++        if (reservation->profile && reservation->profile != ctx->profile)
++            continue;
++
++        if (ret)
++        {
++            hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
++                    "Conflicting register reservations: '%c%u' '%c%u'.",
++                    reservation->type, reservation->index, ret->type, ret->index);
++            return NULL;
++        }
++
++        ret = reservation;
++    }
++
++    return ret;
++}
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.h b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+index 751f055f84a..88e6e109992 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.h
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.h
+@@ -463,17 +463,28 @@ struct hlsl_attribute
+ 
+ #define HLSL_ARRAY_ELEMENTS_COUNT_IMPLICIT 0
+ 
+-/* Reservation of a register and/or an offset for objects inside constant buffers, to be used as a
+- *   starting point of their allocation. They are available through the register(·) and the
+- *   packoffset(·) syntaxes, respectively.
+- * The constant buffer offset is measured register components. */
+-struct hlsl_reg_reservation
++/* Reservation of a register, to be used as a starting point of their
++ * allocation, available through the register(·) syntax. */
++struct hlsl_reg_reservation_list
+ {
+-    char reg_type;
+-    unsigned int reg_space, reg_index;
++    struct hlsl_reg_reservation
++    {
++        enum vkd3d_shader_type shader_type;
++        const struct hlsl_profile_info *profile;
++
++        char type;
++        unsigned int space, index;
++    } *list;
++    size_t count;
++};
+ 
+-    char offset_type;
+-    unsigned int offset_index;
++/* Reservation of an offset for objects inside constant buffers, to be used
++ * as a starting point of their allocation, available through the packoffset(·) syntax.
++ * The constant buffer offset is measured in register components. */
++struct hlsl_packoffset
++{
++    char type;
++    unsigned int index;
+ };
+ 
+ union hlsl_constant_value_component
+@@ -494,8 +505,11 @@ struct hlsl_ir_var
+     struct hlsl_buffer *buffer;
+     /* Bitfield for storage modifiers (type modifiers are stored in data_type->modifiers). */
+     uint32_t storage_modifiers;
+-    /* Optional reservations of registers and/or offsets for variables within constant buffers. */
+-    struct hlsl_reg_reservation reg_reservation;
++    /* Optional reservations of registers. */
++    struct hlsl_reg_reservation_list reservations;
++
++    /* Optional reservation of offset for objects inside constant buffers. */
++    struct hlsl_packoffset offset;
+ 
+     /* Item entry in hlsl_scope.vars. Specifically hlsl_ctx.globals.vars if the variable is global. */
+     struct list scope_entry;
+@@ -710,9 +724,14 @@ struct hlsl_ir_if
+ 
+ enum hlsl_loop_unroll_type
+ {
++    /* Skip unroll and don't even check for a limiter. */
++    HLSL_LOOP_FASTOPT,
++    /* Prefer not to unroll, and also check for a limiter variable in SM3. */
++    HLSL_LOOP_FORCE_LOOP,
++    /* Attempt to unroll, but use a loop if that fails. */
+     HLSL_LOOP_UNROLL,
++    /* Force an unroll, emit an error if that fails. */
+     HLSL_LOOP_FORCE_UNROLL,
+-    HLSL_LOOP_FORCE_LOOP
+ };
+ 
+ enum hlsl_loop_type
+@@ -1144,6 +1163,7 @@ struct hlsl_buffer
+      * If provided, it should be of type 'b' if type is HLSL_BUFFER_CONSTANT and 't' if type is
+      *   HLSL_BUFFER_TEXTURE. */
+     struct hlsl_reg_reservation reservation;
++
+     /* Scope that contains annotations for this buffer. */
+     struct hlsl_scope *annotations;
+     /* Item entry for hlsl_ctx.buffers */
+@@ -1596,10 +1616,8 @@ static inline unsigned int hlsl_sampler_dim_count(enum hlsl_sampler_dim dim)
+     }
+ }
+ 
+-static inline bool hlsl_var_has_buffer_offset_register_reservation(struct hlsl_ctx *ctx, const struct hlsl_ir_var *var)
+-{
+-    return var->reg_reservation.reg_type == 'c' && var->buffer == ctx->globals_buffer;
+-}
++const struct hlsl_reg_reservation *hlsl_ir_var_get_current_reservation(const struct hlsl_ir_var *var,
++        struct hlsl_ctx *ctx);
+ 
+ static inline bool hlsl_is_comparison_op(enum hlsl_ir_expr_op op)
+ {
+@@ -1821,7 +1839,7 @@ struct hlsl_ir_node *hlsl_new_uint_constant(struct hlsl_ctx *ctx, unsigned int n
+ struct hlsl_ir_node *hlsl_new_null_constant(struct hlsl_ctx *ctx, const struct vkd3d_shader_location *loc);
+ struct hlsl_ir_var *hlsl_new_var(struct hlsl_ctx *ctx, const char *name, struct hlsl_type *type,
+         const struct vkd3d_shader_location *loc, const struct hlsl_semantic *semantic, uint32_t modifiers,
+-        const struct hlsl_reg_reservation *reg_reservation);
++        const struct hlsl_packoffset *offset, struct hlsl_reg_reservation_list *reservations);
+ struct hlsl_ir_switch_case *hlsl_new_switch_case(struct hlsl_ctx *ctx, unsigned int value, bool is_default,
+         struct hlsl_block *body, const struct vkd3d_shader_location *loc);
+ struct hlsl_ir_node *hlsl_new_switch(struct hlsl_ctx *ctx, struct hlsl_ir_node *selector,
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl.y b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+index 90c668e34e5..bf749553f10 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl.y
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl.y
+@@ -48,7 +48,8 @@ struct parse_parameter
+     struct hlsl_type *type;
+     const char *name;
+     struct hlsl_semantic semantic;
+-    struct hlsl_reg_reservation reg_reservation;
++    struct hlsl_reg_reservation_list reservations;
++    struct hlsl_packoffset offset;
+     uint32_t modifiers;
+     struct parse_initializer initializer;
+ };
+@@ -56,7 +57,9 @@ struct parse_parameter
+ struct parse_colon_attributes
+ {
+     struct hlsl_semantic semantic;
+-    struct hlsl_reg_reservation reg_reservation;
++    struct hlsl_reg_reservation_list reservations;
++    size_t reservation_capacity;
++    struct hlsl_packoffset offset;
+ };
+ 
+ struct parse_array_sizes
+@@ -73,7 +76,8 @@ struct parse_variable_def
+     char *name;
+     struct parse_array_sizes arrays;
+     struct hlsl_semantic semantic;
+-    struct hlsl_reg_reservation reg_reservation;
++    struct hlsl_reg_reservation_list reservations;
++    struct hlsl_packoffset offset;
+     struct parse_initializer initializer;
+     struct hlsl_scope *annotations;
+ 
+@@ -706,10 +710,15 @@ static struct hlsl_block *create_loop(struct hlsl_ctx *ctx, enum hlsl_loop_type
+         }
+         else if (!strcmp(attr->name, "loop"))
+         {
+-            unroll_type = HLSL_LOOP_FORCE_LOOP;
++            /* [loop] doesn't override fastopt. */
++            if (unroll_type == HLSL_LOOP_UNROLL)
++                unroll_type = HLSL_LOOP_FORCE_LOOP;
+         }
+-        else if (!strcmp(attr->name, "fastopt")
+-                || !strcmp(attr->name, "allow_uav_condition"))
++        else if (!strcmp(attr->name, "fastopt"))
++        {
++            unroll_type = HLSL_LOOP_FASTOPT;
++        }
++        else if (!strcmp(attr->name, "allow_uav_condition"))
+         {
+             hlsl_fixme(ctx, loc, "Unhandled attribute '%s'.", attr->name);
+         }
+@@ -770,6 +779,7 @@ static void cleanup_parse_attribute_list(struct parse_attribute_list *attr_list)
+ static void parse_colon_attributes_cleanup(struct parse_colon_attributes *a)
+ {
+     hlsl_cleanup_semantic(&a->semantic);
++    vkd3d_free(a->reservations.list);
+ }
+ 
+ static void parse_function_cleanup(struct parse_function *f)
+@@ -1184,7 +1194,7 @@ static bool gen_struct_fields(struct hlsl_ctx *ctx, struct parse_fields *fields,
+             hlsl_error(ctx, &v->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_SYNTAX, "Illegal initializer on a struct field.");
+             cleanup_parse_initializer(&v->initializer);
+         }
+-        if (v->reg_reservation.offset_type)
++        if (v->offset.type)
+             hlsl_error(ctx, &v->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+                 "packoffset() is not allowed inside struct definitions.");
+         vkd3d_free(v);
+@@ -1331,7 +1341,7 @@ static bool add_func_parameter(struct hlsl_ctx *ctx, struct hlsl_func_parameters
+         hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INVALID_MODIFIER,
+                 "Parameter '%s' is declared as both \"out\" and \"const\".", param->name);
+ 
+-    if (param->reg_reservation.offset_type)
++    if (param->offset.type)
+         hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+                 "packoffset() is not allowed on function parameters.");
+ 
+@@ -1347,9 +1357,12 @@ static bool add_func_parameter(struct hlsl_ctx *ctx, struct hlsl_func_parameters
+     if (hlsl_get_stream_output_type(param->type))
+         check_invalid_stream_output_object(ctx, param->type, param->name, loc);
+ 
+-    if (!(var = hlsl_new_var(ctx, param->name, param->type, loc, &param->semantic, modifiers,
+-            &param->reg_reservation)))
++    if (!(var = hlsl_new_var(ctx, param->name, param->type, loc,
++            &param->semantic, modifiers, &param->offset, &param->reservations)))
++    {
++        vkd3d_free(param->reservations.list);
+         return false;
++    }
+     var->is_param = 1;
+ 
+     if (param->initializer.args_count)
+@@ -1399,7 +1412,7 @@ static void add_pass(struct hlsl_ctx *ctx, const char *name, struct hlsl_scope *
+     struct hlsl_type *type;
+ 
+     type = hlsl_get_type(ctx->globals, "pass", false, false);
+-    if (!(var = hlsl_new_var(ctx, name, type, loc, NULL, 0, NULL)))
++    if (!(var = hlsl_new_var(ctx, name, type, loc, NULL, 0, NULL, NULL)))
+         return;
+     var->annotations = annotations;
+ 
+@@ -1425,7 +1438,7 @@ static void add_technique(struct hlsl_ctx *ctx, const char *name, struct hlsl_sc
+     }
+ 
+     type = hlsl_get_type(ctx->globals, typename, false, false);
+-    if (!(var = hlsl_new_var(ctx, name, type, loc, NULL, 0, NULL)))
++    if (!(var = hlsl_new_var(ctx, name, type, loc, NULL, 0, NULL, NULL)))
+         return;
+     var->scope = scope;
+     var->annotations = annotations;
+@@ -1447,7 +1460,7 @@ static void add_effect_group(struct hlsl_ctx *ctx, const char *name, struct hlsl
+     }
+ 
+     type = hlsl_get_type(ctx->globals, "fxgroup", false, false);
+-    if (!(var = hlsl_new_var(ctx, name, type, loc, NULL, 0, NULL)))
++    if (!(var = hlsl_new_var(ctx, name, type, loc, NULL, 0, NULL, NULL)))
+         return;
+     var->scope = scope;
+     var->annotations = annotations;
+@@ -1455,34 +1468,59 @@ static void add_effect_group(struct hlsl_ctx *ctx, const char *name, struct hlsl
+     hlsl_add_var(ctx, var);
+ }
+ 
+-static bool parse_reservation_index(struct hlsl_ctx *ctx, const char *string, unsigned int bracket_offset,
+-        struct hlsl_reg_reservation *reservation)
++static bool parse_reservation_index(struct hlsl_ctx *ctx, const char *string, const char *profile,
++        unsigned int bracket_offset, struct hlsl_reg_reservation *reservation)
+ {
+     char *endptr;
+ 
+-    reservation->reg_type = ascii_tolower(string[0]);
++    reservation->shader_type = VKD3D_SHADER_TYPE_UNSPECIFIED;
++    if (profile)
++    {
++        if ((reservation->profile = hlsl_get_target_info(profile)))
++            reservation->shader_type = reservation->profile->type;
++        else if (!strcmp(profile, "vs"))
++            reservation->shader_type = VKD3D_SHADER_TYPE_VERTEX;
++        else if (!strcmp(profile, "ps"))
++            reservation->shader_type = VKD3D_SHADER_TYPE_PIXEL;
++        else if (!strcmp(profile, "hs"))
++            reservation->shader_type = VKD3D_SHADER_TYPE_HULL;
++        else if (!strcmp(profile, "ds"))
++            reservation->shader_type = VKD3D_SHADER_TYPE_DOMAIN;
++        else if (!strcmp(profile, "gs"))
++            reservation->shader_type = VKD3D_SHADER_TYPE_GEOMETRY;
++        else if (!strcmp(profile, "cs"))
++            reservation->shader_type = VKD3D_SHADER_TYPE_COMPUTE;
++        else if (!strcmp(profile, "fx"))
++            reservation->shader_type = VKD3D_SHADER_TYPE_EFFECT;
++        else if (!strcmp(profile, "tx"))
++            reservation->shader_type = VKD3D_SHADER_TYPE_TEXTURE;
++        else
++            return false;
++    }
++
++    reservation->type = ascii_tolower(string[0]);
+ 
+     /* Prior to SM5.1, fxc simply ignored bracket offsets for 'b' types. */
+-    if (reservation->reg_type == 'b' && hlsl_version_lt(ctx, 5, 1))
++    if (reservation->type == 'b' && hlsl_version_lt(ctx, 5, 1))
+     {
+         bracket_offset = 0;
+     }
+ 
+     if (string[1] == '\0')
+     {
+-        reservation->reg_index = bracket_offset;
++        reservation->index = bracket_offset;
+         return true;
+     }
+ 
+-    reservation->reg_index = strtoul(string + 1, &endptr, 10) + bracket_offset;
++    reservation->index = strtoul(string + 1, &endptr, 10) + bracket_offset;
+ 
+     if (*endptr)
+     {
+         /* fxc for SM >= 4 treats all parse failures for 'b' types as successes,
+          * setting index to -1. It will later fail while validating slot limits. */
+-        if (reservation->reg_type == 'b' && hlsl_version_ge(ctx, 4, 0))
++        if (reservation->type == 'b' && hlsl_version_ge(ctx, 4, 0))
+         {
+-            reservation->reg_index = -1;
++            reservation->index = -1;
+             return true;
+         }
+ 
+@@ -1499,16 +1537,16 @@ static bool parse_reservation_space(const char *string, uint32_t *space)
+     return !ascii_strncasecmp(string, "space", 5) && sscanf(string + 5, "%u", space);
+ }
+ 
+-static struct hlsl_reg_reservation parse_packoffset(struct hlsl_ctx *ctx, const char *reg_string,
++static struct hlsl_packoffset parse_packoffset(struct hlsl_ctx *ctx, const char *reg_string,
+         const char *swizzle, const struct vkd3d_shader_location *loc)
+ {
+-    struct hlsl_reg_reservation reservation = {0};
++    struct hlsl_packoffset reservation = {0};
+     char *endptr;
+ 
+     if (hlsl_version_lt(ctx, 4, 0))
+         return reservation;
+ 
+-    reservation.offset_index = strtoul(reg_string + 1, &endptr, 10);
++    reservation.index = strtoul(reg_string + 1, &endptr, 10);
+     if (*endptr)
+     {
+         hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+@@ -1516,15 +1554,15 @@ static struct hlsl_reg_reservation parse_packoffset(struct hlsl_ctx *ctx, const
+         return reservation;
+     }
+ 
+-    reservation.offset_type = ascii_tolower(reg_string[0]);
+-    if (reservation.offset_type != 'c')
++    reservation.type = ascii_tolower(reg_string[0]);
++    if (reservation.type != 'c')
+     {
+         hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+                 "Only 'c' registers are allowed in packoffset().");
+         return reservation;
+     }
+ 
+-    reservation.offset_index *= 4;
++    reservation.index *= 4;
+ 
+     if (swizzle)
+     {
+@@ -1533,13 +1571,13 @@ static struct hlsl_reg_reservation parse_packoffset(struct hlsl_ctx *ctx, const
+                     "Invalid packoffset() component \"%s\".", swizzle);
+ 
+         if (swizzle[0] == 'x' || swizzle[0] == 'r')
+-            reservation.offset_index += 0;
++            reservation.index += 0;
+         else if (swizzle[0] == 'y' || swizzle[0] == 'g')
+-            reservation.offset_index += 1;
++            reservation.index += 1;
+         else if (swizzle[0] == 'z' || swizzle[0] == 'b')
+-            reservation.offset_index += 2;
++            reservation.index += 2;
+         else if (swizzle[0] == 'w' || swizzle[0] == 'a')
+-            reservation.offset_index += 3;
++            reservation.index += 3;
+         else
+             hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+                     "Invalid packoffset() component \"%s\".", swizzle);
+@@ -2692,9 +2730,10 @@ static void declare_var(struct hlsl_ctx *ctx, struct parse_variable_def *v)
+             && ctx->compile_info.const_global_uniforms)
+         type = hlsl_type_clone(ctx, type, 0, HLSL_MODIFIER_CONST);
+ 
+-    if (!(var = hlsl_new_var(ctx, var_name, type, &v->loc, &new_semantic, modifiers, &v->reg_reservation)))
++    if (!(var = hlsl_new_var(ctx, var_name, type, &v->loc, &new_semantic, modifiers, &v->offset, &v->reservations)))
+     {
+         hlsl_cleanup_semantic(&new_semantic);
++        vkd3d_free(v->reservations.list);
+         vkd3d_free(var_name);
+         return;
+     }
+@@ -2703,9 +2742,14 @@ static void declare_var(struct hlsl_ctx *ctx, struct parse_variable_def *v)
+ 
+     if (constant_buffer && ctx->cur_scope == ctx->globals)
+     {
++        struct hlsl_reg_reservation *reservation = NULL;
++
+         if (!(var_name = vkd3d_strdup(v->name)))
+             return;
+-        var->buffer = hlsl_new_buffer(ctx, HLSL_BUFFER_CONSTANT, var_name, modifiers, &v->reg_reservation, NULL, &v->loc);
++        if (var->reservations.count)
++            reservation = &var->reservations.list[var->reservations.count - 1];
++
++        var->buffer = hlsl_new_buffer(ctx, HLSL_BUFFER_CONSTANT, var_name, modifiers, reservation, NULL, &v->loc);
+     }
+     else
+     {
+@@ -2714,7 +2758,7 @@ static void declare_var(struct hlsl_ctx *ctx, struct parse_variable_def *v)
+ 
+     if (var->buffer == ctx->globals_buffer)
+     {
+-        if (var->reg_reservation.offset_type)
++        if (var->offset.type)
+             hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+                     "packoffset() is only allowed inside constant buffer declarations.");
+     }
+@@ -5361,10 +5405,13 @@ static void check_interlocked_dst_type(struct hlsl_ctx *ctx, const char *name, c
+     }
+ }
+ 
+-static bool intrinsic_interlocked(struct hlsl_ctx *ctx, enum hlsl_interlocked_op op,
+-        const struct parse_initializer *params, const struct vkd3d_shader_location *loc, const char *name)
++/* The object node is set for RWByteAddressBuffer methods, whose first
++ * argument (lhs) is a byte offset. */
++static bool intrinsic_interlocked(struct hlsl_ctx *ctx, struct hlsl_block *block, enum hlsl_interlocked_op op,
++        struct hlsl_ir_node *object, const struct parse_initializer *params,
++        const struct vkd3d_shader_location *loc, const char *name)
+ {
+-    struct hlsl_ir_node *interlocked, *lhs, *val, *cmp_val = NULL, *orig_val = NULL;
++    struct hlsl_ir_node *interlocked, *lhs, *val, *cmp_val = NULL, *orig_val = NULL, *coords = NULL;
+     struct hlsl_type *lhs_type, *val_type, *ret_type = NULL;
+     unsigned int writemask, component;
+     struct hlsl_deref dst_deref;
+@@ -5384,7 +5431,7 @@ static bool intrinsic_interlocked(struct hlsl_ctx *ctx, enum hlsl_interlocked_op
+     }
+ 
+     lhs = params->args[0];
+-    lhs_type = lhs->data_type;
++    lhs_type = object ? hlsl_get_scalar_type(ctx, HLSL_TYPE_UINT) : lhs->data_type;
+ 
+     check_interlocked_dst_type(ctx, name, lhs_type, op, loc);
+ 
+@@ -5404,17 +5451,21 @@ static bool intrinsic_interlocked(struct hlsl_ctx *ctx, enum hlsl_interlocked_op
+ 
+     if (orig_val)
+     {
+-        /* Other than InterlockedExchange(), the original value is returned as int. */
++        /* Other than InterlockedExchange(), the original value is returned as
++         * uint for RWByteAddressBuffer methods, and as int otherwise. */
+         if (op == HLSL_INTERLOCKED_EXCH)
+             ret_type = get_interlocked_exchange_type(ctx, orig_val->data_type);
+         else
+-            ret_type = hlsl_get_scalar_type(ctx, HLSL_TYPE_INT);
++            ret_type = hlsl_get_scalar_type(ctx, object ? HLSL_TYPE_UINT : HLSL_TYPE_INT);
+     }
+ 
+     /* Interlocked*() functions always take uint for the value parameters,
+      * except for InterlockedMax()/InterlockedMin(). */
+     if (op == HLSL_INTERLOCKED_UMAX || op == HLSL_INTERLOCKED_UMIN)
+     {
++        /* RWByteAddressBuffer destinations are treated as int. */
++        enum hlsl_base_type dst_base_type = object ? HLSL_TYPE_INT : lhs_type->e.numeric.type;
++
+         if (val->data_type->e.numeric.type == HLSL_TYPE_UINT)
+         {
+             val_type = hlsl_get_scalar_type(ctx, HLSL_TYPE_UINT);
+@@ -5425,7 +5476,7 @@ static bool intrinsic_interlocked(struct hlsl_ctx *ctx, enum hlsl_interlocked_op
+              * int first, but the interlocked operation itself is signed only if
+              * the destination type is int as well. */
+             val_type = hlsl_get_scalar_type(ctx, HLSL_TYPE_INT);
+-            if (lhs_type->e.numeric.type == HLSL_TYPE_INT)
++            if (dst_base_type == HLSL_TYPE_INT)
+                 op = op == HLSL_INTERLOCKED_UMAX ? HLSL_INTERLOCKED_IMAX : HLSL_INTERLOCKED_IMIN;
+         }
+     }
+@@ -5438,12 +5489,23 @@ static bool intrinsic_interlocked(struct hlsl_ctx *ctx, enum hlsl_interlocked_op
+         val_type = hlsl_get_scalar_type(ctx, HLSL_TYPE_UINT);
+     }
+ 
+-    if (cmp_val && !(cmp_val = add_implicit_conversion(ctx, params->instrs, cmp_val, val_type, loc)))
++    if (cmp_val && !(cmp_val = add_implicit_conversion(ctx, block, cmp_val, val_type, loc)))
+         return false;
+-    if (!(val = add_implicit_conversion(ctx, params->instrs, val, val_type, loc)))
++    if (!(val = add_implicit_conversion(ctx, block, val, val_type, loc)))
+         return false;
+ 
+-    if (!(lhs = resolve_assignment_lhs(ctx, params->instrs, false, lhs,
++    if (object)
++    {
++        if (!(coords = add_implicit_conversion(ctx, block, lhs,
++                hlsl_get_scalar_type(ctx, HLSL_TYPE_UINT), loc)))
++            return false;
++        if (!hlsl_deref_init_from_index_chain(&dst_deref, object, ctx))
++            return false;
++
++        goto done;
++    }
++
++    if (!(lhs = resolve_assignment_lhs(ctx, block, false, lhs,
+             &lhs_type, &val, &writemask, &matrix_writemask)))
+         return false;
+ 
+@@ -5463,8 +5525,8 @@ static bool intrinsic_interlocked(struct hlsl_ctx *ctx, enum hlsl_interlocked_op
+ 
+         VKD3D_ASSERT(!matrix_writemask);
+ 
+-        c = hlsl_block_add_uint_constant(ctx, params->instrs, component, &lhs->loc);
+-        cell = hlsl_block_add_index(ctx, params->instrs, lhs, c, &lhs->loc);
++        c = hlsl_block_add_uint_constant(ctx, block, component, &lhs->loc);
++        cell = hlsl_block_add_index(ctx, block, lhs, c, &lhs->loc);
+ 
+         if (!hlsl_deref_init_from_index_chain(&dst_deref, cell, ctx))
+             return false;
+@@ -5480,15 +5542,16 @@ static bool intrinsic_interlocked(struct hlsl_ctx *ctx, enum hlsl_interlocked_op
+                 &dst_deref_prefix, component, &lhs->loc, ctx))
+             return false;
+ 
+-        hlsl_block_add_block(params->instrs, &component_path_block);
++        hlsl_block_add_block(block, &component_path_block);
+         hlsl_deref_cleanup(&dst_deref_prefix);
+     }
+ 
+-    interlocked = hlsl_new_interlocked(ctx, op, ret_type, &dst_deref, NULL, cmp_val, val, loc);
++done:
++    interlocked = hlsl_new_interlocked(ctx, op, ret_type, &dst_deref, coords, cmp_val, val, loc);
+     hlsl_deref_cleanup(&dst_deref);
+     if (!interlocked)
+         return false;
+-    hlsl_block_add_instr(params->instrs, interlocked);
++    hlsl_block_add_instr(block, interlocked);
+ 
+     if (orig_val)
+     {
+@@ -5496,66 +5559,68 @@ static bool intrinsic_interlocked(struct hlsl_ctx *ctx, enum hlsl_interlocked_op
+             hlsl_error(ctx, &orig_val->loc, VKD3D_SHADER_ERROR_HLSL_MODIFIES_CONST,
+                     "Output argument to '%s' is const.", name);
+ 
+-        if (!add_assignment(ctx, params->instrs, orig_val, ASSIGN_OP_ASSIGN, interlocked, true))
++        if (!add_assignment(ctx, block, orig_val, ASSIGN_OP_ASSIGN, interlocked, true))
+             return false;
+     }
+ 
+-    add_void_expr(ctx, params->instrs, loc);
++    add_void_expr(ctx, block, loc);
+     return true;
+ }
+ 
+ static bool intrinsic_InterlockedAdd(struct hlsl_ctx *ctx,
+         const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+ {
+-    return intrinsic_interlocked(ctx, HLSL_INTERLOCKED_ADD, params, loc, "InterlockedAdd");
++    return intrinsic_interlocked(ctx, params->instrs, HLSL_INTERLOCKED_ADD, NULL, params, loc, "InterlockedAdd");
+ }
+ 
+ static bool intrinsic_InterlockedAnd(struct hlsl_ctx *ctx,
+         const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+ {
+-    return intrinsic_interlocked(ctx, HLSL_INTERLOCKED_AND, params, loc, "InterlockedAnd");
++    return intrinsic_interlocked(ctx, params->instrs, HLSL_INTERLOCKED_AND, NULL, params, loc, "InterlockedAnd");
+ }
+ 
+ static bool intrinsic_InterlockedCompareExchange(struct hlsl_ctx *ctx,
+         const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+ {
+-    return intrinsic_interlocked(ctx, HLSL_INTERLOCKED_CMP_EXCH, params, loc, "InterlockedCompareExchange");
++    return intrinsic_interlocked(ctx, params->instrs, HLSL_INTERLOCKED_CMP_EXCH,
++            NULL, params, loc, "InterlockedCompareExchange");
+ }
+ 
+ static bool intrinsic_InterlockedCompareStore(struct hlsl_ctx *ctx,
+         const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+ {
+-    return intrinsic_interlocked(ctx, HLSL_INTERLOCKED_CMP_EXCH, params, loc, "InterlockedCompareStore");
++    return intrinsic_interlocked(ctx, params->instrs, HLSL_INTERLOCKED_CMP_EXCH,
++            NULL, params, loc, "InterlockedCompareStore");
+ }
+ 
+ static bool intrinsic_InterlockedExchange(struct hlsl_ctx *ctx,
+         const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+ {
+-    return intrinsic_interlocked(ctx, HLSL_INTERLOCKED_EXCH, params, loc, "InterlockedExchange");
++    return intrinsic_interlocked(ctx, params->instrs, HLSL_INTERLOCKED_EXCH, NULL, params, loc, "InterlockedExchange");
+ }
+ 
+ static bool intrinsic_InterlockedMax(struct hlsl_ctx *ctx,
+         const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+ {
+-    return intrinsic_interlocked(ctx, HLSL_INTERLOCKED_UMAX, params, loc, "InterlockedMax");
++    return intrinsic_interlocked(ctx, params->instrs, HLSL_INTERLOCKED_UMAX, NULL, params, loc, "InterlockedMax");
+ }
+ 
+ static bool intrinsic_InterlockedMin(struct hlsl_ctx *ctx,
+         const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+ {
+-    return intrinsic_interlocked(ctx, HLSL_INTERLOCKED_UMIN, params, loc, "InterlockedMin");
++    return intrinsic_interlocked(ctx, params->instrs, HLSL_INTERLOCKED_UMIN, NULL, params, loc, "InterlockedMin");
+ }
+ 
+ static bool intrinsic_InterlockedOr(struct hlsl_ctx *ctx,
+         const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+ {
+-    return intrinsic_interlocked(ctx, HLSL_INTERLOCKED_OR, params, loc, "InterlockedOr");
++    return intrinsic_interlocked(ctx, params->instrs, HLSL_INTERLOCKED_OR, NULL, params, loc, "InterlockedOr");
+ }
+ 
+ static bool intrinsic_InterlockedXor(struct hlsl_ctx *ctx,
+         const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+ {
+-    return intrinsic_interlocked(ctx, HLSL_INTERLOCKED_XOR, params, loc, "InterlockedXor");
++    return intrinsic_interlocked(ctx, params->instrs, HLSL_INTERLOCKED_XOR, NULL, params, loc, "InterlockedXor");
+ }
+ 
+ static bool intrinsic_AllMemoryBarrier(struct hlsl_ctx *ctx,
+@@ -5837,6 +5902,30 @@ intrinsic_functions[] =
+     {"trunc",                               1, true,  intrinsic_trunc},
+ };
+ 
++static bool check_numeric_arguments(struct hlsl_ctx *ctx, const char *name,
++        const struct parse_initializer *args, const struct vkd3d_shader_location *loc)
++{
++    struct vkd3d_string_buffer *string;
++    bool all_numeric = true;
++    unsigned int i;
++
++    for (i = 0; i < args->args_count; ++i)
++    {
++        if (!hlsl_is_numeric_type(args->args[i]->data_type))
++        {
++            all_numeric = false;
++
++            if ((string = hlsl_type_to_string(ctx, args->args[i]->data_type)))
++                hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
++                        "Wrong type for argument %u of '%s': expected a numeric type, but got '%s'.",
++                        i, name, string->buffer);
++            hlsl_release_string_buffer(ctx, string);
++        }
++    }
++
++    return all_numeric;
++}
++
+ static int intrinsic_function_name_compare(const void *a, const void *b)
+ {
+     const struct intrinsic_function *func = b;
+@@ -5879,25 +5968,8 @@ static struct hlsl_block *add_call(struct hlsl_ctx *ctx, const struct hlsl_ident
+             goto fail;
+         }
+ 
+-        if (intrinsic->check_numeric)
+-        {
+-            unsigned int i;
+-
+-            for (i = 0; i < args->args_count; ++i)
+-            {
+-                if (!hlsl_is_numeric_type(args->args[i]->data_type))
+-                {
+-                    struct vkd3d_string_buffer *string;
+-
+-                    if ((string = hlsl_type_to_string(ctx, args->args[i]->data_type)))
+-                        hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_INVALID_TYPE,
+-                                "Wrong type for argument %u of '%s': expected a numeric type, but got '%s'.",
+-                                i + 1, name, string->buffer);
+-                    hlsl_release_string_buffer(ctx, string);
+-                    goto fail;
+-                }
+-            }
+-        }
++        if (intrinsic->check_numeric && !check_numeric_arguments(ctx, name, args, loc))
++            goto fail;
+ 
+         if (!intrinsic->handler(ctx, args, loc))
+             goto fail;
+@@ -6788,6 +6860,53 @@ static bool add_sample_grad_method_call(struct hlsl_ctx *ctx, struct hlsl_block
+     return true;
+ }
+ 
++static bool add_interlocked_method_call(struct hlsl_ctx *ctx, struct hlsl_block *block, struct hlsl_ir_node *object,
++        const char *name, const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
++{
++    static const struct
++    {
++        const char *name;
++        enum hlsl_interlocked_op op;
++        unsigned int min_args, max_args;
++    }
++    methods[] =
++    {
++        {"InterlockedAdd",             HLSL_INTERLOCKED_ADD,      2, 3},
++        {"InterlockedAnd",             HLSL_INTERLOCKED_AND,      2, 3},
++        {"InterlockedCompareExchange", HLSL_INTERLOCKED_CMP_EXCH, 4, 4},
++        {"InterlockedCompareStore",    HLSL_INTERLOCKED_CMP_EXCH, 3, 3},
++        {"InterlockedExchange",        HLSL_INTERLOCKED_EXCH,     3, 3},
++        {"InterlockedMax",             HLSL_INTERLOCKED_UMAX,     2, 3},
++        {"InterlockedMin",             HLSL_INTERLOCKED_UMIN,     2, 3},
++        {"InterlockedOr",              HLSL_INTERLOCKED_OR,       2, 3},
++        {"InterlockedXor",             HLSL_INTERLOCKED_XOR,      2, 3},
++    };
++    unsigned int i;
++
++    for (i = 0; i < ARRAY_SIZE(methods); ++i)
++    {
++        if (!strcmp(name, methods[i].name))
++            break;
++    }
++
++    if (params->args_count < methods[i].min_args || params->args_count > methods[i].max_args)
++    {
++        if (methods[i].min_args == methods[i].max_args)
++            hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_WRONG_PARAMETER_COUNT,
++                    "Wrong number of arguments to method '%s': expected %u.", name, methods[i].min_args);
++        else
++            hlsl_error(ctx, loc, VKD3D_SHADER_ERROR_HLSL_WRONG_PARAMETER_COUNT,
++                    "Wrong number of arguments to method '%s': expected %u or %u.",
++                    name, methods[i].min_args, methods[i].max_args);
++        return false;
++    }
++
++    if (!check_numeric_arguments(ctx, name, params, loc))
++        return false;
++
++    return intrinsic_interlocked(ctx, block, methods[i].op, object, params, loc, name);
++}
++
+ static bool add_store_method_call(struct hlsl_ctx *ctx, struct hlsl_block *block, struct hlsl_ir_node *object,
+         const char *name, const struct parse_initializer *params, const struct vkd3d_shader_location *loc)
+ {
+@@ -6911,12 +7030,22 @@ texture_methods[] =
+ 
+ static const struct method_function uav_methods[] =
+ {
+-    { "GetDimensions", add_getdimensions_method_call, "00111011000000" },
+-
+-    { "Store",         add_store_method_call,         "00000000000001" },
+-    { "Store2",        add_store_method_call,         "00000000000001" },
+-    { "Store3",        add_store_method_call,         "00000000000001" },
+-    { "Store4",        add_store_method_call,         "00000000000001" },
++    { "GetDimensions",              add_getdimensions_method_call, "00111011000000" },
++
++    { "InterlockedAdd",             add_interlocked_method_call,   "00000000000001" },
++    { "InterlockedAnd",             add_interlocked_method_call,   "00000000000001" },
++    { "InterlockedCompareExchange", add_interlocked_method_call,   "00000000000001" },
++    { "InterlockedCompareStore",    add_interlocked_method_call,   "00000000000001" },
++    { "InterlockedExchange",        add_interlocked_method_call,   "00000000000001" },
++    { "InterlockedMax",             add_interlocked_method_call,   "00000000000001" },
++    { "InterlockedMin",             add_interlocked_method_call,   "00000000000001" },
++    { "InterlockedOr",              add_interlocked_method_call,   "00000000000001" },
++    { "InterlockedXor",             add_interlocked_method_call,   "00000000000001" },
++
++    { "Store",                      add_store_method_call,         "00000000000001" },
++    { "Store2",                     add_store_method_call,         "00000000000001" },
++    { "Store3",                     add_store_method_call,         "00000000000001" },
++    { "Store4",                     add_store_method_call,         "00000000000001" },
+ };
+ 
+ static const struct method_function so_methods[] =
+@@ -7288,6 +7417,7 @@ static char *take_unqualified_identifier(struct hlsl_ctx *ctx, struct hlsl_ident
+     struct parse_if_body if_body;
+     enum parse_assign_op assign_op;
+     struct hlsl_reg_reservation reg_reservation;
++    struct hlsl_packoffset packoffset;
+     struct parse_colon_attributes colon_attributes;
+     struct hlsl_semantic semantic;
+     enum hlsl_buffer_type buffer_type;
+@@ -7541,7 +7671,7 @@ static char *take_unqualified_identifier(struct hlsl_ctx *ctx, struct hlsl_ident
+ %destructor { hlsl_func_parameters_cleanup(&$$); } <parameters>
+ 
+ %type <reg_reservation> register_reservation
+-%type <reg_reservation> packoffset_reservation
++%type <packoffset> packoffset_reservation
+ 
+ %type <sampler_dim> texture_type texture_ms_type uav_type rov_type
+ %type <patch_type> patch_type
+@@ -7715,6 +7845,8 @@ effect_group:
+ buffer_declaration:
+       var_modifiers buffer_type unqualified_identifier colon_attributes annotations_opt
+         {
++            struct hlsl_reg_reservation *reservation = NULL;
++
+             if (ctx->cur_scope->namespace)
+             {
+                 hlsl_fixme(ctx, &@3, "Buffers inside namespaces.");
+@@ -7726,9 +7858,22 @@ buffer_declaration:
+             if ($4.semantic.name)
+                 hlsl_error(ctx, &@4, VKD3D_SHADER_ERROR_HLSL_INVALID_SEMANTIC, "Semantics are not allowed on buffers.");
+ 
+-            if (!(ctx->cur_buffer = hlsl_new_buffer(ctx, $2, $3, $1, &$4.reg_reservation, $5, &@3)))
++            if ($4.reservations.count == 1)
++            {
++                reservation = &$4.reservations.list[0];
++                if (reservation->shader_type != VKD3D_SHADER_TYPE_UNSPECIFIED)
++                    hlsl_error(ctx, &@4, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
++                            "Constant buffer slots cannot be target specific.");
++            }
++            else if ($4.reservations.count > 1)
++                hlsl_error(ctx, &@4, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
++                        "Buffers can only be bound to one slot.");
++
++            ctx->cur_buffer = hlsl_new_buffer(ctx, $2, $3, $1, reservation, $5, &@3);
++            parse_colon_attributes_cleanup(&$4);
++
++            if (!ctx->cur_buffer)
+             {
+-                parse_colon_attributes_cleanup(&$4);
+                 vkd3d_free($3);
+                 YYABORT;
+             }
+@@ -8123,9 +8268,12 @@ func_prototype_no_attrs:
+                         "Semantics are not allowed on void functions.");
+             }
+ 
+-            if ($7.reg_reservation.reg_type)
++            if ($7.reservations.count)
++            {
+                 FIXME("Unexpected register reservation for a function.\n");
+-            if ($7.reg_reservation.offset_type)
++                vkd3d_free($7.reservations.list);
++            }
++            if ($7.offset.type)
+                 hlsl_error(ctx, &@5, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+                         "packoffset() is not allowed on functions.");
+ 
+@@ -8309,9 +8457,7 @@ var_modifier_identifier:
+ colon_attributes:
+       %empty
+         {
+-            $$.semantic = (struct hlsl_semantic){0};
+-            $$.reg_reservation.reg_type = 0;
+-            $$.reg_reservation.offset_type = 0;
++            $$ = (struct parse_colon_attributes){0};
+         }
+     | colon_attributes semantic
+         {
+@@ -8321,13 +8467,32 @@ colon_attributes:
+         }
+     | colon_attributes register_reservation
+         {
++            bool unique = true;
++
+             $$ = $1;
+-            if ($$.reg_reservation.reg_type)
+-                hlsl_fixme(ctx, &@2, "Multiple register() reservations.");
+ 
+-            $$.reg_reservation.reg_type = $2.reg_type;
+-            $$.reg_reservation.reg_index = $2.reg_index;
+-            $$.reg_reservation.reg_space = $2.reg_space;
++            for (size_t i = 0; i < $$.reservations.count; ++i)
++            {
++                struct hlsl_reg_reservation *reservation = &$$.reservations.list[i];
++
++                if (reservation->shader_type == $2.shader_type && reservation->profile == $2.profile)
++                {
++                    if (reservation->type != $2.type || reservation->index != $2.index
++                            || reservation->space != $2.space)
++                        hlsl_error(ctx, &@2, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
++                                "Conflicting register reservations: '%c%u' and '%c%u'.",
++                                reservation->type, reservation->index, $2.type, $2.index);
++                    unique = false;
++                }
++            }
++
++            if (unique)
++            {
++                if (!(vkd3d_array_reserve((void **)&$$.reservations.list,
++                         &$$.reservation_capacity, $$.reservations.count + 1, sizeof($2))))
++                    YYABORT;
++                $$.reservations.list[$$.reservations.count++] = $2;
++            }
+         }
+     | colon_attributes packoffset_reservation
+         {
+@@ -8339,8 +8504,8 @@ colon_attributes:
+             }
+             else
+             {
+-                $$.reg_reservation.offset_type = $2.offset_type;
+-                $$.reg_reservation.offset_index = $2.offset_index;
++                $$.offset.type = $2.type;
++                $$.offset.index = $2.index;
+             }
+         }
+ 
+@@ -8380,7 +8545,7 @@ register_reservation:
+       ':' KW_REGISTER '(' unqualified_identifier ')'
+         {
+             memset(&$$, 0, sizeof($$));
+-            if (!parse_reservation_index(ctx, $4, 0, &$$))
++            if (!parse_reservation_index(ctx, $4, NULL, 0, &$$))
+                 hlsl_error(ctx, &@4, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+                         "Invalid register reservation '%s'.", $4);
+ 
+@@ -8389,7 +8554,7 @@ register_reservation:
+     | ':' KW_REGISTER '(' unqualified_identifier '[' expr ']' ')'
+         {
+             memset(&$$, 0, sizeof($$));
+-            if (!parse_reservation_index(ctx, $4, evaluate_static_expression_as_uint(ctx, $6, &@6), &$$))
++            if (!parse_reservation_index(ctx, $4, NULL, evaluate_static_expression_as_uint(ctx, $6, &@6), &$$))
+             {
+                 hlsl_error(ctx, &@4, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+                         "Invalid register reservation '%s'.", $4);
+@@ -8400,21 +8565,19 @@ register_reservation:
+         }
+     | ':' KW_REGISTER '(' unqualified_identifier ',' unqualified_identifier ')'
+         {
++            const char *reservation = $4, *profile = NULL;
++
+             memset(&$$, 0, sizeof($$));
+-            if (parse_reservation_index(ctx, $6, 0, &$$))
+-            {
+-                hlsl_fixme(ctx, &@4, "Reservation shader target %s.", $4);
+-            }
+-            else if (parse_reservation_space($6, &$$.reg_space))
++            if (!parse_reservation_space($6, &$$.space))
+             {
+-                if (!parse_reservation_index(ctx, $4, 0, &$$))
+-                    hlsl_error(ctx, &@4, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+-                            "Invalid register reservation '%s'.", $4);
++                profile = $4;
++                reservation = $6;
+             }
+-            else
++
++            if (!parse_reservation_index(ctx, reservation, profile, 0, &$$))
+             {
+                 hlsl_error(ctx, &@6, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+-                        "Invalid register or space reservation '%s'.", $6);
++                        "Invalid register or space reservation '%s, %s'.", $4, $6);
+             }
+ 
+             vkd3d_free($4);
+@@ -8424,11 +8587,11 @@ register_reservation:
+         {
+             memset(&$$, 0, sizeof($$));
+ 
+-            if (!parse_reservation_space($9, &$$.reg_space))
++            if (!parse_reservation_space($9, &$$.space))
+                 hlsl_error(ctx, &@9, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+                         "Invalid register space reservation '%s'.", $9);
+ 
+-            if (!parse_reservation_index(ctx, $4, evaluate_static_expression_as_uint(ctx, $6, &@6), &$$))
++            if (!parse_reservation_index(ctx, $4, NULL, evaluate_static_expression_as_uint(ctx, $6, &@6), &$$))
+             {
+                 hlsl_error(ctx, &@4, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+                         "Invalid register reservation '%s'.", $4);
+@@ -8440,10 +8603,8 @@ register_reservation:
+         }
+     | ':' KW_REGISTER '(' unqualified_identifier ',' unqualified_identifier '[' expr ']' ')'
+         {
+-            hlsl_fixme(ctx, &@4, "Reservation shader target %s.", $4);
+-
+             memset(&$$, 0, sizeof($$));
+-            if (!parse_reservation_index(ctx, $6, evaluate_static_expression_as_uint(ctx, $8, &@8), &$$))
++            if (!parse_reservation_index(ctx, $6, $4, evaluate_static_expression_as_uint(ctx, $8, &@8), &$$))
+             {
+                 hlsl_error(ctx, &@6, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+                         "Invalid register reservation '%s'.", $6);
+@@ -8455,14 +8616,12 @@ register_reservation:
+         }
+     | ':' KW_REGISTER '(' unqualified_identifier ',' unqualified_identifier ',' unqualified_identifier ')'
+         {
+-            hlsl_fixme(ctx, &@4, "Reservation shader target %s.", $4);
+-
+             memset(&$$, 0, sizeof($$));
+-            if (!parse_reservation_index(ctx, $6, 0, &$$))
++            if (!parse_reservation_index(ctx, $6, $4, 0, &$$))
+                 hlsl_error(ctx, &@6, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+                         "Invalid register reservation '%s'.", $6);
+ 
+-            if (!parse_reservation_space($8, &$$.reg_space))
++            if (!parse_reservation_space($8, &$$.space))
+                 hlsl_error(ctx, &@8, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+                         "Invalid register space reservation '%s'.", $8);
+ 
+@@ -8473,16 +8632,14 @@ register_reservation:
+     | ':' KW_REGISTER '(' unqualified_identifier ',' unqualified_identifier '[' expr ']'
+             ',' unqualified_identifier ')'
+         {
+-            hlsl_fixme(ctx, &@4, "Reservation shader target %s.", $4);
+-
+             memset(&$$, 0, sizeof($$));
+-            if (!parse_reservation_index(ctx, $6, evaluate_static_expression_as_uint(ctx, $8, &@8), &$$))
++            if (!parse_reservation_index(ctx, $6, $4, evaluate_static_expression_as_uint(ctx, $8, &@8), &$$))
+             {
+                 hlsl_error(ctx, &@6, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+                         "Invalid register reservation '%s'.", $6);
+             }
+ 
+-            if (!parse_reservation_space($11, &$$.reg_space))
++            if (!parse_reservation_space($11, &$$.space))
+                 hlsl_error(ctx, &@11, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+                         "Invalid register space reservation '%s'.", $11);
+ 
+@@ -8598,7 +8755,8 @@ parameter_decl:
+ 
+             $$.name = $3;
+             $$.semantic = $5.semantic;
+-            $$.reg_reservation = $5.reg_reservation;
++            $$.offset = $5.offset;
++            $$.reservations = $5.reservations;
+ 
+             memset(&$$.initializer, 0, sizeof($$.initializer));
+         }
+@@ -9129,7 +9287,8 @@ variable_decl:
+             $$->name = $1;
+             $$->arrays = $2;
+             $$->semantic = $3.semantic;
+-            $$->reg_reservation = $3.reg_reservation;
++            $$->offset = $3.offset;
++            $$->reservations = $3.reservations;
+             $$->annotations = $4;
+         }
+ 
+@@ -10366,4 +10525,5 @@ expr:
+             $$ = $1;
+             hlsl_block_add_block($$, $3);
+             destroy_block($3);
++            (void)hlsl_yynerrs;
+         }
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+index ffb4ce45545..20d555adb05 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl_codegen.c
+@@ -339,7 +339,7 @@ static void prepend_uniform_copy(struct hlsl_ctx *ctx, struct hlsl_block *block,
+             return;
+ 
+         if (!(temp = hlsl_new_var(ctx, new_name, uniform->data_type,
+-                &uniform->loc, NULL, uniform->storage_modifiers, NULL)))
++                &uniform->loc, NULL, uniform->storage_modifiers, NULL, NULL)))
+         {
+             vkd3d_free(new_name);
+             return;
+@@ -514,7 +514,7 @@ static struct hlsl_ir_var *add_semantic_var(struct hlsl_ctx *ctx, struct list *s
+     }
+     new_semantic.index = index;
+     new_semantic.stream_index = stream_index;
+-    if (!(ext_var = hlsl_new_var(ctx, new_name, type, loc, &new_semantic, modifiers, NULL)))
++    if (!(ext_var = hlsl_new_var(ctx, new_name, type, loc, &new_semantic, modifiers, NULL, NULL)))
+     {
+         vkd3d_free(new_name);
+         hlsl_cleanup_semantic(&new_semantic);
+@@ -1876,7 +1876,7 @@ static enum vkd3d_result resource_access_from_deref(struct hlsl_ctx *ctx, struct
+     }
+     else
+     {
+-        for (unsigned int i = 0; i <= deref->path_len; ++i)
++        for (unsigned int i = 0; i < deref->path_len; ++i)
+         {
+             if (deref_types[i]->class == HLSL_CLASS_UAV || deref_types[i]->class == HLSL_CLASS_TEXTURE)
+             {
+@@ -1965,7 +1965,7 @@ static struct hlsl_ir_node *lower_resource_stores(struct hlsl_ctx *ctx,
+     deref = &store->lhs;
+     tgsm = deref->var->is_tgsm;
+ 
+-    if (!tgsm && !(deref->var->is_uniform && deref->path_len))
++    if (!tgsm && !deref->path_len)
+         return NULL;
+ 
+     if (resource_access_from_deref(ctx, block, deref, &resource_deref, &resource_type,
+@@ -2045,6 +2045,10 @@ static struct hlsl_ir_node *generate_interlocked_coords(struct hlsl_ctx *ctx,
+     if (instr->type != HLSL_IR_INTERLOCKED)
+         return NULL;
+     interlocked = hlsl_ir_interlocked(instr);
++
++    if (interlocked->coords.node)
++        return NULL;
++
+     deref = &interlocked->dst;
+     tgsm = deref->var->is_tgsm;
+ 
+@@ -2971,6 +2975,7 @@ static void copy_propagation_invalidate_variable(struct hlsl_ctx *ctx, struct co
+ 
+     TRACE_(copyprop)("Invalidate variable %s[%u]%s.\n", var_def->var->name, comp, debug_hlsl_writemask(writemask));
+ 
++    VKD3D_ASSERT(writemask);
+     for (i = 0; i < 4; ++i)
+     {
+         if (writemask & (1u << i))
+@@ -3660,29 +3665,26 @@ static void copy_propagation_record_store(struct hlsl_ctx *ctx, struct hlsl_ir_s
+     struct hlsl_deref *lhs = &store->lhs;
+     struct hlsl_ir_var *var = lhs->var;
+     unsigned int start, count;
++    uint32_t writemask;
+ 
+     if (!(var_def = copy_propagation_create_var_def(ctx, state, var)))
+         return;
+ 
+-    if (hlsl_component_index_range_from_deref(ctx, lhs, &start, &count))
+-    {
+-        unsigned int writemask = store->writemask;
++    writemask = store->writemask;
++    if (!hlsl_is_numeric_type(store->rhs.node->data_type))
++        writemask = VKD3DSP_WRITEMASK_0;
+ 
+-        if (!hlsl_is_numeric_type(store->rhs.node->data_type))
+-            writemask = VKD3DSP_WRITEMASK_0;
++    if (hlsl_component_index_range_from_deref(ctx, lhs, &start, &count))
+         copy_propagation_set_value(ctx, var_def, start, writemask, store->rhs.node, store->node.index);
+-    }
+     else
+-    {
+-        copy_propagation_invalidate_variable_from_deref(ctx, var_def, lhs, store->writemask,
+-                store->node.index);
+-    }
++        copy_propagation_invalidate_variable_from_deref(ctx, var_def, lhs, writemask, store->node.index);
+ }
+ 
+ static void copy_propagation_invalidate_from_block(struct hlsl_ctx *ctx, struct copy_propagation_state *state,
+         struct hlsl_block *block, unsigned int time)
+ {
+     struct hlsl_ir_node *instr;
++    uint32_t writemask;
+ 
+     LIST_FOR_EACH_ENTRY(instr, &block->instrs, struct hlsl_ir_node, entry)
+     {
+@@ -3698,7 +3700,11 @@ static void copy_propagation_invalidate_from_block(struct hlsl_ctx *ctx, struct
+                 if (!(var_def = copy_propagation_create_var_def(ctx, state, var)))
+                     continue;
+ 
+-                copy_propagation_invalidate_variable_from_deref(ctx, var_def, lhs, store->writemask, time);
++                writemask = store->writemask;
++                if (!hlsl_is_numeric_type(store->rhs.node->data_type))
++                    writemask = VKD3DSP_WRITEMASK_0;
++
++                copy_propagation_invalidate_variable_from_deref(ctx, var_def, lhs, writemask, time);
+ 
+                 break;
+             }
+@@ -7303,36 +7309,35 @@ static void allocate_register_reservations(struct hlsl_ctx *ctx, struct list *ex
+ 
+     LIST_FOR_EACH_ENTRY(var, extern_vars, struct hlsl_ir_var, extern_entry)
+     {
+-        const struct hlsl_reg_reservation *reservation = &var->reg_reservation;
++        const struct hlsl_reg_reservation *reservation;
+         unsigned int r;
+ 
+-        if (reservation->reg_type)
++        if (!(reservation = hlsl_ir_var_get_current_reservation(var, ctx)))
++            continue;
++
++        for (r = 0; r <= HLSL_REGSET_LAST_OBJECT; ++r)
+         {
+-            for (r = 0; r <= HLSL_REGSET_LAST_OBJECT; ++r)
+-            {
+-                if (var->regs[r].allocation_size > 0)
+-                {
+-                    if (reservation->reg_type != get_regset_name(r))
+-                    {
+-                        struct vkd3d_string_buffer *type_string;
++            if (!var->regs[r].allocation_size)
++                continue;
+ 
+-                        /* We can throw this error because resources can only span across a single
+-                         * regset, but we have to check for multiple regsets if we support register
+-                         * reservations for structs for SM5. */
+-                        type_string = hlsl_type_to_string(ctx, var->data_type);
+-                        hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+-                                "Object of type '%s' must be bound to register type '%c'.",
+-                                type_string->buffer, get_regset_name(r));
+-                        hlsl_release_string_buffer(ctx, type_string);
+-                    }
+-                    else
+-                    {
+-                        var->regs[r].allocated = true;
+-                        var->regs[r].space = reservation->reg_space;
+-                        var->regs[r].index = reservation->reg_index;
+-                    }
+-                }
++            if (reservation->type != get_regset_name(r))
++            {
++                struct vkd3d_string_buffer *type_string;
++
++                /* We can throw this error because resources can only span across a single
++                 * regset, but we have to check for multiple regsets if we support register
++                 * reservations for structs for SM5. */
++                type_string = hlsl_type_to_string(ctx, var->data_type);
++                hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
++                        "Object of type '%s' must be bound to register type '%c'.",
++                        type_string->buffer, get_regset_name(r));
++                hlsl_release_string_buffer(ctx, type_string);
++                continue;
+             }
++
++            var->regs[r].allocated = true;
++            var->regs[r].space = reservation->space;
++            var->regs[r].index = reservation->index;
+         }
+     }
+ }
+@@ -8173,38 +8178,38 @@ static void allocate_const_registers(struct hlsl_ctx *ctx, struct hlsl_block *bo
+     {
+         unsigned int reg_size = var->data_type->reg_size[HLSL_REGSET_NUMERIC];
+         unsigned int bind_count = var->bind_count[HLSL_REGSET_NUMERIC];
++        const struct hlsl_reg_reservation *reservation;
++        unsigned int i, reg_idx;
+ 
+         if (!var->is_uniform || reg_size == 0)
+             continue;
+ 
+-        if (var->reg_reservation.reg_type == 'c')
+-        {
+-            unsigned int reg_idx = var->reg_reservation.reg_index;
+-            unsigned int i;
++        if (!(reservation = hlsl_ir_var_get_current_reservation(var, ctx)) || reservation->type != 'c')
++            continue;
+ 
+-            VKD3D_ASSERT(reg_size % 4 == 0);
+-            for (i = 0; i < reg_size / 4; ++i)
++        reg_idx = reservation->index;
++        VKD3D_ASSERT(reg_size % 4 == 0);
++        for (i = 0; i < reg_size / 4; ++i)
++        {
++            if (i < bind_count)
+             {
+-                if (i < bind_count)
++                if (get_available_writemask(&allocator_used, reg_idx + i, 0, false, false) != VKD3DSP_WRITEMASK_ALL)
+                 {
+-                    if (get_available_writemask(&allocator_used, reg_idx + i, 0, false, false) != VKD3DSP_WRITEMASK_ALL)
+-                    {
+-                        hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+-                                "Overlapping register() reservations on 'c%u'.", reg_idx + i);
+-                    }
+-                    record_allocation(ctx, &allocator_used, reg_idx + i, VKD3DSP_WRITEMASK_ALL, 0, false, false);
++                    hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
++                            "Overlapping register() reservations on 'c%u'.", reg_idx + i);
+                 }
+-                record_allocation(ctx, &allocator, reg_idx + i, VKD3DSP_WRITEMASK_ALL, 0, false, false);
++                record_allocation(ctx, &allocator_used, reg_idx + i, VKD3DSP_WRITEMASK_ALL, 0, false, false);
+             }
+-
+-            var->regs[HLSL_REGSET_NUMERIC].type = VSIR_REGISTER_CONSTBUFFER;
+-            var->regs[HLSL_REGSET_NUMERIC].id = reg_idx;
+-            var->regs[HLSL_REGSET_NUMERIC].allocation_size = reg_size / 4;
+-            var->regs[HLSL_REGSET_NUMERIC].writemask = VKD3DSP_WRITEMASK_ALL;
+-            var->regs[HLSL_REGSET_NUMERIC].allocated = true;
+-            TRACE("Allocated reserved %s to %s.\n", var->name,
+-                    debug_register(var->regs[HLSL_REGSET_NUMERIC], var->data_type));
++            record_allocation(ctx, &allocator, reg_idx + i, VKD3DSP_WRITEMASK_ALL, 0, false, false);
+         }
++
++        var->regs[HLSL_REGSET_NUMERIC].type = VSIR_REGISTER_CONSTBUFFER;
++        var->regs[HLSL_REGSET_NUMERIC].id = reg_idx;
++        var->regs[HLSL_REGSET_NUMERIC].allocation_size = reg_size / 4;
++        var->regs[HLSL_REGSET_NUMERIC].writemask = VKD3DSP_WRITEMASK_ALL;
++        var->regs[HLSL_REGSET_NUMERIC].allocated = true;
++        TRACE("Allocated reserved %s to %s.\n", var->name,
++                debug_register(var->regs[HLSL_REGSET_NUMERIC], var->data_type));
+     }
+ 
+     vkd3d_free(allocator_used.allocations);
+@@ -8703,8 +8708,8 @@ static const struct hlsl_buffer *get_reserved_buffer(struct hlsl_ctx *ctx,
+ 
+     LIST_FOR_EACH_ENTRY(buffer, &ctx->buffers, const struct hlsl_buffer, entry)
+     {
+-        if (buffer->reservation.reg_type == 'b'
+-                && buffer->reservation.reg_space == space && buffer->reservation.reg_index == index)
++        if (buffer->reservation.type == 'b'
++                && buffer->reservation.space == space && buffer->reservation.index == index)
+         {
+             if (allocated_only && !buffer->reg.allocated)
+                 continue;
+@@ -8715,22 +8720,23 @@ static const struct hlsl_buffer *get_reserved_buffer(struct hlsl_ctx *ctx,
+     return NULL;
+ }
+ 
+-static void hlsl_calculate_buffer_offset(struct hlsl_ctx *ctx, struct hlsl_ir_var *var, bool register_reservation)
++static void hlsl_ir_var_calculate_buffer_offset(struct hlsl_ir_var *var,
++        struct hlsl_ctx *ctx, const struct hlsl_reg_reservation *reservation)
+ {
+     unsigned int var_reg_size = var->data_type->reg_size[HLSL_REGSET_NUMERIC];
+     enum hlsl_type_class var_class = var->data_type->class;
+     struct hlsl_buffer *buffer = var->buffer;
+ 
+-    if (register_reservation)
++    if (reservation)
+     {
+-        var->buffer_offset = 4 * var->reg_reservation.reg_index;
++        var->buffer_offset = 4 * reservation->index;
+         var->has_explicit_bind_point = 1;
+     }
+     else
+     {
+-        if (var->reg_reservation.offset_type == 'c')
++        if (var->offset.type == 'c')
+         {
+-            if (var->reg_reservation.offset_index % 4)
++            if (var->offset.index % 4)
+             {
+                 if (var_class == HLSL_CLASS_MATRIX)
+                 {
+@@ -8749,14 +8755,14 @@ static void hlsl_calculate_buffer_offset(struct hlsl_ctx *ctx, struct hlsl_ir_va
+                 }
+                 else if (var_class == HLSL_CLASS_VECTOR)
+                 {
+-                    unsigned int aligned_offset = hlsl_type_get_sm4_offset(var->data_type, var->reg_reservation.offset_index);
++                    unsigned int aligned_offset = hlsl_type_get_sm4_offset(var->data_type, var->offset.index);
+ 
+-                    if (var->reg_reservation.offset_index != aligned_offset)
++                    if (var->offset.index != aligned_offset)
+                         hlsl_error(ctx, &var->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+                                 "packoffset() reservations with vector types cannot span multiple registers.");
+                 }
+             }
+-            var->buffer_offset = var->reg_reservation.offset_index;
++            var->buffer_offset = var->offset.index;
+             var->has_explicit_bind_point = 1;
+         }
+         else
+@@ -8773,6 +8779,7 @@ static void hlsl_calculate_buffer_offset(struct hlsl_ctx *ctx, struct hlsl_ir_va
+ 
+ static void validate_buffer_offsets(struct hlsl_ctx *ctx)
+ {
++    const struct hlsl_reg_reservation *reservation;
+     struct hlsl_ir_var *var1, *var2;
+     struct hlsl_buffer *buffer;
+ 
+@@ -8819,10 +8826,8 @@ static void validate_buffer_offsets(struct hlsl_ctx *ctx)
+         if (!buffer || buffer == ctx->globals_buffer)
+             continue;
+ 
+-        if (var1->reg_reservation.offset_type
+-                || var1->reg_reservation.reg_type == 's'
+-                || var1->reg_reservation.reg_type == 't'
+-                || var1->reg_reservation.reg_type == 'u')
++        if (var1->offset.type || ((reservation = hlsl_ir_var_get_current_reservation(var1, ctx))
++                && (reservation->type == 's' || reservation->type == 't' || reservation->type == 'u')))
+             buffer->manually_packed_elements = true;
+         else
+             buffer->automatically_packed_elements = true;
+@@ -8836,8 +8841,22 @@ static void validate_buffer_offsets(struct hlsl_ctx *ctx)
+     }
+ }
+ 
++static const struct hlsl_reg_reservation *hlsl_ir_var_get_buffer_offset_register_reservation(
++        const struct hlsl_ir_var *var, struct hlsl_ctx *ctx)
++{
++    const struct hlsl_reg_reservation *reservation;
++
++    if (var->buffer != ctx->globals_buffer)
++        return NULL;
++    if (!(reservation = hlsl_ir_var_get_current_reservation(var, ctx)) || reservation->type != 'c')
++        return NULL;
++
++    return reservation;
++}
++
+ void hlsl_calculate_buffer_offsets(struct hlsl_ctx *ctx)
+ {
++    const struct hlsl_reg_reservation *reservation;
+     struct hlsl_ir_var *var;
+ 
+     LIST_FOR_EACH_ENTRY(var, &ctx->extern_vars, struct hlsl_ir_var, extern_entry)
+@@ -8845,8 +8864,8 @@ void hlsl_calculate_buffer_offsets(struct hlsl_ctx *ctx)
+         if (!var->is_uniform || hlsl_type_is_resource(var->data_type))
+             continue;
+ 
+-        if (hlsl_var_has_buffer_offset_register_reservation(ctx, var))
+-            hlsl_calculate_buffer_offset(ctx, var, true);
++        if ((reservation = hlsl_ir_var_get_buffer_offset_register_reservation(var, ctx)))
++            hlsl_ir_var_calculate_buffer_offset(var, ctx, reservation);
+     }
+ 
+     LIST_FOR_EACH_ENTRY(var, &ctx->extern_vars, struct hlsl_ir_var, extern_entry)
+@@ -8854,8 +8873,8 @@ void hlsl_calculate_buffer_offsets(struct hlsl_ctx *ctx)
+         if (!var->is_uniform || hlsl_type_is_resource(var->data_type))
+             continue;
+ 
+-        if (!hlsl_var_has_buffer_offset_register_reservation(ctx, var))
+-            hlsl_calculate_buffer_offset(ctx, var, false);
++        if (!(reservation = hlsl_ir_var_get_buffer_offset_register_reservation(var, ctx)))
++            hlsl_ir_var_calculate_buffer_offset(var, ctx, NULL);
+     }
+ }
+ 
+@@ -8898,29 +8917,29 @@ static void allocate_buffers(struct hlsl_ctx *ctx)
+         {
+             const struct hlsl_reg_reservation *reservation = &buffer->reservation;
+ 
+-            if (reservation->reg_type == 'b')
++            if (reservation->type == 'b')
+             {
+                 const struct hlsl_buffer *allocated_buffer = get_reserved_buffer(ctx,
+-                        reservation->reg_space, reservation->reg_index, true);
++                        reservation->space, reservation->index, true);
+                 unsigned int max_index = get_max_cbuffer_reg_index(ctx);
+ 
+-                if (buffer->reservation.reg_index > max_index)
++                if (buffer->reservation.index > max_index)
+                     hlsl_error(ctx, &buffer->loc, VKD3D_SHADER_ERROR_HLSL_INVALID_RESERVATION,
+                             "Buffer reservation cb%u exceeds target's maximum (cb%u).",
+-                            buffer->reservation.reg_index, max_index);
++                            buffer->reservation.index, max_index);
+ 
+                 if (allocated_buffer && allocated_buffer != buffer)
+                 {
+                     hlsl_error(ctx, &buffer->loc, VKD3D_SHADER_ERROR_HLSL_OVERLAPPING_RESERVATIONS,
+                             "Multiple buffers bound to space %u, index %u.",
+-                            reservation->reg_space, reservation->reg_index);
++                            reservation->space, reservation->index);
+                     hlsl_note(ctx, &allocated_buffer->loc, VKD3D_SHADER_LOG_ERROR,
+                             "Buffer %s is already bound to space %u, index %u.",
+-                            allocated_buffer->name, reservation->reg_space, reservation->reg_index);
++                            allocated_buffer->name, reservation->space, reservation->index);
+                 }
+ 
+-                buffer->reg.space = reservation->reg_space;
+-                buffer->reg.index = reservation->reg_index;
++                buffer->reg.space = reservation->space;
++                buffer->reg.index = reservation->index;
+                 if (hlsl_version_ge(ctx, 5, 1))
+                     buffer->reg.id = id++;
+                 else
+@@ -8930,7 +8949,7 @@ static void allocate_buffers(struct hlsl_ctx *ctx)
+                 TRACE("Allocated reserved %s to space %u, index %u, id %u.\n",
+                         buffer->name, buffer->reg.space, buffer->reg.index, buffer->reg.id);
+             }
+-            else if (!reservation->reg_type)
++            else if (!reservation->type)
+             {
+                 unsigned int max_index = get_max_cbuffer_reg_index(ctx);
+                 while (get_reserved_buffer(ctx, 0, index, false))
+@@ -8967,20 +8986,21 @@ static void allocate_buffers(struct hlsl_ctx *ctx)
+ static const struct hlsl_ir_var *get_allocated_object(struct hlsl_ctx *ctx, enum hlsl_regset regset,
+         uint32_t space, uint32_t index, bool allocated_only)
+ {
++    const struct hlsl_reg_reservation *reservation;
+     const struct hlsl_ir_var *var;
+     unsigned int start, count;
+ 
+     LIST_FOR_EACH_ENTRY(var, &ctx->extern_vars, const struct hlsl_ir_var, extern_entry)
+     {
+-        if (var->reg_reservation.reg_type == get_regset_name(regset)
+-                && var->data_type->reg_size[regset])
++        if ((reservation = hlsl_ir_var_get_current_reservation(var, ctx))
++                && reservation->type == get_regset_name(regset) && var->data_type->reg_size[regset])
+         {
+             /* Vars with a reservation prevent non-reserved vars from being
+              * bound there even if the reserved vars aren't used. */
+-            start = var->reg_reservation.reg_index;
++            start = reservation->index;
+             count = var->data_type->reg_size[regset];
+ 
+-            if (var->reg_reservation.reg_space != space)
++            if (reservation->space != space)
+                 continue;
+ 
+             if (!var->regs[regset].allocated && allocated_only)
+@@ -14190,6 +14210,7 @@ static struct extern_resource *sm4_get_extern_resources(struct hlsl_ctx *ctx, un
+ {
+     bool separate_components = ctx->profile->major_version == 5 && ctx->profile->minor_version == 0;
+     struct extern_resource *extern_resources = NULL;
++    const struct hlsl_reg_reservation *reservation;
+     const struct hlsl_ir_var *var;
+     struct hlsl_buffer *buffer;
+     enum hlsl_regset regset;
+@@ -14200,6 +14221,8 @@ static struct extern_resource *sm4_get_extern_resources(struct hlsl_ctx *ctx, un
+ 
+     LIST_FOR_EACH_ENTRY(var, &ctx->extern_vars, struct hlsl_ir_var, extern_entry)
+     {
++        reservation = hlsl_ir_var_get_current_reservation(var, ctx);
++
+         if (separate_components)
+         {
+             unsigned int component_count = hlsl_type_component_count(var->data_type);
+@@ -14247,7 +14270,7 @@ static struct extern_resource *sm4_get_extern_resources(struct hlsl_ctx *ctx, un
+                 extern_resources[*count].buffer = NULL;
+ 
+                 extern_resources[*count].name = name;
+-                extern_resources[*count].is_user_packed = !!var->reg_reservation.reg_type;
++                extern_resources[*count].is_user_packed = !!reservation;
+ 
+                 extern_resources[*count].component_type = component_type;
+ 
+@@ -14294,8 +14317,7 @@ static struct extern_resource *sm4_get_extern_resources(struct hlsl_ctx *ctx, un
+                 extern_resources[*count].name = name;
+                 /* For some reason 5.1 resources aren't marked as
+                  * user-packed, but cbuffers still are. */
+-                extern_resources[*count].is_user_packed = hlsl_version_lt(ctx, 5, 1)
+-                        && !!var->reg_reservation.reg_type;
++                extern_resources[*count].is_user_packed = hlsl_version_lt(ctx, 5, 1) && reservation;
+ 
+                 extern_resources[*count].component_type = hlsl_type_get_component_type(ctx, var->data_type, 0);
+ 
+@@ -14335,7 +14357,7 @@ static struct extern_resource *sm4_get_extern_resources(struct hlsl_ctx *ctx, un
+         extern_resources[*count].buffer = buffer;
+ 
+         extern_resources[*count].name = name;
+-        extern_resources[*count].is_user_packed = !!buffer->reservation.reg_type;
++        extern_resources[*count].is_user_packed = !!buffer->reservation.type;
+ 
+         extern_resources[*count].component_type = NULL;
+ 
+@@ -15924,7 +15946,7 @@ static struct hlsl_ir_if *identify_limiter_uniform(struct hlsl_ctx *ctx,
+     struct hlsl_ir_var *var;
+     bool negated;
+ 
+-    VKD3D_ASSERT(loop->unroll_type == HLSL_LOOP_FORCE_LOOP);
++    VKD3D_ASSERT(loop->unroll_type == HLSL_LOOP_FORCE_LOOP || loop->unroll_type == HLSL_LOOP_UNROLL);
+     VKD3D_ASSERT(loop->type != HLSL_LOOP_DO_WHILE);
+ 
+     /* If we don't find the loop conditional, this means that either this
+@@ -16111,7 +16133,7 @@ static bool unroll_loops(struct hlsl_ctx *ctx, struct hlsl_ir_node *node, void *
+ 
+     loop = hlsl_ir_loop(node);
+ 
+-    if (loop->unroll_type == HLSL_LOOP_FORCE_LOOP)
++    if (loop->unroll_type == HLSL_LOOP_FORCE_LOOP || loop->unroll_type == HLSL_LOOP_FASTOPT)
+         return false;
+ 
+     if (loop->unroll_limit.node)
+@@ -16148,8 +16170,9 @@ static bool identify_loop_limiters(struct hlsl_ctx *ctx, struct hlsl_ir_node *no
+ 
+     if (loop->type == HLSL_LOOP_DO_WHILE)
+         return false;
+-    if (loop->unroll_type == HLSL_LOOP_FORCE_LOOP)
+-        loop_unrolling_unroll_loop(ctx, program, loop, 255, true);
++    if (loop->unroll_type == HLSL_LOOP_FORCE_UNROLL || loop->unroll_type == HLSL_LOOP_FASTOPT)
++        return false;
++    loop_unrolling_unroll_loop(ctx, program, loop, 255, true);
+ 
+     return false;
+ }
+diff --git a/libs/vkd3d/libs/vkd3d-shader/hlsl_constant_ops.c b/libs/vkd3d/libs/vkd3d-shader/hlsl_constant_ops.c
+index 5d961837c38..54a0f454482 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/hlsl_constant_ops.c
++++ b/libs/vkd3d/libs/vkd3d-shader/hlsl_constant_ops.c
+@@ -446,6 +446,16 @@ static bool fold_fract(struct hlsl_ctx *ctx, struct hlsl_constant_value *dst,
+     return true;
+ }
+ 
++static bool fold_isnan(struct hlsl_ctx *ctx, struct hlsl_constant_value *dst,
++        const struct hlsl_type *dst_type, const struct hlsl_ir_constant *src)
++{
++    unsigned int k;
++
++    for (k = 0; k < dst_type->e.numeric.dimx; ++k)
++        dst->u[k].u = 0u;
++    return true;
++}
++
+ static bool fold_log2(struct hlsl_ctx *ctx, struct hlsl_constant_value *dst, const struct hlsl_type *dst_type,
+         const struct hlsl_ir_constant *src, const struct vkd3d_shader_location *loc)
+ {
+@@ -1535,6 +1545,10 @@ struct hlsl_ir_node *hlsl_fold_constant_exprs(struct hlsl_ctx *ctx,
+             success = fold_fract(ctx, &res, instr->data_type, arg1);
+             break;
+ 
++        case HLSL_OP1_ISNAN:
++            success = fold_isnan(ctx, &res, instr->data_type, arg1);
++            break;
++
+         case HLSL_OP1_LOG2:
+             success = fold_log2(ctx, &res, instr->data_type, arg1, &instr->loc);
+             break;
+diff --git a/libs/vkd3d/libs/vkd3d-shader/preproc.y b/libs/vkd3d/libs/vkd3d-shader/preproc.y
+index 7432bb12d2e..9368341d670 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/preproc.y
++++ b/libs/vkd3d/libs/vkd3d-shader/preproc.y
+@@ -731,4 +731,5 @@ expr
+     | expr '?' logicor_expr ':' logicor_expr
+         {
+             $$ = $1 ? $3 : $5;
++            (void)preproc_yynerrs;
+         }
+diff --git a/libs/vkd3d/libs/vkd3d-shader/tpf.c b/libs/vkd3d/libs/vkd3d-shader/tpf.c
+index d39b27bd224..c729f0e68cd 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/tpf.c
++++ b/libs/vkd3d/libs/vkd3d-shader/tpf.c
+@@ -2026,13 +2026,30 @@ static bool shader_sm4_read_reg_idx(struct vkd3d_shader_sm4_parser *tpf, const u
+         }
+ 
+         if (addressing & VKD3D_SM4_ADDRESSING_OFFSET)
++        {
++            if (*ptr >= end)
++            {
++                WARN("Invalid ptr %p >= end %p.\n", *ptr, end);
++                return false;
++            }
++
+             reg_idx->offset = *(*ptr)++;
++        }
+         else
++        {
+             reg_idx->offset = 0;
++        }
++
+         tpf_read_src_operand(tpf, ptr, end, VSIR_DATA_I32, rel_addr);
+     }
+     else
+     {
++        if (*ptr >= end)
++        {
++            WARN("Invalid ptr %p >= end %p.\n", *ptr, end);
++            return false;
++        }
++
+         reg_idx->rel_addr = NULL;
+         reg_idx->offset = *(*ptr)++;
+     }
+diff --git a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+index 604119be072..14d270fd079 100644
+--- a/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
++++ b/libs/vkd3d/libs/vkd3d-shader/vkd3d_shader_private.h
+@@ -83,6 +83,7 @@ enum vkd3d_shader_error
+     VKD3D_SHADER_ERROR_DXBC_INVALID_SIGNATURE           = 8,
+     VKD3D_SHADER_ERROR_DXBC_INVALID_STRING_REFERENCE    = 9,
+     VKD3D_SHADER_ERROR_DXBC_INVALID_COMPONENT_TYPE      = 10,
++    VKD3D_SHADER_ERROR_DXBC_INVALID_SECTION_COUNT       = 11,
+ 
+     VKD3D_SHADER_ERROR_TPF_MISMATCHED_CF                = 1000,
+     VKD3D_SHADER_ERROR_TPF_INVALID_REGISTER_RANGE       = 1001,
+@@ -974,6 +975,7 @@ enum vkd3d_shader_type
+     VKD3D_SHADER_TYPE_TEXTURE,
+     VKD3D_SHADER_TYPE_LIBRARY,
+     VKD3D_SHADER_TYPE_COUNT,
++    VKD3D_SHADER_TYPE_UNSPECIFIED = -1,
+ };
+ 
+ struct vkd3d_shader_message_context;
+-- 
+2.53.0
+
